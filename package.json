@@ -1,0 +1,52 @@
+{
+  "name": "@stackbilt/llm-providers",
+  "version": "0.1.0",
+  "description": "Multi-LLM failover with circuit breakers, cost tracking, and intelligent retry. Cloudflare Workers native.",
+  "author": "Kurt Overmier <kurt@stackbilt.dev>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Stackbilt-dev/llm-providers"
+  },
+  "keywords": [
+    "llm",
+    "openai",
+    "anthropic",
+    "cloudflare-workers",
+    "circuit-breaker",
+    "failover",
+    "cost-tracking",
+    "retry",
+    "multi-provider"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@cloudflare/workers-types": "^4.0.0",
+    "vitest": "^1.6.0",
+    "@vitest/coverage-v8": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
