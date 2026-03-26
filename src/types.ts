@@ -90,13 +90,13 @@ export interface LLMProvider {
 }
 
 export interface LLMConfig {
-  provider: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'auto';
+  provider: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'auto';
   model: string;
   temperature: number;
   maxTokens: number;
   apiKey?: string;
   baseUrl?: string;
-  fallbackProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras';
+  fallbackProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq';
   fallbackModel?: string;
   timeout?: number;
   retries?: number;
@@ -131,6 +131,10 @@ export interface CloudflareConfig extends ProviderConfig {
 
 export interface CerebrasConfig extends ProviderConfig {
   // Cerebras uses OpenAI-compatible API; no extra fields needed beyond ProviderConfig
+}
+
+export interface GroqConfig extends ProviderConfig {
+  // Groq uses OpenAI-compatible API; no extra fields needed beyond ProviderConfig
 }
 
 export interface LLMError extends Error {

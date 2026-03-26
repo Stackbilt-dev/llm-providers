@@ -12,6 +12,7 @@ import type {
   AnthropicConfig,
   CloudflareConfig,
   CerebrasConfig,
+  GroqConfig,
   FallbackRule,
   ProviderMetrics
 } from './types';
@@ -20,6 +21,7 @@ import { OpenAIProvider } from './providers/openai';
 import { AnthropicProvider } from './providers/anthropic';
 import { CloudflareProvider } from './providers/cloudflare';
 import { CerebrasProvider } from './providers/cerebras';
+import { GroqProvider } from './providers/groq';
 import { CostTracker, defaultCostTracker } from './utils/cost-tracker';
 import { defaultCircuitBreakerManager } from './utils/circuit-breaker';
 import {
@@ -35,7 +37,8 @@ export interface ProviderFactoryConfig {
   anthropic?: AnthropicConfig;
   cloudflare?: CloudflareConfig;
   cerebras?: CerebrasConfig;
-  defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'auto';
+  groq?: GroqConfig;
+  defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'auto';
   fallbackRules?: FallbackRule[];
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
@@ -109,6 +112,19 @@ export class LLMProviderFactory {
         }
       } catch (error) {
         console.warn('[LLMProviderFactory] Failed to initialize Cerebras provider:', error);
+      }
+    }
+
+    // Initialize Groq provider
+    if (this.config.groq) {
+      try {
+        const provider = new GroqProvider(this.config.groq);
+        if (provider.validateConfig()) {
+          this.providers.set('groq', provider);
+          console.log('[LLMProviderFactory] Groq provider initialized');
+        }
+      } catch (error) {
+        console.warn('[LLMProviderFactory] Failed to initialize Groq provider:', error);
       }
     }
 
@@ -259,6 +275,11 @@ export class LLMProviderFactory {
     // Cloudflare models
     if (model.startsWith('@cf/')) {
       return 'cloudflare';
+    }
+
+    // Groq models
+    if (model.includes('-versatile') || model.includes('-instant')) {
+      return 'groq';
     }
 
     // Cerebras models
@@ -469,7 +490,7 @@ export class LLMProviderFactory {
     }
 
     // Re-initialize providers if configs changed
-    if (config.openai || config.anthropic || config.cloudflare || config.cerebras) {
+    if (config.openai || config.anthropic || config.cloudflare || config.cerebras || config.groq) {
       this.providers.clear();
       this.initializeProviders();
     }
