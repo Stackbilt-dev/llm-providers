@@ -1,0 +1,308 @@
+/**
+ * Groq Provider
+ * Implementation for Groq fast inference models (OpenAI-compatible API)
+ */
+
+import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities } from '../types';
+import { BaseProvider } from './base';
+import {
+  LLMErrorFactory,
+  AuthenticationError
+} from '../errors';
+
+interface GroqMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string | null;
+}
+
+interface GroqRequest {
+  model: string;
+  messages: GroqMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+}
+
+interface GroqResponse {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    message: {
+      role: string;
+      content: string | null;
+    };
+    finish_reason: 'stop' | 'length' | 'content_filter';
+  }>;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+  system_fingerprint?: string;
+}
+
+export class GroqProvider extends BaseProvider {
+  name = 'groq';
+  models = [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant'
+  ];
+  supportsStreaming = true;
+  supportsTools = false;
+  supportsBatching = false;
+
+  private apiKey: string;
+  private baseUrl: string;
+
+  constructor(config: GroqConfig) {
+    super(config);
+
+    if (!config.apiKey) {
+      throw new AuthenticationError('groq', 'Groq API key is required');
+    }
+
+    this.apiKey = config.apiKey;
+    this.baseUrl = config.baseUrl || 'https://api.groq.com/openai/v1';
+  }
+
+  async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+    this.validateRequest(request);
+
+    const startTime = Date.now();
+
+    try {
+      const response = await this.executeWithResiliency(async () => {
+        const groqRequest = this.formatRequest(request);
+        const httpResponse = await this.makeGroqRequest('/chat/completions', groqRequest);
+
+        if (!httpResponse.ok) {
+          throw await LLMErrorFactory.fromFetchResponse('groq', httpResponse);
+        }
+
+        const data: GroqResponse = await httpResponse.json();
+        return this.formatResponse(data, Date.now() - startTime);
+      });
+
+      this.updateMetrics(response.responseTime, true, response.usage.cost);
+      this.logRequest(request, response);
+
+      return response;
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      this.updateMetrics(responseTime, false);
+      this.logRequest(request, undefined, error as Error);
+      throw error;
+    }
+  }
+
+  validateConfig(): boolean {
+    return !!(this.apiKey && this.baseUrl);
+  }
+
+  getModels(): string[] {
+    return [...this.models];
+  }
+
+  estimateCost(request: LLMRequest): number {
+    const model = request.model || 'llama-3.3-70b-versatile';
+    const capabilities = this.getModelCapabilities()[model];
+
+    if (!capabilities) return 0;
+
+    const inputTokens = request.messages.reduce((sum, msg) =>
+      sum + Math.ceil(msg.content.length / 4), 0
+    );
+    const outputTokens = request.maxTokens || 1000;
+
+    return this.calculateCost(inputTokens, outputTokens, model);
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      const response = await this.makeGroqRequest('/models', null, 'GET');
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  protected getModelCapabilities(): Record<string, ModelCapabilities> {
+    return {
+      'llama-3.3-70b-versatile': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: false,
+        inputTokenCost: 0.00059, // $0.59 per 1M tokens
+        outputTokenCost: 0.00079, // $0.79 per 1M tokens
+        description: 'Llama 3.3 70B Versatile - High-quality fast inference on Groq'
+      },
+      'llama-3.1-8b-instant': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: false,
+        inputTokenCost: 0.00005, // $0.05 per 1M tokens
+        outputTokenCost: 0.00008, // $0.08 per 1M tokens
+        description: 'Llama 3.1 8B Instant - Ultra-fast inference on Groq'
+      }
+    };
+  }
+
+  /**
+   * Stream response support (OpenAI-compatible SSE format)
+   */
+  async streamResponse(request: LLMRequest): Promise<ReadableStream<string>> {
+    this.validateRequest(request);
+
+    const groqRequest = { ...this.formatRequest(request), stream: true };
+
+    return new ReadableStream({
+      start: async (controller) => {
+        try {
+          const response = await this.makeGroqRequest('/chat/completions', groqRequest);
+
+          if (!response.ok) {
+            throw await LLMErrorFactory.fromFetchResponse('groq', response);
+          }
+
+          const reader = response.body?.getReader();
+          if (!reader) {
+            throw new Error('No response body');
+          }
+
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+
+                if (data === '[DONE]') {
+                  controller.close();
+                  return;
+                }
+
+                try {
+                  const parsed = JSON.parse(data);
+                  const content = parsed.choices?.[0]?.delta?.content;
+
+                  if (content) {
+                    controller.enqueue(content);
+                  }
+                } catch (error) {
+                  console.warn('Failed to parse SSE data:', error);
+                }
+              }
+            }
+          }
+
+          controller.close();
+        } catch (error) {
+          controller.error(error);
+        }
+      }
+    });
+  }
+
+  private async makeGroqRequest(
+    endpoint: string,
+    body: any,
+    method: string = 'POST'
+  ): Promise<Response> {
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json'
+    };
+
+    const options: RequestInit = {
+      method,
+      headers
+    };
+
+    if (body && method !== 'GET') {
+      options.body = JSON.stringify(body);
+    }
+
+    return this.makeRequest(`${this.baseUrl}${endpoint}`, options);
+  }
+
+  private formatRequest(request: LLMRequest): GroqRequest {
+    const messages: GroqMessage[] = [];
+
+    if (request.systemPrompt) {
+      messages.push({
+        role: 'system',
+        content: request.systemPrompt
+      });
+    }
+
+    for (const message of request.messages) {
+      if (message.role === 'system' && request.systemPrompt) {
+        continue;
+      }
+
+      messages.push({
+        role: message.role,
+        content: message.content
+      });
+    }
+
+    return {
+      model: request.model || 'llama-3.3-70b-versatile',
+      messages,
+      temperature: request.temperature,
+      max_tokens: request.maxTokens,
+      stream: request.stream
+    };
+  }
+
+  private formatResponse(
+    data: GroqResponse,
+    responseTime: number
+  ): LLMResponse {
+    const choice = data.choices[0];
+    if (!choice) {
+      throw new Error('No choices returned from Groq');
+    }
+
+    const content = choice.message.content || '';
+    const usage = {
+      inputTokens: data.usage.prompt_tokens,
+      outputTokens: data.usage.completion_tokens,
+      totalTokens: data.usage.total_tokens,
+      cost: this.calculateCost(
+        data.usage.prompt_tokens,
+        data.usage.completion_tokens,
+        data.model
+      )
+    };
+
+    return {
+      id: data.id,
+      message: content,
+      content,
+      usage,
+      model: data.model,
+      provider: this.name,
+      responseTime,
+      finishReason: choice.finish_reason as any,
+      metadata: {
+        systemFingerprint: data.system_fingerprint,
+        created: data.created
+      }
+    };
+  }
+}

@@ -20,6 +20,7 @@ export type {
   AnthropicConfig,
   CloudflareConfig,
   CerebrasConfig,
+  GroqConfig,
   ModelCapabilities,
   ProviderCapabilities,
   ProviderMetrics,
@@ -42,6 +43,7 @@ export { OpenAIProvider } from './providers/openai';
 export { AnthropicProvider } from './providers/anthropic';
 export { CloudflareProvider } from './providers/cloudflare';
 export { CerebrasProvider } from './providers/cerebras';
+export { GroqProvider } from './providers/groq';
 
 // Factory pattern
 export {
@@ -174,7 +176,7 @@ export default LLMProviders;
  * Version and metadata
  */
 export const VERSION = '0.1.0';
-export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebras'] as const;
+export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebras', 'groq'] as const;
 
 /**
  * Common model mappings for easy reference
@@ -203,7 +205,11 @@ export const MODELS = {
 
   // Cerebras models
   CEREBRAS_LLAMA_3_1_8B: 'llama-3.1-8b',
-  CEREBRAS_LLAMA_3_3_70B: 'llama-3.3-70b'
+  CEREBRAS_LLAMA_3_3_70B: 'llama-3.3-70b',
+
+  // Groq models
+  GROQ_LLAMA_3_3_70B_VERSATILE: 'llama-3.3-70b-versatile',
+  GROQ_LLAMA_3_1_8B_INSTANT: 'llama-3.1-8b-instant'
 } as const;
 
 /**
@@ -268,6 +274,9 @@ export function getRecommendedModel(
       return model;
     }
     if ((model.startsWith('llama-3.1-8b') || model.startsWith('llama-3.3-70b')) && availableProviders.includes('cerebras')) {
+      return model;
+    }
+    if ((model.includes('-versatile') || model.includes('-instant')) && availableProviders.includes('groq')) {
       return model;
     }
   }
