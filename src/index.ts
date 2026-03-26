@@ -19,6 +19,7 @@ export type {
   OpenAIConfig,
   AnthropicConfig,
   CloudflareConfig,
+  CerebrasConfig,
   ModelCapabilities,
   ProviderCapabilities,
   ProviderMetrics,
@@ -40,6 +41,7 @@ export { BaseProvider } from './providers/base';
 export { OpenAIProvider } from './providers/openai';
 export { AnthropicProvider } from './providers/anthropic';
 export { CloudflareProvider } from './providers/cloudflare';
+export { CerebrasProvider } from './providers/cerebras';
 
 // Factory pattern
 export {
@@ -172,7 +174,7 @@ export default LLMProviders;
  * Version and metadata
  */
 export const VERSION = '0.1.0';
-export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare'] as const;
+export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebras'] as const;
 
 /**
  * Common model mappings for easy reference
@@ -197,7 +199,11 @@ export const MODELS = {
   LLAMA_3_1_70B: '@cf/meta/llama-3.1-70b-instruct',
   LLAMA_3_8B: '@cf/meta/llama-3-8b-instruct',
   MISTRAL_7B: '@cf/mistral/mistral-7b-instruct-v0.1',
-  TINY_LLAMA: '@cf/tinyllama/tinyllama-1.1b-chat-v1.0'
+  TINY_LLAMA: '@cf/tinyllama/tinyllama-1.1b-chat-v1.0',
+
+  // Cerebras models
+  CEREBRAS_LLAMA_3_1_8B: 'llama-3.1-8b',
+  CEREBRAS_LLAMA_3_3_70B: 'llama-3.3-70b'
 } as const;
 
 /**
@@ -206,6 +212,7 @@ export const MODELS = {
 export const MODEL_RECOMMENDATIONS = {
   // Cost-optimized models
   COST_EFFECTIVE: [
+    MODELS.CEREBRAS_LLAMA_3_1_8B,
     MODELS.TINY_LLAMA,
     MODELS.CLAUDE_3_5_HAIKU,
     MODELS.GPT_4O_MINI
@@ -258,6 +265,9 @@ export function getRecommendedModel(
       return model;
     }
     if (model.startsWith('@cf/') && availableProviders.includes('cloudflare')) {
+      return model;
+    }
+    if ((model.startsWith('llama-3.1-8b') || model.startsWith('llama-3.3-70b')) && availableProviders.includes('cerebras')) {
       return model;
     }
   }

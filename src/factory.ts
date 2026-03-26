@@ -3,14 +3,15 @@
  * Creates and manages LLM provider instances with intelligent fallback logic
  */
 
-import type { 
-  LLMProvider, 
-  LLMConfig, 
-  LLMRequest, 
+import type {
+  LLMProvider,
+  LLMConfig,
+  LLMRequest,
   LLMResponse,
   OpenAIConfig,
   AnthropicConfig,
   CloudflareConfig,
+  CerebrasConfig,
   FallbackRule,
   ProviderMetrics
 } from './types';
@@ -18,6 +19,7 @@ import type {
 import { OpenAIProvider } from './providers/openai';
 import { AnthropicProvider } from './providers/anthropic';
 import { CloudflareProvider } from './providers/cloudflare';
+import { CerebrasProvider } from './providers/cerebras';
 import { CostTracker, defaultCostTracker } from './utils/cost-tracker';
 import { defaultCircuitBreakerManager } from './utils/circuit-breaker';
 import {
@@ -32,7 +34,8 @@ export interface ProviderFactoryConfig {
   openai?: OpenAIConfig;
   anthropic?: AnthropicConfig;
   cloudflare?: CloudflareConfig;
-  defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'auto';
+  cerebras?: CerebrasConfig;
+  defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'auto';
   fallbackRules?: FallbackRule[];
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
@@ -93,6 +96,19 @@ export class LLMProviderFactory {
         }
       } catch (error) {
         console.warn('[LLMProviderFactory] Failed to initialize Cloudflare provider:', error);
+      }
+    }
+
+    // Initialize Cerebras provider
+    if (this.config.cerebras) {
+      try {
+        const provider = new CerebrasProvider(this.config.cerebras);
+        if (provider.validateConfig()) {
+          this.providers.set('cerebras', provider);
+          console.log('[LLMProviderFactory] Cerebras provider initialized');
+        }
+      } catch (error) {
+        console.warn('[LLMProviderFactory] Failed to initialize Cerebras provider:', error);
       }
     }
 
@@ -243,6 +259,11 @@ export class LLMProviderFactory {
     // Cloudflare models
     if (model.startsWith('@cf/')) {
       return 'cloudflare';
+    }
+
+    // Cerebras models
+    if (model.startsWith('llama-3.1-8b') || model.startsWith('llama-3.3-70b')) {
+      return 'cerebras';
     }
 
     return null;
@@ -448,7 +469,7 @@ export class LLMProviderFactory {
     }
 
     // Re-initialize providers if configs changed
-    if (config.openai || config.anthropic || config.cloudflare) {
+    if (config.openai || config.anthropic || config.cloudflare || config.cerebras) {
       this.providers.clear();
       this.initializeProviders();
     }
