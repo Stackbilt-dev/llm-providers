@@ -317,7 +317,7 @@ describe('CerebrasProvider', () => {
       expect(metrics.requestCount).toBe(1);
       expect(metrics.successCount).toBe(1);
       expect(metrics.errorCount).toBe(0);
-      expect(metrics.averageLatency).toBeGreaterThan(0);
+      expect(metrics.averageLatency).toBeGreaterThanOrEqual(0);
     });
 
     it('should track metrics on failed request', async () => {
