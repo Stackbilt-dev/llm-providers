@@ -150,12 +150,21 @@ export interface CircuitBreakerConfig {
   failureThreshold: number;
   resetTimeout: number;
   monitoringPeriod: number;
+  minRequests?: number;
+  degradationCurve?: number[];
 }
 
 export interface CircuitBreakerState {
-  state: 'closed' | 'open' | 'half-open';
+  state: 'CLOSED' | 'DEGRADED' | 'RECOVERING' | 'OPEN';
   failures: number;
+  consecutiveFailures: number;
+  primaryTrafficPct: number;
+  totalFailures: number;
+  totalSuccesses: number;
+  totalRequests: number;
   lastFailure?: number;
+  lastSuccess?: number;
+  lastRequest?: number;
   nextAttempt?: number;
 }
 
@@ -195,6 +204,7 @@ export interface ModelCapabilities {
   maxContextLength: number;
   supportsStreaming: boolean;
   supportsTools: boolean;
+  toolCalling?: boolean;
   supportsBatching: boolean;
   inputTokenCost: number;
   outputTokenCost: number;

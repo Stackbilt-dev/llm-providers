@@ -3,17 +3,25 @@
  * Implementation for Cloudflare Workers AI with cost optimization
  */
 
-import type { LLMRequest, LLMResponse, CloudflareConfig, ModelCapabilities } from '../types';
+import type {
+  LLMRequest,
+  LLMResponse,
+  CloudflareConfig,
+  ModelCapabilities,
+  TokenUsage,
+  ToolCall
+} from '../types';
 import { BaseProvider } from './base';
-import { 
-  LLMErrorFactory, 
-  ConfigurationError, 
-  ModelNotFoundError 
+import {
+  ConfigurationError,
+  ModelNotFoundError
 } from '../errors';
 
 interface CloudflareMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
 }
 
 interface CloudflareRequest {
@@ -21,18 +29,8 @@ interface CloudflareRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
-}
-
-interface CloudflareResponse {
-  result: {
-    response: string;
-    success: boolean;
-    errors?: string[];
-    messages?: string[];
-  };
-  success: boolean;
-  errors: any[];
-  messages: any[];
+  tools?: LLMRequest['tools'];
+  tool_choice?: LLMRequest['toolChoice'];
 }
 
 export class CloudflareProvider extends BaseProvider {
@@ -45,6 +43,7 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/microsoft/phi-2',
     '@cf/mistral/mistral-7b-instruct-v0.1',
     '@cf/openchat/openchat-3.5-0106',
+    '@cf/openai/gpt-oss-120b',
     '@cf/tinyllama/tinyllama-1.1b-chat-v1.0',
     '@cf/qwen/qwen1.5-0.5b-chat',
     '@cf/qwen/qwen1.5-1.8b-chat',
@@ -52,7 +51,7 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/qwen/qwen1.5-7b-chat-awq'
   ];
   supportsStreaming = true;
-  supportsTools = false; // Cloudflare AI doesn't support function calling yet
+  supportsTools = true;
   supportsBatching = true;
 
   private ai: Ai;
@@ -76,8 +75,8 @@ export class CloudflareProvider extends BaseProvider {
 
     try {
       const response = await this.executeWithResiliency(async () => {
-        const cloudflareRequest = this.formatRequest(request);
         const model = request.model || '@cf/meta/llama-3.1-8b-instruct';
+        const cloudflareRequest = this.formatRequest(request, model);
         
         // Validate model is supported
         if (!this.models.includes(model)) {
@@ -86,7 +85,7 @@ export class CloudflareProvider extends BaseProvider {
 
         const result = await this.ai.run(model as any, cloudflareRequest);
         
-        return this.formatResponse(result, model, Date.now() - startTime);
+        return this.formatResponse(result, model, request, Date.now() - startTime);
       });
 
       this.updateMetrics(response.responseTime, true, response.usage?.cost || 0);
@@ -205,6 +204,16 @@ export class CloudflareProvider extends BaseProvider {
         outputTokenCost: 0.0000001,
         description: 'OpenChat 3.5 - Conversation optimized'
       },
+      '@cf/openai/gpt-oss-120b': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0.0000008,
+        outputTokenCost: 0.0000008,
+        description: 'GPT-OSS 120B - OpenAI-format tool calling on Workers AI'
+      },
       '@cf/tinyllama/tinyllama-1.1b-chat-v1.0': {
         maxContextLength: 2048,
         supportsStreaming: true,
@@ -253,7 +262,21 @@ export class CloudflareProvider extends BaseProvider {
     };
   }
 
-  private formatRequest(request: LLMRequest): CloudflareRequest {
+  private formatRequest(request: LLMRequest, model: string): CloudflareRequest {
+    const capabilities = this.getModelCapabilities()[model];
+    const usesTools =
+      (request.tools?.length ?? 0) > 0 ||
+      request.messages.some(message =>
+        (message.toolCalls?.length ?? 0) > 0 || (message.toolResults?.length ?? 0) > 0
+      );
+
+    if (usesTools && !capabilities?.supportsTools) {
+      throw new ConfigurationError(
+        this.name,
+        `Model '${model}' does not support tool calling on Cloudflare Workers AI`
+      );
+    }
+
     const messages: CloudflareMessage[] = [];
 
     // Add system prompt if provided
@@ -266,15 +289,40 @@ export class CloudflareProvider extends BaseProvider {
 
     // Convert messages
     for (const message of request.messages) {
-      // Skip tool-related messages as Cloudflare AI doesn't support them
-      if (message.toolCalls || message.toolResults) {
+      if (message.role === 'system' && request.systemPrompt) {
         continue;
       }
 
-      messages.push({
-        role: message.role as 'system' | 'user' | 'assistant',
+      const cloudflareMessage: CloudflareMessage = {
+        role: message.role as CloudflareMessage['role'],
         content: message.content
-      });
+      };
+
+      if (message.toolCalls && message.toolCalls.length > 0) {
+        cloudflareMessage.tool_calls = message.toolCalls.map(toolCall => ({
+          id: toolCall.id,
+          type: toolCall.type,
+          function: toolCall.function
+        }));
+        cloudflareMessage.content = null;
+      }
+
+      messages.push(cloudflareMessage);
+
+      if (message.toolResults && message.toolResults.length > 0) {
+        for (const toolResult of message.toolResults) {
+          messages.push({
+            role: 'tool',
+            content: toolResult.error
+              ? JSON.stringify({
+                  output: toolResult.output,
+                  error: toolResult.error
+                })
+              : toolResult.output,
+            tool_call_id: toolResult.id
+          });
+        }
+      }
     }
 
     const cloudflareRequest: CloudflareRequest = {
@@ -284,55 +332,223 @@ export class CloudflareProvider extends BaseProvider {
       stream: request.stream
     };
 
+    if (request.tools && request.tools.length > 0) {
+      cloudflareRequest.tools = request.tools.map(tool => ({
+        type: tool.type,
+        function: tool.function
+      }));
+
+      if (request.toolChoice) {
+        cloudflareRequest.tool_choice = request.toolChoice;
+      }
+    }
+
     return cloudflareRequest;
   }
 
   private formatResponse(
     result: any,
     model: string,
+    request: LLMRequest,
     responseTime: number
   ): LLMResponse {
-    // Handle different response formats from Cloudflare AI
-    let content = '';
-    let finishReason: 'stop' | 'length' | 'tool_calls' | 'content_filter' = 'stop';
+    const payload = this.unwrapResult(result);
+    const content = this.extractText(result);
+    const toolCalls = this.extractToolCalls(result);
+    const usage = this.extractUsage(result, model, request, content);
 
-    if (typeof result === 'string') {
-      content = result;
-    } else if (result?.response) {
-      content = result.response;
-    } else if (result?.result?.response) {
-      content = result.result.response;
-    } else if (result?.choices?.[0]?.message?.content) {
-      content = result.choices[0].message.content;
-      finishReason = result.choices[0].finish_reason || 'stop';
-    } else {
-      content = JSON.stringify(result);
-    }
-
-    // Estimate token usage (Cloudflare AI doesn't always provide usage stats)
-    const inputTokens = Math.ceil(content.length / 4); // Rough estimation
-    const outputTokens = Math.ceil(content.length / 4);
-
-    const usage = {
-      inputTokens,
-      outputTokens,
-      totalTokens: inputTokens + outputTokens,
-      cost: this.calculateCost(inputTokens, outputTokens, model)
-    };
-
-    return {
+    const response: LLMResponse = {
+      id: typeof payload === 'object' && payload !== null ? payload.id : undefined,
       message: content,
       content,
       usage,
-      model,
+      model: payload?.model || model,
       provider: this.name,
       responseTime,
-      finishReason,
+      finishReason: this.extractFinishReason(result, toolCalls),
       metadata: {
         cloudflareAI: true,
         accountId: this.accountId
       }
     };
+
+    if (toolCalls.length > 0) {
+      response.toolCalls = toolCalls;
+    }
+
+    return response;
+  }
+
+  private extractText(result: any): string {
+    const payload = this.unwrapResult(result);
+
+    if (typeof payload === 'string') {
+      return payload;
+    }
+
+    if (typeof payload?.response === 'string') {
+      return payload.response;
+    }
+
+    const chatContent = payload?.choices?.[0]?.message?.content;
+    if (typeof chatContent === 'string') {
+      return chatContent;
+    }
+
+    if (chatContent === null) {
+      return '';
+    }
+
+    if (Array.isArray(chatContent)) {
+      return chatContent
+        .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+        .join('');
+    }
+
+    if (typeof payload?.output_text === 'string') {
+      return payload.output_text;
+    }
+
+    if (Array.isArray(payload?.output)) {
+      return payload.output
+        .flatMap((item: any) => {
+          if (item?.type === 'message' && Array.isArray(item.content)) {
+            return item.content
+              .map((part: any) =>
+                part?.type === 'output_text' || part?.type === 'text' ? part.text ?? '' : ''
+              )
+              .filter(Boolean);
+          }
+
+          if ((item?.type === 'output_text' || item?.type === 'text') && typeof item.text === 'string') {
+            return [item.text];
+          }
+
+          return [];
+        })
+        .join('');
+    }
+
+    return JSON.stringify(payload ?? '');
+  }
+
+  private extractToolCalls(result: any): ToolCall[] {
+    const payload = this.unwrapResult(result);
+    const choiceToolCalls = payload?.choices?.[0]?.message?.tool_calls;
+    if (Array.isArray(choiceToolCalls) && choiceToolCalls.length > 0) {
+      return choiceToolCalls.map((toolCall: any, index: number) => ({
+        id: toolCall.id || `call_${index}`,
+        type: 'function',
+        function: {
+          name: toolCall.function?.name || 'unknown',
+          arguments: this.stringifyArguments(toolCall.function?.arguments)
+        }
+      }));
+    }
+
+    if (Array.isArray(payload?.output)) {
+      return payload.output
+        .filter((item: any) => item?.type === 'function_call' && item.name)
+        .map((item: any, index: number) => ({
+          id: item.call_id || item.id || `call_${index}`,
+          type: 'function',
+          function: {
+            name: item.name,
+            arguments: this.stringifyArguments(item.arguments)
+          }
+        }));
+    }
+
+    return [];
+  }
+
+  private extractUsage(
+    result: any,
+    model: string,
+    request: LLMRequest,
+    content: string
+  ): TokenUsage {
+    const payload = this.unwrapResult(result);
+    const usage = payload?.usage;
+    const inputTokens = usage?.prompt_tokens ?? usage?.input_tokens;
+    const outputTokens = usage?.completion_tokens ?? usage?.output_tokens;
+    const totalTokens = usage?.total_tokens;
+
+    if (
+      typeof inputTokens === 'number' ||
+      typeof outputTokens === 'number' ||
+      typeof totalTokens === 'number'
+    ) {
+      const normalizedInputTokens =
+        typeof inputTokens === 'number'
+          ? inputTokens
+          : Math.max((totalTokens ?? 0) - (outputTokens ?? 0), 0);
+      const normalizedOutputTokens =
+        typeof outputTokens === 'number'
+          ? outputTokens
+          : Math.max((totalTokens ?? 0) - normalizedInputTokens, 0);
+      const normalizedTotalTokens =
+        typeof totalTokens === 'number'
+          ? totalTokens
+          : normalizedInputTokens + normalizedOutputTokens;
+
+      return {
+        inputTokens: normalizedInputTokens,
+        outputTokens: normalizedOutputTokens,
+        totalTokens: normalizedTotalTokens,
+        cost: this.calculateCost(normalizedInputTokens, normalizedOutputTokens, model)
+      };
+    }
+
+    const estimatedInputTokens =
+      (request.systemPrompt ? Math.ceil(request.systemPrompt.length / 4) : 0) +
+      request.messages.reduce((sum, message) => sum + Math.ceil(message.content.length / 4), 0);
+    const estimatedOutputTokens = Math.ceil(content.length / 4);
+
+    return {
+      inputTokens: estimatedInputTokens,
+      outputTokens: estimatedOutputTokens,
+      totalTokens: estimatedInputTokens + estimatedOutputTokens,
+      cost: this.calculateCost(estimatedInputTokens, estimatedOutputTokens, model)
+    };
+  }
+
+  private extractFinishReason(
+    result: any,
+    toolCalls: ToolCall[]
+  ): 'stop' | 'length' | 'tool_calls' | 'content_filter' {
+    const payload = this.unwrapResult(result);
+    const finishReason = payload?.choices?.[0]?.finish_reason;
+    if (
+      finishReason === 'stop' ||
+      finishReason === 'length' ||
+      finishReason === 'tool_calls' ||
+      finishReason === 'content_filter'
+    ) {
+      return finishReason;
+    }
+
+    if (toolCalls.length > 0) {
+      return 'tool_calls';
+    }
+
+    return 'stop';
+  }
+
+  private stringifyArguments(argumentsValue: unknown): string {
+    if (typeof argumentsValue === 'string') {
+      return argumentsValue;
+    }
+
+    return JSON.stringify(argumentsValue ?? {});
+  }
+
+  private unwrapResult(result: any): any {
+    if (result && typeof result === 'object' && 'result' in result && result.result) {
+      return result.result;
+    }
+
+    return result;
   }
 
   /**
@@ -341,8 +557,8 @@ export class CloudflareProvider extends BaseProvider {
   async streamResponse(request: LLMRequest): Promise<ReadableStream<string>> {
     this.validateRequest(request);
 
-    const cloudflareRequest = { ...this.formatRequest(request), stream: true };
     const model = request.model || '@cf/meta/llama-3.1-8b-instruct';
+    const cloudflareRequest = { ...this.formatRequest(request, model), stream: true };
 
     return new ReadableStream({
       start: async (controller) => {

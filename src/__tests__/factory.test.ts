@@ -7,6 +7,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LLMProviderFactory, createCostOptimizedFactory } from '../factory';
 import { AuthenticationError } from '../errors';
 import type { LLMRequest, LLMResponse } from '../types';
+import { defaultCostTracker } from '../utils/cost-tracker';
+import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 
 // Mock providers
 const mockOpenAIProvider = {
@@ -120,13 +122,16 @@ describe('LLMProviderFactory', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    defaultCostTracker.reset();
+    defaultCircuitBreakerManager.resetAll();
     
     factory = new LLMProviderFactory({
       openai: { apiKey: 'test-openai-key' },
       anthropic: { apiKey: 'test-anthropic-key' },
       cloudflare: { ai: {} as Ai },
       defaultProvider: 'auto',
-      costOptimization: true
+      costOptimization: true,
+      enableCircuitBreaker: true,
     });
   });
 
@@ -184,6 +189,15 @@ describe('LLMProviderFactory', () => {
       expect(response).toBeDefined();
       expect(response.provider).not.toBe('openai');
     });
+
+    it('should skip fully open providers and continue down the chain', async () => {
+      defaultCircuitBreakerManager.getBreaker('cloudflare').forceOpen();
+
+      const response = await factory.generateResponse(testRequest);
+
+      expect(mockCloudflareProvider.generateResponse).not.toHaveBeenCalled();
+      expect(response.provider).not.toBe('cloudflare');
+    });
   });
 
   describe('Cost Optimization', () => {
@@ -194,12 +208,24 @@ describe('LLMProviderFactory', () => {
       expect(response.provider).toBe('cloudflare');
     });
 
-    it('should provide cost analytics', () => {
+    it('should provide cost analytics', async () => {
+      await factory.generateResponse(testRequest);
+
       const analytics = factory.getCostAnalytics();
       
       expect(analytics).toBeDefined();
       expect(analytics.breakdown).toBeDefined();
-      expect(analytics.total).toBeDefined();
+      expect(analytics.total).toBeCloseTo(0.0001);
+      expect(analytics.breakdown.cloudflare).toMatchObject({
+        cost: 0.0001,
+        totalCost: 0.0001,
+        requests: 1,
+        requestCount: 1,
+        inputTokens: 10,
+        outputTokens: 20,
+        tokens: { input: 10, output: 20 }
+      });
+      expect(analytics.breakdown.cloudflare.lastRecordedAt).toBeGreaterThan(0);
     });
   });
 

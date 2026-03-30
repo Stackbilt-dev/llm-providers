@@ -12,7 +12,7 @@ import type {
   ProviderMetrics 
 } from '../types';
 import { RetryManager } from '../utils/retry';
-import { CircuitBreaker } from '../utils/circuit-breaker';
+import { CircuitBreaker, defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { CostTracker } from '../utils/cost-tracker';
 import { ConfigurationError, TimeoutError } from '../errors';
 
@@ -126,7 +126,7 @@ export abstract class BaseProvider implements LLMProvider {
   protected async executeWithResiliency<T>(
     operation: () => Promise<T>
   ): Promise<T> {
-    return this.circuitBreaker.execute(
+    return this.getCircuitBreaker().execute(
       () => this.retryManager.execute(operation)
     );
   }
@@ -139,6 +139,8 @@ export abstract class BaseProvider implements LLMProvider {
     success: boolean,
     cost: number = 0
   ): void {
+    const measuredLatency = Math.max(responseTime, 1);
+
     this.metrics.requestCount++;
     this.metrics.lastUsed = Date.now();
 
@@ -150,7 +152,7 @@ export abstract class BaseProvider implements LLMProvider {
 
     // Update average latency
     const totalLatency = this.metrics.averageLatency * (this.metrics.requestCount - 1);
-    this.metrics.averageLatency = (totalLatency + responseTime) / this.metrics.requestCount;
+    this.metrics.averageLatency = (totalLatency + measuredLatency) / this.metrics.requestCount;
 
     this.metrics.totalCost += cost;
   }
@@ -186,13 +188,13 @@ export abstract class BaseProvider implements LLMProvider {
     metrics: ProviderMetrics;
     lastError?: number;
   } {
-    const circuitState = this.circuitBreaker.getState();
+    const circuitState = this.getCircuitBreaker().getState();
     const successRate = this.metrics.requestCount > 0 
       ? this.metrics.successCount / this.metrics.requestCount 
       : 1;
 
     return {
-      healthy: circuitState.state === 'closed' && successRate > 0.8,
+      healthy: circuitState.state === 'CLOSED' && successRate > 0.8,
       circuitBreakerState: circuitState.state,
       metrics: this.getMetrics(),
       lastError: circuitState.lastFailure
@@ -212,6 +214,18 @@ export abstract class BaseProvider implements LLMProvider {
   getConfig(): Omit<ProviderConfig, 'apiKey'> {
     const { apiKey, ...safeConfig } = this.config;
     return safeConfig;
+  }
+
+  /**
+   * Providers share the named singleton breaker so factory-level routing and
+   * per-provider execution observe the same failure history.
+   */
+  protected getCircuitBreaker(): CircuitBreaker {
+    if (this.circuitBreaker.name !== this.name) {
+      this.circuitBreaker = defaultCircuitBreakerManager.getBreaker(this.name);
+    }
+
+    return this.circuitBreaker;
   }
 
   /**

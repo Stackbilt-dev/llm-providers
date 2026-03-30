@@ -230,29 +230,20 @@ export class LLMProviderFactory {
 
     // Cost-optimized routing
     const providers = Array.from(this.providers.keys());
-    const capabilities: Record<string, any> = {};
+    const sortedProviders = [...providers].sort((a, b) => {
+      const providerA = this.providers.get(a)!;
+      const providerB = this.providers.get(b)!;
+      const estimatedCostA = providerA.estimateCost(request);
+      const estimatedCostB = providerB.estimateCost(request);
 
-    // Get capabilities for each provider
-    for (const provider of providers) {
-      const providerInstance = this.providers.get(provider)!;
-      capabilities[provider] = providerInstance.getModels();
-    }
+      if (estimatedCostA !== estimatedCostB) {
+        return estimatedCostA - estimatedCostB;
+      }
 
-    // Use cost tracker to determine most cost-effective provider
-    const bestProvider = this.costTracker.getMostCostEffectiveProvider(
-      capabilities,
-      request
-    );
-
-    // Put best provider first, then others by cost
-    const sortedProviders = providers.sort((a, b) => {
-      if (a === bestProvider) return -1;
-      if (b === bestProvider) return 1;
-      
-      // Sort by cost (lower first)
-      const costA = this.costTracker.getProviderCost(a);
-      const costB = this.costTracker.getProviderCost(b);
-      return costA - costB;
+      // If estimates tie, prefer the provider with less accumulated spend.
+      const trackedCostA = this.costTracker.getProviderCost(a);
+      const trackedCostB = this.costTracker.getProviderCost(b);
+      return trackedCostA - trackedCostB;
     });
 
     return sortedProviders;

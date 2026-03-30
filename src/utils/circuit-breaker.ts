@@ -1,38 +1,94 @@
 /**
- * Circuit Breaker
- * Prevents cascading failures by monitoring provider health
+ * Graduated Circuit Breaker
+ * Routes traffic away from failing providers with confidence-weighted degradation.
  */
 
 import type { CircuitBreakerConfig, CircuitBreakerState } from '../types';
 import { CircuitBreakerOpenError } from '../errors';
 
+const DEFAULT_DEGRADATION_CURVE = [1.0, 0.9, 0.7, 0.4, 0.1];
+
+type ResolvedCircuitBreakerConfig = {
+  failureThreshold: number;
+  resetTimeout: number;
+  monitoringPeriod: number;
+  minRequests: number;
+  degradationCurve: number[];
+};
+
+const DEFAULT_CONFIG: ResolvedCircuitBreakerConfig = {
+  failureThreshold: DEFAULT_DEGRADATION_CURVE.length,
+  resetTimeout: 60_000,
+  monitoringPeriod: 300_000,
+  minRequests: 3,
+  degradationCurve: DEFAULT_DEGRADATION_CURVE
+};
+
+function clampTrafficPct(value: number): number {
+  if (Number.isNaN(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
+function normalizeConfig(config: Partial<CircuitBreakerConfig>): ResolvedCircuitBreakerConfig {
+  const degradationCurve = (config.degradationCurve?.length
+    ? config.degradationCurve
+    : DEFAULT_DEGRADATION_CURVE
+  ).map(clampTrafficPct);
+
+  return {
+    failureThreshold: Math.max(1, config.failureThreshold ?? DEFAULT_CONFIG.failureThreshold),
+    resetTimeout: config.resetTimeout ?? DEFAULT_CONFIG.resetTimeout,
+    monitoringPeriod: config.monitoringPeriod ?? DEFAULT_CONFIG.monitoringPeriod,
+    minRequests: config.minRequests ?? DEFAULT_CONFIG.minRequests,
+    degradationCurve
+  };
+}
+
 export class CircuitBreaker {
-  private config: CircuitBreakerConfig;
-  private state: CircuitBreakerState;
-  private name: string;
+  private readonly config: ResolvedCircuitBreakerConfig;
+  private consecutiveFailures = 0;
+  private totalFailures = 0;
+  private totalSuccesses = 0;
+  private totalRequests = 0;
+  private lastFailureAt?: number;
+  private lastSuccessAt?: number;
+  private lastRequestAt?: number;
+  private lastDecayAt = 0;
+  private windowStart = Date.now();
 
-  constructor(name: string, config: Partial<CircuitBreakerConfig> = {}) {
-    this.name = name;
-    this.config = {
-      failureThreshold: config.failureThreshold ?? 5,
-      resetTimeout: config.resetTimeout ?? 60000, // 1 minute
-      monitoringPeriod: config.monitoringPeriod ?? 300000 // 5 minutes
-    };
-
-    this.state = {
-      state: 'closed',
-      failures: 0
-    };
+  constructor(
+    readonly name: string,
+    config: Partial<CircuitBreakerConfig> = {}
+  ) {
+    this.config = normalizeConfig(config);
   }
 
   /**
-   * Execute a function through the circuit breaker
+   * Backwards-compatible execute alias.
    */
   async execute<T>(fn: () => Promise<T>): Promise<T> {
-    this.checkState();
+    return this.exec(fn);
+  }
 
-    if (this.state.state === 'open') {
-      throw new CircuitBreakerOpenError(this.name);
+  /**
+   * Execute the primary operation if the breaker allows traffic through.
+   * Rejected requests throw CircuitBreakerOpenError so callers can route elsewhere.
+   */
+  async exec<T>(fn: () => Promise<T>): Promise<T> {
+    const now = Date.now();
+    this.syncState(now);
+    this.markTraffic(now);
+
+    const primaryPct = this.currentPrimaryTrafficPct();
+    if (primaryPct <= 0) {
+      throw this.buildOpenError(now);
+    }
+
+    if (primaryPct < 1 && Math.random() > primaryPct) {
+      console.log(
+        `[CircuitBreaker] ${this.name}: degraded (${(primaryPct * 100).toFixed(0)}% primary), rejecting request for fallback`
+      );
+      throw new CircuitBreakerOpenError(this.name, 0, this.consecutiveFailures);
     }
 
     try {
@@ -46,222 +102,383 @@ export class CircuitBreaker {
   }
 
   /**
-   * Check and update circuit breaker state
+   * Execute with graduated fallback. Degraded traffic is routed to the fallback
+   * probabilistically, and primary failures immediately fail over.
    */
-  private checkState(): void {
+  async execWithFallback<T>(
+    primary: () => Promise<T>,
+    fallback: () => Promise<T>
+  ): Promise<T> {
     const now = Date.now();
+    this.syncState(now);
+    this.markTraffic(now);
 
-    // Reset failure count if monitoring period has passed
-    if (this.state.lastFailure && 
-        now - this.state.lastFailure > this.config.monitoringPeriod) {
-      this.state.failures = 0;
+    const primaryPct = this.currentPrimaryTrafficPct();
+    if (primaryPct <= 0) {
+      console.log(
+        `[CircuitBreaker] ${this.name}: fully degraded (${this.consecutiveFailures} failures), using fallback`
+      );
+      return fallback();
     }
 
-    // Check if we should transition from open to half-open
-    if (this.state.state === 'open' && 
-        this.state.nextAttempt && 
-        now >= this.state.nextAttempt) {
-      this.state.state = 'half-open';
-      console.log(`[CircuitBreaker] ${this.name}: Transitioning to half-open state`);
+    if (primaryPct < 1 && Math.random() > primaryPct) {
+      console.log(
+        `[CircuitBreaker] ${this.name}: degraded (${(primaryPct * 100).toFixed(0)}% primary), routing to fallback`
+      );
+      return fallback();
+    }
+
+    try {
+      const result = await primary();
+      this.onSuccess();
+      return result;
+    } catch (error) {
+      this.onFailure();
+      console.warn(
+        `[CircuitBreaker] ${this.name}: primary failed (${this.consecutiveFailures} consecutive), trying fallback`
+      );
+      return fallback();
     }
   }
 
   /**
-   * Handle successful operation
+   * Current percentage of traffic that should be routed to the primary provider.
    */
-  private onSuccess(): void {
-    if (this.state.state === 'half-open') {
-      // Success in half-open state means we can close the circuit
-      this.state.state = 'closed';
-      this.state.failures = 0;
-      this.state.lastFailure = undefined;
-      this.state.nextAttempt = undefined;
-      console.log(`[CircuitBreaker] ${this.name}: Circuit closed after successful recovery`);
-    }
+  primaryTrafficPct(): number {
+    this.syncState(Date.now());
+    return this.currentPrimaryTrafficPct();
   }
 
   /**
-   * Handle failed operation
-   */
-  private onFailure(): void {
-    this.state.failures++;
-    this.state.lastFailure = Date.now();
-
-    if (this.state.state === 'half-open') {
-      // Failure in half-open state means we go back to open
-      this.state.state = 'open';
-      this.state.nextAttempt = Date.now() + this.config.resetTimeout;
-      console.log(`[CircuitBreaker] ${this.name}: Circuit re-opened after half-open failure`);
-    } else if (this.state.failures >= this.config.failureThreshold) {
-      // Too many failures in closed state means we open the circuit
-      this.state.state = 'open';
-      this.state.nextAttempt = Date.now() + this.config.resetTimeout;
-      console.log(`[CircuitBreaker] ${this.name}: Circuit opened after ${this.state.failures} failures`);
-    }
-  }
-
-  /**
-   * Get current state
+   * Get current state and breaker statistics.
    */
   getState(): CircuitBreakerState {
-    this.checkState(); // Update state before returning
-    return { ...this.state };
+    this.syncState(Date.now());
+    return this.snapshot();
   }
 
   /**
-   * Get current configuration
+   * Alias for stats-oriented call sites.
+   */
+  getStats(): CircuitBreakerState {
+    return this.getState();
+  }
+
+  /**
+   * Get current configuration.
    */
   getConfig(): CircuitBreakerConfig {
-    return { ...this.config };
+    return {
+      ...this.config,
+      degradationCurve: [...this.config.degradationCurve]
+    };
   }
 
   /**
-   * Reset the circuit breaker
+   * Manual reset for testing and operator intervention.
    */
   reset(): void {
-    this.state = {
-      state: 'closed',
-      failures: 0
-    };
-    console.log(`[CircuitBreaker] ${this.name}: Circuit breaker reset`);
+    this.consecutiveFailures = 0;
+    this.totalFailures = 0;
+    this.totalSuccesses = 0;
+    this.totalRequests = 0;
+    this.lastFailureAt = undefined;
+    this.lastSuccessAt = undefined;
+    this.lastRequestAt = undefined;
+    this.lastDecayAt = 0;
+    this.windowStart = Date.now();
+    console.log(`[CircuitBreaker] ${this.name}: circuit breaker reset`);
   }
 
   /**
-   * Force open the circuit breaker
+   * Force the breaker into the fully open state.
    */
   forceOpen(): void {
-    this.state.state = 'open';
-    this.state.nextAttempt = Date.now() + this.config.resetTimeout;
-    console.log(`[CircuitBreaker] ${this.name}: Circuit breaker force opened`);
+    const now = Date.now();
+    this.consecutiveFailures = this.config.failureThreshold;
+    this.lastFailureAt = now;
+    this.lastRequestAt = now;
+    this.lastDecayAt = now;
+    console.log(`[CircuitBreaker] ${this.name}: circuit breaker force opened`);
   }
 
-  /**
-   * Check if circuit breaker is open
-   */
   isOpen(): boolean {
-    this.checkState();
-    return this.state.state === 'open';
+    return this.getState().state === 'OPEN';
   }
 
-  /**
-   * Check if circuit breaker is closed
-   */
   isClosed(): boolean {
-    this.checkState();
-    return this.state.state === 'closed';
+    return this.getState().state === 'CLOSED';
   }
 
   /**
-   * Check if circuit breaker is half-open
+   * Deprecated alias retained for compatibility with the prior state machine.
    */
   isHalfOpen(): boolean {
-    this.checkState();
-    return this.state.state === 'half-open';
+    return this.isRecovering();
   }
 
-  /**
-   * Get health status
-   */
+  isDegraded(): boolean {
+    return this.getState().state === 'DEGRADED';
+  }
+
+  isRecovering(): boolean {
+    return this.getState().state === 'RECOVERING';
+  }
+
   getHealth(): {
-    state: string;
+    state: CircuitBreakerState['state'];
     failures: number;
+    consecutiveFailures: number;
     failureThreshold: number;
+    primaryTrafficPct: number;
     healthy: boolean;
+    lastFailure?: number;
+    lastSuccess?: number;
     nextAttempt?: number;
+    totalFailures: number;
+    totalSuccesses: number;
+    totalRequests: number;
   } {
-    this.checkState();
-    
+    const state = this.getState();
+
     return {
-      state: this.state.state,
-      failures: this.state.failures,
+      state: state.state,
+      failures: state.failures,
+      consecutiveFailures: state.consecutiveFailures,
       failureThreshold: this.config.failureThreshold,
-      healthy: this.state.state === 'closed',
-      nextAttempt: this.state.nextAttempt
+      primaryTrafficPct: state.primaryTrafficPct,
+      healthy: state.state === 'CLOSED',
+      lastFailure: state.lastFailure,
+      lastSuccess: state.lastSuccess,
+      nextAttempt: state.nextAttempt,
+      totalFailures: state.totalFailures,
+      totalSuccesses: state.totalSuccesses,
+      totalRequests: state.totalRequests
     };
+  }
+
+  private snapshot(now: number = Date.now()): CircuitBreakerState {
+    return {
+      state: this.currentState(),
+      failures: this.consecutiveFailures,
+      consecutiveFailures: this.consecutiveFailures,
+      primaryTrafficPct: this.currentPrimaryTrafficPct(),
+      totalFailures: this.totalFailures,
+      totalSuccesses: this.totalSuccesses,
+      totalRequests: this.totalRequests,
+      lastFailure: this.lastFailureAt,
+      lastSuccess: this.lastSuccessAt,
+      lastRequest: this.lastRequestAt,
+      nextAttempt: this.retryAt(now)
+    };
+  }
+
+  private currentState(): CircuitBreakerState['state'] {
+    const primaryPct = this.currentPrimaryTrafficPct();
+    if (primaryPct >= 1) return 'CLOSED';
+    if (primaryPct <= 0) return 'OPEN';
+    if ((this.lastSuccessAt ?? 0) > (this.lastFailureAt ?? 0)) return 'RECOVERING';
+    return 'DEGRADED';
+  }
+
+  private currentPrimaryTrafficPct(): number {
+    if (this.consecutiveFailures >= this.config.failureThreshold) {
+      return 0;
+    }
+
+    if (this.consecutiveFailures < this.config.degradationCurve.length) {
+      return this.config.degradationCurve[this.consecutiveFailures];
+    }
+
+    if (this.config.degradationCurve.length === 0) {
+      return this.consecutiveFailures === 0 ? 1 : 0;
+    }
+
+    return this.config.degradationCurve[this.config.degradationCurve.length - 1];
+  }
+
+  private buildOpenError(now: number): CircuitBreakerOpenError {
+    return new CircuitBreakerOpenError(
+      this.name,
+      this.retryAfterSec(now),
+      this.consecutiveFailures
+    );
+  }
+
+  private retryAfterSec(now: number): number {
+    if (this.consecutiveFailures === 0 || this.lastDecayAt === 0) {
+      return 0;
+    }
+
+    return Math.max(
+      0,
+      Math.ceil((this.config.resetTimeout - (now - this.lastDecayAt)) / 1000)
+    );
+  }
+
+  private retryAt(now: number): number | undefined {
+    if (this.consecutiveFailures === 0 || this.lastDecayAt === 0) {
+      return undefined;
+    }
+    return Math.max(now, this.lastDecayAt + this.config.resetTimeout);
+  }
+
+  private syncState(now: number): void {
+    this.maybeDecayFailures(now);
+    this.maybeRotateWindow(now);
+  }
+
+  private markTraffic(now: number): void {
+    this.lastRequestAt = now;
+    this.lastDecayAt = now;
+  }
+
+  private onSuccess(): void {
+    this.totalRequests++;
+    this.totalSuccesses++;
+    this.lastSuccessAt = Date.now();
+
+    if (this.consecutiveFailures > 0) {
+      this.consecutiveFailures--;
+      console.log(
+        `[CircuitBreaker] ${this.name}: success -> recovering (${this.consecutiveFailures} failures, ${(this.currentPrimaryTrafficPct() * 100).toFixed(0)}% primary)`
+      );
+    }
+  }
+
+  private onFailure(): void {
+    this.totalRequests++;
+    this.totalFailures++;
+    this.consecutiveFailures++;
+    this.lastFailureAt = Date.now();
+
+    const primaryPct = this.currentPrimaryTrafficPct();
+    if (primaryPct <= 0) {
+      console.log(
+        `[CircuitBreaker] ${this.name}: OPEN (${this.consecutiveFailures} consecutive failures)`
+      );
+      return;
+    }
+
+    if (primaryPct < 1) {
+      console.log(
+        `[CircuitBreaker] ${this.name}: degraded -> ${(primaryPct * 100).toFixed(0)}% primary (${this.consecutiveFailures} failures)`
+      );
+    }
+  }
+
+  private maybeDecayFailures(now: number): void {
+    if (this.consecutiveFailures === 0 || this.lastDecayAt === 0) {
+      return;
+    }
+
+    const elapsed = now - this.lastDecayAt;
+    if (elapsed < this.config.resetTimeout) {
+      return;
+    }
+
+    const steps = Math.floor(elapsed / this.config.resetTimeout);
+    const before = this.consecutiveFailures;
+    this.consecutiveFailures = Math.max(0, this.consecutiveFailures - steps);
+    this.lastDecayAt += steps * this.config.resetTimeout;
+
+    if (before !== this.consecutiveFailures) {
+      console.log(
+        `[CircuitBreaker] ${this.name}: time-decay ${before} -> ${this.consecutiveFailures} failures (${(this.currentPrimaryTrafficPct() * 100).toFixed(0)}% primary)`
+      );
+    }
+  }
+
+  private maybeRotateWindow(now: number): void {
+    if (now - this.windowStart >= this.config.monitoringPeriod) {
+      this.windowStart = now;
+    }
   }
 }
 
 /**
- * Circuit breaker manager for multiple providers
+ * Circuit breaker manager for multiple providers.
  */
 export class CircuitBreakerManager {
   private breakers: Map<string, CircuitBreaker> = new Map();
-  private defaultConfig: CircuitBreakerConfig;
+  private defaultConfig: Partial<CircuitBreakerConfig>;
 
   constructor(defaultConfig?: Partial<CircuitBreakerConfig>) {
     this.defaultConfig = {
-      failureThreshold: defaultConfig?.failureThreshold ?? 5,
-      resetTimeout: defaultConfig?.resetTimeout ?? 60000,
-      monitoringPeriod: defaultConfig?.monitoringPeriod ?? 300000
+      failureThreshold: defaultConfig?.failureThreshold ?? DEFAULT_CONFIG.failureThreshold,
+      resetTimeout: defaultConfig?.resetTimeout ?? DEFAULT_CONFIG.resetTimeout,
+      monitoringPeriod: defaultConfig?.monitoringPeriod ?? DEFAULT_CONFIG.monitoringPeriod,
+      minRequests: defaultConfig?.minRequests ?? DEFAULT_CONFIG.minRequests,
+      degradationCurve: defaultConfig?.degradationCurve
+        ? [...defaultConfig.degradationCurve]
+        : [...DEFAULT_DEGRADATION_CURVE]
     };
   }
 
-  /**
-   * Get or create circuit breaker for a provider
-   */
   getBreaker(name: string, config?: Partial<CircuitBreakerConfig>): CircuitBreaker {
     if (!this.breakers.has(name)) {
-      const breakerConfig = { ...this.defaultConfig, ...config };
+      const breakerConfig: Partial<CircuitBreakerConfig> = {
+        ...this.defaultConfig,
+        ...config,
+        degradationCurve: config?.degradationCurve
+          ? [...config.degradationCurve]
+          : [...(this.defaultConfig.degradationCurve ?? DEFAULT_DEGRADATION_CURVE)]
+      };
       this.breakers.set(name, new CircuitBreaker(name, breakerConfig));
     }
+
     return this.breakers.get(name)!;
   }
 
-  /**
-   * Execute function through named circuit breaker
-   */
   async execute<T>(
-    name: string, 
+    name: string,
     fn: () => Promise<T>,
     config?: Partial<CircuitBreakerConfig>
   ): Promise<T> {
-    const breaker = this.getBreaker(name, config);
-    return breaker.execute(fn);
+    return this.getBreaker(name, config).execute(fn);
   }
 
-  /**
-   * Get all circuit breaker states
-   */
+  async execWithFallback<T>(
+    name: string,
+    primary: () => Promise<T>,
+    fallback: () => Promise<T>,
+    config?: Partial<CircuitBreakerConfig>
+  ): Promise<T> {
+    return this.getBreaker(name, config).execWithFallback(primary, fallback);
+  }
+
   getAllStates(): Record<string, CircuitBreakerState> {
     const states: Record<string, CircuitBreakerState> = {};
+
     for (const [name, breaker] of this.breakers) {
       states[name] = breaker.getState();
     }
+
     return states;
   }
 
-  /**
-   * Get health status for all circuit breakers
-   */
-  getHealthStatus(): Record<string, any> {
-    const health: Record<string, any> = {};
+  getHealthStatus(): Record<string, ReturnType<CircuitBreaker['getHealth']>> {
+    const health: Record<string, ReturnType<CircuitBreaker['getHealth']>> = {};
+
     for (const [name, breaker] of this.breakers) {
       health[name] = breaker.getHealth();
     }
+
     return health;
   }
 
-  /**
-   * Reset all circuit breakers
-   */
   resetAll(): void {
-    for (const [name, breaker] of this.breakers) {
+    for (const breaker of this.breakers.values()) {
       breaker.reset();
     }
   }
 
-  /**
-   * Reset specific circuit breaker
-   */
   reset(name: string): void {
-    const breaker = this.breakers.get(name);
-    if (breaker) {
-      breaker.reset();
-    }
+    this.breakers.get(name)?.reset();
   }
 }
 
 /**
- * Default circuit breaker manager instance
+ * Default circuit breaker manager instance.
  */
 export const defaultCircuitBreakerManager = new CircuitBreakerManager();

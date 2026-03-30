@@ -3,12 +3,25 @@
  * Tracks and optimizes LLM usage costs across providers
  */
 
-import type { LLMRequest, LLMResponse, TokenUsage, CostConfig, ModelCapabilities } from '../types';
+import type { LLMRequest, LLMResponse, CostConfig, ModelCapabilities } from '../types';
+
+export interface ProviderCostEntry {
+  totalCost: number;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  lastRecordedAt: number;
+}
+
+export interface ProviderCostBreakdownEntry extends ProviderCostEntry {
+  cost: number;
+  requests: number;
+  tokens: { input: number; output: number };
+  averageCostPerRequest: number;
+}
 
 export class CostTracker {
-  private costs: Map<string, number> = new Map(); // provider -> total cost
-  private requests: Map<string, number> = new Map(); // provider -> request count
-  private tokens: Map<string, { input: number; output: number }> = new Map();
+  private providers: Map<string, ProviderCostEntry> = new Map();
   private config: CostConfig;
 
   constructor(config: Partial<CostConfig> = {}) {
@@ -40,22 +53,15 @@ export class CostTracker {
    * Track actual cost from response
    */
   trackCost(provider: string, response: LLMResponse): void {
-    if (!response.usage?.totalTokens) return;
+    if (!response.usage) return;
 
-    const providerCosts = this.costs.get(provider) || 0;
-    const cost = response.usage.cost || 0;
-    
-    this.costs.set(provider, providerCosts + cost);
-    
-    // Track requests
-    const requestCount = this.requests.get(provider) || 0;
-    this.requests.set(provider, requestCount + 1);
-
-    // Track tokens
-    const tokenUsage = this.tokens.get(provider) || { input: 0, output: 0 };
-    tokenUsage.input += response.usage.inputTokens;
-    tokenUsage.output += response.usage.outputTokens;
-    this.tokens.set(provider, tokenUsage);
+    const entry = this.providers.get(provider) || this.createProviderEntry();
+    entry.totalCost += response.usage.cost || 0;
+    entry.requestCount++;
+    entry.inputTokens += response.usage.inputTokens;
+    entry.outputTokens += response.usage.outputTokens;
+    entry.lastRecordedAt = Date.now();
+    this.providers.set(provider, entry);
 
     // Check cost alerts
     this.checkCostAlerts(provider);
@@ -65,40 +71,62 @@ export class CostTracker {
    * Get total cost across all providers
    */
   getTotalCost(): number {
-    return Array.from(this.costs.values()).reduce((sum, cost) => sum + cost, 0);
+    return this.total();
   }
 
   /**
    * Get cost for specific provider
    */
   getProviderCost(provider: string): number {
-    return this.costs.get(provider) || 0;
+    return this.providers.get(provider)?.totalCost || 0;
   }
 
   /**
    * Get cost breakdown by provider
    */
-  getCostBreakdown(): Record<string, {
-    cost: number;
-    requests: number;
-    tokens: { input: number; output: number };
-    averageCostPerRequest: number;
-  }> {
-    const breakdown: Record<string, any> = {};
+  getCostBreakdown(): Record<string, ProviderCostBreakdownEntry> {
+    const breakdown: Record<string, ProviderCostBreakdownEntry> = {};
 
-    for (const [provider, cost] of this.costs) {
-      const requests = this.requests.get(provider) || 0;
-      const tokens = this.tokens.get(provider) || { input: 0, output: 0 };
-
+    for (const [provider, entry] of this.providers) {
       breakdown[provider] = {
-        cost,
-        requests,
-        tokens,
-        averageCostPerRequest: requests > 0 ? cost / requests : 0
+        ...entry,
+        cost: entry.totalCost,
+        requests: entry.requestCount,
+        tokens: {
+          input: entry.inputTokens,
+          output: entry.outputTokens
+        },
+        averageCostPerRequest: entry.requestCount > 0 ? entry.totalCost / entry.requestCount : 0
       };
     }
 
     return breakdown;
+  }
+
+  /**
+   * Get a provider snapshot aligned with Workers usage reporting.
+   */
+  breakdown(): Record<string, ProviderCostEntry> {
+    const snapshot: Record<string, ProviderCostEntry> = {};
+
+    for (const [provider, entry] of this.providers) {
+      snapshot[provider] = { ...entry };
+    }
+
+    return snapshot;
+  }
+
+  /**
+   * Get total cost across all providers.
+   */
+  total(): number {
+    let sum = 0;
+
+    for (const entry of this.providers.values()) {
+      sum += entry.totalCost;
+    }
+
+    return sum;
   }
 
   /**
@@ -138,18 +166,23 @@ export class CostTracker {
    * Reset cost tracking (e.g., monthly reset)
    */
   reset(): void {
-    this.costs.clear();
-    this.requests.clear();
-    this.tokens.clear();
+    this.providers.clear();
   }
 
   /**
    * Reset tracking for specific provider
    */
   resetProvider(provider: string): void {
-    this.costs.delete(provider);
-    this.requests.delete(provider);
-    this.tokens.delete(provider);
+    this.providers.delete(provider);
+  }
+
+  /**
+   * Drain and reset provider tracking for periodic reporting.
+   */
+  drain(): Record<string, ProviderCostEntry> {
+    const snapshot = this.breakdown();
+    this.providers.clear();
+    return snapshot;
   }
 
   /**
@@ -157,7 +190,7 @@ export class CostTracker {
    */
   exportData(): {
     totalCost: number;
-    breakdown: Record<string, any>;
+    breakdown: Record<string, ProviderCostBreakdownEntry>;
     period: { start: number; end: number };
   } {
     return {
@@ -219,6 +252,16 @@ export class CostTracker {
    */
   getConfig(): CostConfig {
     return { ...this.config };
+  }
+
+  private createProviderEntry(): ProviderCostEntry {
+    return {
+      totalCost: 0,
+      requestCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      lastRecordedAt: 0
+    };
   }
 }
 

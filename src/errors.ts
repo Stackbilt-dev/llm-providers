@@ -98,8 +98,19 @@ export class ConfigurationError extends LLMProviderError {
 }
 
 export class CircuitBreakerOpenError extends LLMProviderError {
-  constructor(provider: string) {
-    super(`Circuit breaker is open for provider: ${provider}`, 'CIRCUIT_BREAKER_OPEN', provider, true);
+  retryAfterSec: number;
+  consecutiveFailures: number;
+
+  constructor(provider: string, retryAfterSec: number = 0, consecutiveFailures: number = 0) {
+    const retryHint = retryAfterSec > 0 ? ` Retry after ${retryAfterSec}s.` : '';
+    super(
+      `Circuit breaker rejected request for provider: ${provider}.${retryHint}`,
+      'CIRCUIT_BREAKER_OPEN',
+      provider,
+      true
+    );
+    this.retryAfterSec = retryAfterSec;
+    this.consecutiveFailures = consecutiveFailures;
   }
 }
 

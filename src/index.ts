@@ -89,6 +89,10 @@ export {
   CostOptimizer, 
   defaultCostTracker 
 } from './utils/cost-tracker';
+export type {
+  ProviderCostEntry,
+  ProviderCostBreakdownEntry
+} from './utils/cost-tracker';
 
 /**
  * Main LLMProviders class for easy usage
