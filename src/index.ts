@@ -97,14 +97,21 @@ export { CreditLedger } from './utils/credit-ledger';
 export type {
   CreditLedgerSnapshot,
   LedgerEvent,
+  ThresholdEvent,
+  DepletionEvent,
   LedgerListener,
   BudgetConfig,
   ThresholdConfig,
   ThresholdTier,
+  DepletionTier,
   ProviderAccumulator,
   ModelAccumulator,
   RateLimitDimension,
   RateLimitCheck,
+  SpendEntry,
+  BurnRate,
+  DepletionEstimate,
+  SpendSummary,
 } from './utils/credit-ledger';
 
 /**

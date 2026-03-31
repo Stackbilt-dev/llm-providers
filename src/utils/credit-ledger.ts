@@ -9,6 +9,40 @@
 // ─── Types ──────────────────────────────────────────────────
 
 export type ThresholdTier = 'warning' | 'critical' | 'emergency';
+export type DepletionTier = 'depletion_warning' | 'depletion_critical' | 'depletion_emergency';
+
+/** Timestamped spend entry for burn rate calculation. */
+export interface SpendEntry {
+  timestamp: number; // epoch ms
+  provider: string;
+  cost: number;
+}
+
+/** Burn rate over a rolling window. */
+export interface BurnRate {
+  costPerHour: number;
+  costPerDay: number;
+  windowMs: number;
+  sampleCount: number;
+}
+
+/** Projected depletion estimate for a provider. */
+export interface DepletionEstimate {
+  remainingBudget: number;
+  burnRate: BurnRate;
+  projectedDepletionDate: Date | null; // null if burn rate is zero
+  daysRemaining: number | null;        // null if burn rate is zero or no budget
+}
+
+/** Windowed spend summary for a provider. */
+export interface SpendSummary {
+  provider: string;
+  spend: number;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  windowMs: number;
+}
 
 export interface RateLimitWindow {
   used: number;
@@ -45,7 +79,7 @@ export interface ThresholdConfig {
   emergency: number;
 }
 
-export interface LedgerEvent {
+export interface ThresholdEvent {
   type: 'threshold_crossed';
   provider: string;
   model?: string;
@@ -54,6 +88,17 @@ export interface LedgerEvent {
   budget: number;
   utilizationPct: number;
 }
+
+export interface DepletionEvent {
+  type: 'depletion_projected';
+  provider: string;
+  tier: DepletionTier;
+  daysRemaining: number;
+  projectedDepletionDate: Date;
+  burnRate: BurnRate;
+}
+
+export type LedgerEvent = ThresholdEvent | DepletionEvent;
 
 export type LedgerListener = (event: LedgerEvent) => void;
 
@@ -81,6 +126,8 @@ export interface CreditLedgerSnapshot {
   thresholds: ThresholdConfig;
   budgets: BudgetConfig[];
   exportedAt: number;
+  /** Timestamped spend entries for burn rate calculation. Optional for backward compat. */
+  spendHistory?: SpendEntry[];
 }
 
 // ─── Constants ──────────────────────────────────────────────
@@ -92,7 +139,27 @@ const DEFAULT_THRESHOLDS: ThresholdConfig = {
 };
 
 const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+
+/** Default ring buffer capacity: 2000 entries ≈ a few days of heavy usage. */
+const DEFAULT_RING_BUFFER_SIZE = 2000;
+
+/** Default burn rate window: 24 hours. */
+const DEFAULT_BURN_RATE_WINDOW_MS = 24 * HOUR_MS;
+
+/** Depletion projection thresholds (days remaining). */
+const DEPLETION_THRESHOLDS = {
+  depletion_warning: 7,
+  depletion_critical: 3,
+  depletion_emergency: 1,
+} as const;
+
+const DEPLETION_SEVERITY: Record<DepletionTier, number> = {
+  depletion_warning: 1,
+  depletion_critical: 2,
+  depletion_emergency: 3,
+};
 
 const WINDOW_DURATIONS: Record<RateLimitDimension, number> = {
   rpm: MINUTE_MS,
@@ -131,10 +198,18 @@ export class CreditLedger {
   private listeners: LedgerListener[] = [];
   private periodStart: number;
   private lastFiredTier = new Map<string, ThresholdTier>(); // provider → last tier fired
+  private lastFiredDepletionTier = new Map<string, DepletionTier>();
+  private spendHistory: SpendEntry[] = [];
+  private ringBufferSize: number;
 
-  constructor(config?: { thresholds?: Partial<ThresholdConfig>; budgets?: BudgetConfig[] }) {
+  constructor(config?: {
+    thresholds?: Partial<ThresholdConfig>;
+    budgets?: BudgetConfig[];
+    ringBufferSize?: number;
+  }) {
     this.thresholds = { ...DEFAULT_THRESHOLDS, ...config?.thresholds };
     this.periodStart = Date.now();
+    this.ringBufferSize = config?.ringBufferSize ?? DEFAULT_RING_BUFFER_SIZE;
     if (config?.budgets) {
       for (const b of config.budgets) this.setBudget(b);
     }
@@ -177,7 +252,13 @@ export class CreditLedger {
       }
     }
 
-    // Check thresholds
+    // Record spend entry for burn rate calculation
+    this.spendHistory.push({ timestamp: now, provider, cost });
+    if (this.spendHistory.length > this.ringBufferSize) {
+      this.spendHistory.shift();
+    }
+
+    // Check budget thresholds
     if (acc.budget !== null && acc.budget > 0) {
       const tier = evaluateTier(acc.spend, acc.budget, this.thresholds);
       if (tier) {
@@ -194,6 +275,34 @@ export class CreditLedger {
             budget: acc.budget,
             utilizationPct: acc.spend / acc.budget,
           });
+        }
+      }
+
+      // Check depletion projections
+      const estimate = this.getDepletionEstimate(provider);
+      if (estimate?.daysRemaining !== null && estimate?.daysRemaining !== undefined) {
+        let depletionTier: DepletionTier | null = null;
+        if (estimate.daysRemaining <= DEPLETION_THRESHOLDS.depletion_emergency) {
+          depletionTier = 'depletion_emergency';
+        } else if (estimate.daysRemaining <= DEPLETION_THRESHOLDS.depletion_critical) {
+          depletionTier = 'depletion_critical';
+        } else if (estimate.daysRemaining <= DEPLETION_THRESHOLDS.depletion_warning) {
+          depletionTier = 'depletion_warning';
+        }
+
+        if (depletionTier) {
+          const lastDep = this.lastFiredDepletionTier.get(provider);
+          if (!lastDep || DEPLETION_SEVERITY[depletionTier] > DEPLETION_SEVERITY[lastDep]) {
+            this.lastFiredDepletionTier.set(provider, depletionTier);
+            this.emit({
+              type: 'depletion_projected',
+              provider,
+              tier: depletionTier,
+              daysRemaining: estimate.daysRemaining,
+              projectedDepletionDate: estimate.projectedDepletionDate!,
+              burnRate: estimate.burnRate,
+            });
+          }
         }
       }
     }
@@ -293,6 +402,92 @@ export class CreditLedger {
     return result;
   }
 
+  // ─── Burn rate & depletion projection ───────────────────
+
+  /**
+   * Calculate burn rate for a provider over a rolling window.
+   * Default window: 24 hours.
+   */
+  getBurnRate(provider: string, windowMs = DEFAULT_BURN_RATE_WINDOW_MS): BurnRate {
+    const now = Date.now();
+    const cutoff = now - windowMs;
+    const entries = this.spendHistory.filter(e => e.provider === provider && e.timestamp >= cutoff);
+    const totalCost = entries.reduce((sum, e) => sum + e.cost, 0);
+    const windowHours = windowMs / HOUR_MS;
+    const windowDays = windowMs / DAY_MS;
+
+    return {
+      costPerHour: windowHours > 0 ? totalCost / windowHours : 0,
+      costPerDay: windowDays > 0 ? totalCost / windowDays : 0,
+      windowMs,
+      sampleCount: entries.length,
+    };
+  }
+
+  /**
+   * Project when a provider's budget will be depleted at the current burn rate.
+   * Returns null if the provider has no budget or no spend history.
+   */
+  getDepletionEstimate(provider: string, windowMs?: number): DepletionEstimate | null {
+    const acc = this.providers.get(provider);
+    if (!acc || acc.budget === null || acc.budget <= 0) return null;
+
+    const remaining = acc.budget - acc.spend;
+    if (remaining <= 0) {
+      return {
+        remainingBudget: 0,
+        burnRate: this.getBurnRate(provider, windowMs),
+        projectedDepletionDate: new Date(),
+        daysRemaining: 0,
+      };
+    }
+
+    const burnRate = this.getBurnRate(provider, windowMs);
+    if (burnRate.costPerDay <= 0) {
+      return {
+        remainingBudget: remaining,
+        burnRate,
+        projectedDepletionDate: null,
+        daysRemaining: null,
+      };
+    }
+
+    const daysRemaining = remaining / burnRate.costPerDay;
+    const depletionMs = daysRemaining * DAY_MS;
+    return {
+      remainingBudget: remaining,
+      burnRate,
+      projectedDepletionDate: new Date(Date.now() + depletionMs),
+      daysRemaining,
+    };
+  }
+
+  /**
+   * Get windowed spend summary for a provider.
+   */
+  getSpendSummary(provider: string, windowMs: number): SpendSummary {
+    const now = Date.now();
+    const cutoff = now - windowMs;
+    const entries = this.spendHistory.filter(e => e.provider === provider && e.timestamp >= cutoff);
+
+    return {
+      provider,
+      spend: entries.reduce((sum, e) => sum + e.cost, 0),
+      requestCount: entries.length,
+      inputTokens: 0,  // ring buffer tracks cost, not tokens — use accumulator for totals
+      outputTokens: 0,
+      windowMs,
+    };
+  }
+
+  /**
+   * Get spend breakdown for all providers over a window.
+   */
+  getSpendBreakdown(windowMs: number): SpendSummary[] {
+    const providers = new Set(this.spendHistory.map(e => e.provider));
+    return Array.from(providers).map(p => this.getSpendSummary(p, windowMs));
+  }
+
   // ─── Rate limit tracking ────────────────────────────────
 
   checkRateLimit(provider: string, dimension: RateLimitDimension): RateLimitCheck {
@@ -341,6 +536,7 @@ export class CreditLedger {
       thresholds: { ...this.thresholds },
       budgets: this.budgets.map(b => ({ ...b })),
       exportedAt: Date.now(),
+      spendHistory: this.spendHistory.map(e => ({ ...e })),
     };
   }
 
@@ -355,6 +551,8 @@ export class CreditLedger {
     this.budgets = snapshot.budgets.map(b => ({ ...b }));
     this.providers.clear();
     this.lastFiredTier.clear();
+    this.lastFiredDepletionTier.clear();
+    this.spendHistory = (snapshot.spendHistory ?? []).map(e => ({ ...e }));
 
     for (const [name, data] of Object.entries(snapshot.providers)) {
       const acc = createProviderAccumulator(data.budget);
@@ -380,6 +578,8 @@ export class CreditLedger {
   resetPeriod(): void {
     this.periodStart = Date.now();
     this.lastFiredTier.clear();
+    this.lastFiredDepletionTier.clear();
+    this.spendHistory = [];
     for (const acc of this.providers.values()) {
       acc.spend = 0;
       acc.inputTokens = 0;
