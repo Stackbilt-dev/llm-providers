@@ -34,8 +34,10 @@ describe('CerebrasProvider', () => {
       expect(provider.name).toBe('cerebras');
       expect(provider.models).toContain('llama-3.1-8b');
       expect(provider.models).toContain('llama-3.3-70b');
+      expect(provider.models).toContain('zai-glm-4.7');
+      expect(provider.models).toContain('qwen-3-235b-a22b-instruct-2507');
       expect(provider.supportsStreaming).toBe(true);
-      expect(provider.supportsTools).toBe(false);
+      expect(provider.supportsTools).toBe(true);
       expect(provider.supportsBatching).toBe(false);
     });
 
@@ -67,7 +69,7 @@ describe('CerebrasProvider', () => {
   describe('getModels', () => {
     it('should return available models', () => {
       const models = provider.getModels();
-      expect(models).toEqual(['llama-3.1-8b', 'llama-3.3-70b']);
+      expect(models).toEqual(['llama-3.1-8b', 'llama-3.3-70b', 'zai-glm-4.7', 'qwen-3-235b-a22b-instruct-2507']);
     });
 
     it('should return a copy of the models array', () => {
