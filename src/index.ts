@@ -84,15 +84,28 @@ export {
   CircuitBreakerManager, 
   defaultCircuitBreakerManager 
 } from './utils/circuit-breaker';
-export { 
-  CostTracker, 
-  CostOptimizer, 
-  defaultCostTracker 
+export {
+  CostTracker,
+  CostOptimizer,
+  defaultCostTracker
 } from './utils/cost-tracker';
 export type {
   ProviderCostEntry,
   ProviderCostBreakdownEntry
 } from './utils/cost-tracker';
+export { CreditLedger } from './utils/credit-ledger';
+export type {
+  CreditLedgerSnapshot,
+  LedgerEvent,
+  LedgerListener,
+  BudgetConfig,
+  ThresholdConfig,
+  ThresholdTier,
+  ProviderAccumulator,
+  ModelAccumulator,
+  RateLimitDimension,
+  RateLimitCheck,
+} from './utils/credit-ledger';
 
 /**
  * Main LLMProviders class for easy usage
@@ -210,6 +223,8 @@ export const MODELS = {
   // Cerebras models
   CEREBRAS_LLAMA_3_1_8B: 'llama-3.1-8b',
   CEREBRAS_LLAMA_3_3_70B: 'llama-3.3-70b',
+  CEREBRAS_ZAI_GLM_4_7: 'zai-glm-4.7',
+  CEREBRAS_QWEN_3_235B: 'qwen-3-235b-a22b-instruct-2507',
 
   // Groq models
   GROQ_LLAMA_3_3_70B_VERSATILE: 'llama-3.3-70b-versatile',
@@ -230,8 +245,10 @@ export const MODEL_RECOMMENDATIONS = {
 
   // High-performance models
   HIGH_PERFORMANCE: [
+    MODELS.CEREBRAS_ZAI_GLM_4_7,
     MODELS.GPT_4O,
     MODELS.CLAUDE_3_5_SONNET,
+    MODELS.CEREBRAS_QWEN_3_235B,
     MODELS.LLAMA_3_1_70B
   ],
 
@@ -246,6 +263,8 @@ export const MODEL_RECOMMENDATIONS = {
   TOOL_CALLING: [
     MODELS.GPT_4O,
     MODELS.CLAUDE_3_5_SONNET,
+    MODELS.CEREBRAS_ZAI_GLM_4_7,
+    MODELS.CEREBRAS_QWEN_3_235B,
     MODELS.GPT_4_TURBO
   ],
 
@@ -277,7 +296,8 @@ export function getRecommendedModel(
     if (model.startsWith('@cf/') && availableProviders.includes('cloudflare')) {
       return model;
     }
-    if ((model.startsWith('llama-3.1-8b') || model.startsWith('llama-3.3-70b')) && availableProviders.includes('cerebras')) {
+    if ((model.startsWith('llama-3.1-8b') || model.startsWith('llama-3.3-70b')
+        || model.startsWith('zai-glm') || model.startsWith('qwen-3-235b')) && availableProviders.includes('cerebras')) {
       return model;
     }
     if ((model.includes('-versatile') || model.includes('-instant')) && availableProviders.includes('groq')) {

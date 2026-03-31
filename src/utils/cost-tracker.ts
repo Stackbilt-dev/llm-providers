@@ -4,6 +4,7 @@
  */
 
 import type { LLMRequest, LLMResponse, CostConfig, ModelCapabilities } from '../types';
+import type { CreditLedger } from './credit-ledger';
 
 export interface ProviderCostEntry {
   totalCost: number;
@@ -23,14 +24,16 @@ export interface ProviderCostBreakdownEntry extends ProviderCostEntry {
 export class CostTracker {
   private providers: Map<string, ProviderCostEntry> = new Map();
   private config: CostConfig;
+  private ledger?: CreditLedger;
 
-  constructor(config: Partial<CostConfig> = {}) {
+  constructor(config: Partial<CostConfig> = {}, ledger?: CreditLedger) {
     this.config = {
       inputTokenCost: config.inputTokenCost ?? 0.001, // $0.001 per 1k tokens default
       outputTokenCost: config.outputTokenCost ?? 0.002, // $0.002 per 1k tokens default
       maxMonthlyCost: config.maxMonthlyCost,
       alertThreshold: config.alertThreshold ?? 0.8 // 80% of max cost
     };
+    this.ledger = ledger;
   }
 
   /**
@@ -55,6 +58,17 @@ export class CostTracker {
   trackCost(provider: string, response: LLMResponse): void {
     if (!response.usage) return;
 
+    // Delegate to CreditLedger when present
+    if (this.ledger) {
+      this.ledger.record(
+        provider,
+        response.model || 'unknown',
+        response.usage.cost || 0,
+        response.usage.inputTokens,
+        response.usage.outputTokens,
+      );
+    }
+
     const entry = this.providers.get(provider) || this.createProviderEntry();
     entry.totalCost += response.usage.cost || 0;
     entry.requestCount++;
@@ -65,6 +79,13 @@ export class CostTracker {
 
     // Check cost alerts
     this.checkCostAlerts(provider);
+  }
+
+  /**
+   * Get the attached CreditLedger (if any)
+   */
+  getLedger(): CreditLedger | undefined {
+    return this.ledger;
   }
 
   /**

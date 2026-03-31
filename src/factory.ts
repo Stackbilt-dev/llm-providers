@@ -23,6 +23,7 @@ import { CloudflareProvider } from './providers/cloudflare';
 import { CerebrasProvider } from './providers/cerebras';
 import { GroqProvider } from './providers/groq';
 import { CostTracker, defaultCostTracker } from './utils/cost-tracker';
+import type { CreditLedger } from './utils/credit-ledger';
 import { defaultCircuitBreakerManager } from './utils/circuit-breaker';
 import {
   LLMProviderError,
@@ -43,6 +44,7 @@ export interface ProviderFactoryConfig {
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
   enableRetries?: boolean;
+  ledger?: CreditLedger;
 }
 
 export class LLMProviderFactory {
@@ -274,7 +276,8 @@ export class LLMProviderFactory {
     }
 
     // Cerebras models
-    if (model.startsWith('llama-3.1-8b') || model.startsWith('llama-3.3-70b')) {
+    if (model.startsWith('llama-3.1-8b') || model.startsWith('llama-3.3-70b')
+        || model.startsWith('zai-glm') || model.startsWith('qwen-3-235b')) {
       return 'cerebras';
     }
 

@@ -3,7 +3,7 @@
  * Implementation for Cerebras fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities } from '../types';
+import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities, ToolCall } from '../types';
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
@@ -11,8 +11,19 @@ import {
 } from '../errors';
 
 interface CerebrasMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
+  tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+  tool_call_id?: string;
+}
+
+interface CerebrasTool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
 interface CerebrasRequest {
@@ -21,6 +32,8 @@ interface CerebrasRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  tools?: CerebrasTool[];
+  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
 }
 
 interface CerebrasResponse {
@@ -33,8 +46,13 @@ interface CerebrasResponse {
     message: {
       role: string;
       content: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: 'function';
+        function: { name: string; arguments: string };
+      }>;
     };
-    finish_reason: 'stop' | 'length' | 'content_filter';
+    finish_reason: 'stop' | 'length' | 'content_filter' | 'tool_calls';
   }>;
   usage: {
     prompt_tokens: number;
@@ -44,14 +62,22 @@ interface CerebrasResponse {
   system_fingerprint?: string;
 }
 
+// Models that support tool calling
+const TOOL_CAPABLE_MODELS = new Set([
+  'zai-glm-4.7',
+  'qwen-3-235b-a22b-instruct-2507',
+]);
+
 export class CerebrasProvider extends BaseProvider {
   name = 'cerebras';
   models = [
     'llama-3.1-8b',
-    'llama-3.3-70b'
+    'llama-3.3-70b',
+    'zai-glm-4.7',
+    'qwen-3-235b-a22b-instruct-2507',
   ];
   supportsStreaming = true;
-  supportsTools = false;
+  supportsTools = true;
   supportsBatching = false;
 
   private apiKey: string;
@@ -148,6 +174,24 @@ export class CerebrasProvider extends BaseProvider {
         inputTokenCost: 0.0006, // $0.60 per 1M tokens
         outputTokenCost: 0.0006, // $0.60 per 1M tokens
         description: 'Llama 3.3 70B - High-quality fast inference on Cerebras'
+      },
+      'zai-glm-4.7': {
+        maxContextLength: 131000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.00225, // $2.25 per 1M tokens
+        outputTokenCost: 0.00275, // $2.75 per 1M tokens
+        description: 'ZAI-GLM 4.7 355B - Reasoning mode, tool calling, structured outputs (Preview)'
+      },
+      'qwen-3-235b-a22b-instruct-2507': {
+        maxContextLength: 131000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.0006, // $0.60 per 1M tokens
+        outputTokenCost: 0.0012, // $1.20 per 1M tokens
+        description: 'Qwen 3 235B MoE (22B active) - Tool calling, structured outputs (Preview)'
       }
     };
   }
@@ -241,6 +285,7 @@ export class CerebrasProvider extends BaseProvider {
 
   private formatRequest(request: LLMRequest): CerebrasRequest {
     const messages: CerebrasMessage[] = [];
+    const model = request.model || 'llama-3.1-8b';
 
     if (request.systemPrompt) {
       messages.push({
@@ -254,19 +299,54 @@ export class CerebrasProvider extends BaseProvider {
         continue;
       }
 
-      messages.push({
+      const msg: CerebrasMessage = {
         role: message.role,
         content: message.content
-      });
+      };
+
+      // Carry tool calls/results for multi-turn tool conversations
+      if (message.toolCalls) {
+        msg.tool_calls = message.toolCalls.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.function.name, arguments: tc.function.arguments }
+        }));
+      }
+      if (message.toolResults) {
+        // Tool results come as separate messages in OpenAI format
+        for (const tr of message.toolResults) {
+          messages.push({ role: 'tool', content: tr.output, tool_call_id: tr.id });
+        }
+        continue; // Don't push the original message — tool results replace it
+      }
+
+      messages.push(msg);
     }
 
-    return {
-      model: request.model || 'llama-3.1-8b',
+    const result: CerebrasRequest = {
+      model,
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
       stream: request.stream
     };
+
+    // Add tools if the model supports them and tools are provided
+    if (request.tools && request.tools.length > 0 && TOOL_CAPABLE_MODELS.has(model)) {
+      result.tools = request.tools.map(t => ({
+        type: 'function',
+        function: {
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters as Record<string, unknown>,
+        }
+      }));
+      if (request.toolChoice) {
+        result.tool_choice = request.toolChoice;
+      }
+    }
+
+    return result;
   }
 
   private formatResponse(
@@ -290,6 +370,16 @@ export class CerebrasProvider extends BaseProvider {
       )
     };
 
+    // Extract tool calls if present
+    let toolCalls: ToolCall[] | undefined;
+    if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+      toolCalls = choice.message.tool_calls.map(tc => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: { name: tc.function.name, arguments: tc.function.arguments }
+      }));
+    }
+
     return {
       id: data.id,
       message: content,
@@ -298,7 +388,8 @@ export class CerebrasProvider extends BaseProvider {
       model: data.model,
       provider: this.name,
       responseTime,
-      finishReason: choice.finish_reason as any,
+      finishReason: choice.finish_reason === 'tool_calls' ? 'tool_calls' : choice.finish_reason as any,
+      toolCalls,
       metadata: {
         systemFingerprint: data.system_fingerprint,
         created: data.created
