@@ -3,6 +3,16 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] — 2026-04-01
+
+### Added
+- **ImageProvider** — multi-provider image generation (Cloudflare Workers AI + Google Gemini). Extracted from img-forge production codebase.
+- **5 built-in image models**: `sdxl-lightning` (fast/draft), `flux-klein` (balanced), `flux-dev` (high quality), `gemini-flash-image` (text-capable), `gemini-flash-image-preview` (latest).
+- **`IMAGE_MODELS`** registry with full config: dimensions, steps, guidance, negative prompt support, seed support.
+- **`normalizeAiResponse()`** — handles all Workers AI return types (ArrayBuffer, ReadableStream, objects with `.image`, base64 strings).
+- **`getImageModel()`** — lookup helper for model configs.
+- Custom model configs via `ImageProviderConfig.models` — extend or override the built-in registry.
+
 ## [1.0.0] — 2026-04-01
 
 First stable release. Production-tested in AEGIS cognitive kernel since v1.72.0.

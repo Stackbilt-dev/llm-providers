@@ -78,6 +78,11 @@ export {
   LLMErrorFactory
 } from './errors';
 
+// Image generation
+export { ImageProvider, normalizeAiResponse } from './image/index';
+export type { ImageProviderConfig, ImageRequest, ImageResponse, ImageModelConfig, ImageModelInputFormat } from './image/index';
+export { IMAGE_MODELS, getImageModel } from './image/index';
+
 // Utility classes
 export { RetryManager, defaultRetryManager, withRetry, retry } from './utils/retry';
 export { 
