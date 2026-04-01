@@ -58,6 +58,7 @@ import { LLMProviderFactory } from './factory';
 import type { ProviderFactoryConfig } from './factory';
 import type { LLMProvider, LLMRequest, LLMResponse } from './types';
 import { createCostOptimizedFactory } from './factory';
+import { ConfigurationError } from './errors';
 
 // Error classes
 export {
@@ -115,6 +116,18 @@ export type {
 } from './utils/credit-ledger';
 
 /**
+ * Overrides for `LLMProviders.fromEnv()` auto-discovery.
+ */
+export interface FromEnvOverrides {
+  defaultProvider?: ProviderFactoryConfig['defaultProvider'];
+  costOptimization?: boolean;
+  enableCircuitBreaker?: boolean;
+  enableRetries?: boolean;
+  fallbackRules?: ProviderFactoryConfig['fallbackRules'];
+  ledger?: ProviderFactoryConfig['ledger'];
+}
+
+/**
  * Main LLMProviders class for easy usage
  */
 export class LLMProviders {
@@ -122,6 +135,75 @@ export class LLMProviders {
 
   constructor(config: ProviderFactoryConfig) {
     this.factory = new LLMProviderFactory(config);
+  }
+
+  /**
+   * Auto-discover providers from a Cloudflare Worker `env` object.
+   *
+   * Scans for known API-key environment variables and bindings, configures
+   * only the providers whose keys are present, and returns a ready-to-use
+   * `LLMProviders` instance.
+   *
+   * @throws ConfigurationError if no providers are detected
+   */
+  static fromEnv(
+    env: Record<string, unknown>,
+    overrides: FromEnvOverrides = {}
+  ): LLMProviders {
+    const config: ProviderFactoryConfig = {};
+
+    if (typeof env.ANTHROPIC_API_KEY === 'string' && env.ANTHROPIC_API_KEY) {
+      config.anthropic = { apiKey: env.ANTHROPIC_API_KEY };
+    }
+    if (typeof env.OPENAI_API_KEY === 'string' && env.OPENAI_API_KEY) {
+      config.openai = { apiKey: env.OPENAI_API_KEY };
+    }
+    if (typeof env.GROQ_API_KEY === 'string' && env.GROQ_API_KEY) {
+      config.groq = { apiKey: env.GROQ_API_KEY };
+    }
+    if (typeof env.CEREBRAS_API_KEY === 'string' && env.CEREBRAS_API_KEY) {
+      config.cerebras = { apiKey: env.CEREBRAS_API_KEY };
+    }
+    if (env.AI != null && typeof env.AI === 'object') {
+      config.cloudflare = { ai: env.AI as Ai };
+    }
+
+    const detected = [
+      config.anthropic && 'anthropic',
+      config.openai && 'openai',
+      config.groq && 'groq',
+      config.cerebras && 'cerebras',
+      config.cloudflare && 'cloudflare',
+    ].filter(Boolean) as string[];
+
+    if (detected.length === 0) {
+      throw new ConfigurationError(
+        'fromEnv',
+        'No LLM providers detected in env. Expected at least one of: ' +
+          'ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or AI binding.'
+      );
+    }
+
+    if (overrides.defaultProvider !== undefined) {
+      config.defaultProvider = overrides.defaultProvider;
+    }
+    if (overrides.costOptimization !== undefined) {
+      config.costOptimization = overrides.costOptimization;
+    }
+    if (overrides.enableCircuitBreaker !== undefined) {
+      config.enableCircuitBreaker = overrides.enableCircuitBreaker;
+    }
+    if (overrides.enableRetries !== undefined) {
+      config.enableRetries = overrides.enableRetries;
+    }
+    if (overrides.fallbackRules !== undefined) {
+      config.fallbackRules = overrides.fallbackRules;
+    }
+    if (overrides.ledger !== undefined) {
+      config.ledger = overrides.ledger;
+    }
+
+    return new LLMProviders(config);
   }
 
   /**

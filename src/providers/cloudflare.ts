@@ -278,12 +278,19 @@ export class CloudflareProvider extends BaseProvider {
     }
 
     const messages: CloudflareMessage[] = [];
+    const jsonMode = request.response_format?.type === 'json_object';
+    const jsonInstruction = '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
 
     // Add system prompt if provided
     if (request.systemPrompt) {
       messages.push({
         role: 'system',
-        content: request.systemPrompt
+        content: jsonMode ? request.systemPrompt + jsonInstruction : request.systemPrompt
+      });
+    } else if (jsonMode) {
+      messages.push({
+        role: 'system',
+        content: jsonInstruction.trimStart()
       });
     }
 

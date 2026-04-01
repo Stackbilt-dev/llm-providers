@@ -286,11 +286,18 @@ export class CerebrasProvider extends BaseProvider {
   private formatRequest(request: LLMRequest): CerebrasRequest {
     const messages: CerebrasMessage[] = [];
     const model = request.model || 'llama-3.1-8b';
+    const jsonMode = request.response_format?.type === 'json_object';
+    const jsonInstruction = '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
 
     if (request.systemPrompt) {
       messages.push({
         role: 'system',
-        content: request.systemPrompt
+        content: jsonMode ? request.systemPrompt + jsonInstruction : request.systemPrompt
+      });
+    } else if (jsonMode) {
+      messages.push({
+        role: 'system',
+        content: jsonInstruction.trimStart()
       });
     }
 

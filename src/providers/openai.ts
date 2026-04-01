@@ -28,6 +28,7 @@ interface OpenAIRequest {
   stream?: boolean;
   tools?: any[];
   tool_choice?: any;
+  response_format?: { type: 'json_object' | 'text' };
 }
 
 interface OpenAIResponse {
@@ -290,6 +291,11 @@ export class OpenAIProvider extends BaseProvider {
       if (request.toolChoice) {
         openaiRequest.tool_choice = request.toolChoice;
       }
+    }
+
+    // Pass through response_format if provided
+    if (request.response_format) {
+      openaiRequest.response_format = request.response_format;
     }
 
     return openaiRequest;

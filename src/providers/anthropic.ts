@@ -90,20 +90,30 @@ export class AnthropicProvider extends BaseProvider {
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     this.validateRequest(request);
-    
+
     const startTime = Date.now();
+    const jsonMode = request.response_format?.type === 'json_object';
 
     try {
       const response = await this.executeWithResiliency(async () => {
         const anthropicRequest = this.formatRequest(request);
         const httpResponse = await this.makeAnthropicRequest('/v1/messages', anthropicRequest);
-        
+
         if (!httpResponse.ok) {
           throw await LLMErrorFactory.fromFetchResponse('anthropic', httpResponse);
         }
 
         const data: AnthropicResponse = await httpResponse.json();
-        return this.formatResponse(data, Date.now() - startTime);
+        const formatted = this.formatResponse(data, Date.now() - startTime);
+
+        // Prepend the prefilled '{' that was consumed by the assistant turn
+        if (jsonMode) {
+          const restored = '{' + formatted.message;
+          formatted.message = restored;
+          formatted.content = restored;
+        }
+
+        return formatted;
       });
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
@@ -260,6 +270,7 @@ export class AnthropicProvider extends BaseProvider {
 
   private formatRequest(request: LLMRequest): AnthropicRequest {
     const messages: AnthropicMessage[] = [];
+    const jsonMode = request.response_format?.type === 'json_object';
 
     // Convert messages (skip system messages as they go in separate field)
     for (const message of request.messages) {
@@ -292,6 +303,11 @@ export class AnthropicProvider extends BaseProvider {
       messages.push(anthropicMessage);
     }
 
+    // Add prefilled assistant message for JSON mode
+    if (jsonMode) {
+      messages.push({ role: 'assistant', content: '{' });
+    }
+
     const anthropicRequest: AnthropicRequest = {
       model: request.model || 'claude-3-5-haiku-20241022',
       messages,
@@ -302,10 +318,18 @@ export class AnthropicProvider extends BaseProvider {
 
     // Add system prompt if provided
     const systemMessage = request.messages.find(m => m.role === 'system');
+    const jsonInstruction = '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
+
     if (request.systemPrompt) {
-      anthropicRequest.system = request.systemPrompt;
+      anthropicRequest.system = jsonMode
+        ? request.systemPrompt + jsonInstruction
+        : request.systemPrompt;
     } else if (systemMessage) {
-      anthropicRequest.system = systemMessage.content;
+      anthropicRequest.system = jsonMode
+        ? systemMessage.content + jsonInstruction
+        : systemMessage.content;
+    } else if (jsonMode) {
+      anthropicRequest.system = jsonInstruction.trimStart();
     }
 
     // Add tools if provided

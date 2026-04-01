@@ -21,6 +21,7 @@ interface GroqRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  response_format?: { type: 'json_object' | 'text' };
 }
 
 interface GroqResponse {
@@ -260,13 +261,20 @@ export class GroqProvider extends BaseProvider {
       });
     }
 
-    return {
+    const groqRequest: GroqRequest = {
       model: request.model || 'llama-3.3-70b-versatile',
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
       stream: request.stream
     };
+
+    // Pass through response_format if provided
+    if (request.response_format) {
+      groqRequest.response_format = request.response_format;
+    }
+
+    return groqRequest;
   }
 
   private formatResponse(

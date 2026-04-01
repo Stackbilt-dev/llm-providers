@@ -35,6 +35,7 @@ export interface LLMRequest {
   systemPrompt?: string;
   tools?: Tool[];
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  response_format?: { type: 'json_object' | 'text' };
   tenantId?: string;
   requestId?: string;
   metadata?: Record<string, any>;
