@@ -4,12 +4,15 @@
  */
 
 import type { RetryConfig } from '../types';
-import { LLMErrorFactory } from '../errors';
+import type { Logger } from './logger';
+import { noopLogger } from './logger';
+import { LLMErrorFactory, LLMProviderError } from '../errors';
 
 export class RetryManager {
   private config: RetryConfig;
+  private logger: Logger;
 
-  constructor(config: Partial<RetryConfig> = {}) {
+  constructor(config: Partial<RetryConfig> = {}, logger?: Logger) {
     this.config = {
       maxRetries: config.maxRetries ?? 3,
       initialDelay: config.initialDelay ?? 1000,
@@ -23,6 +26,7 @@ export class RetryManager {
         'CIRCUIT_BREAKER_OPEN'
       ]
     };
+    this.logger = logger ?? noopLogger;
   }
 
   /**
@@ -49,8 +53,8 @@ export class RetryManager {
 
         // Calculate delay for next attempt
         const delay = this.calculateDelay(attempt, error as Error);
-        
-        console.warn(
+
+        this.logger.warn(
           `[RetryManager] ${context} failed (attempt ${attempt}/${this.config.maxRetries + 1}): ${lastError.message}. Retrying in ${delay}ms...`
         );
 
@@ -76,9 +80,10 @@ export class RetryManager {
     }
 
     // Check if error code is in retryable list
-    const errorCode = (error as any).code;
-    if (errorCode && !this.config.retryableErrors.includes(errorCode)) {
-      return false;
+    if (error instanceof LLMProviderError) {
+      if (!this.config.retryableErrors.includes(error.code)) {
+        return false;
+      }
     }
 
     return true;
@@ -96,10 +101,10 @@ export class RetryManager {
 
     // Standard exponential backoff
     const delay = this.config.initialDelay * Math.pow(this.config.backoffMultiplier, attempt - 1);
-    
+
     // Add jitter to prevent thundering herd
     const jitter = Math.random() * 0.1 * delay;
-    
+
     return Math.min(delay + jitter, this.config.maxDelay);
   }
 
@@ -133,11 +138,11 @@ export const defaultRetryManager = new RetryManager();
 /**
  * Retry decorator for async functions
  */
-export function withRetry<T extends any[], R>(
+export function withRetry<T extends unknown[], R>(
   retryConfig?: Partial<RetryConfig>
 ) {
   return function (
-    target: any,
+    _target: object,
     propertyKey: string,
     descriptor: TypedPropertyDescriptor<(...args: T) => Promise<R>>
   ) {
@@ -147,7 +152,7 @@ export function withRetry<T extends any[], R>(
     descriptor.value = async function (...args: T): Promise<R> {
       return retryManager.execute(
         () => originalMethod.apply(this, args),
-        `${target.constructor.name}.${propertyKey}`
+        `${(this as object).constructor.name}.${propertyKey}`
       );
     };
 

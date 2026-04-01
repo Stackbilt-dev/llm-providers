@@ -4,6 +4,8 @@
  */
 
 import type { LLMRequest, LLMResponse, CostConfig, ModelCapabilities } from '../types';
+import type { Logger } from './logger';
+import { noopLogger } from './logger';
 import type { CreditLedger } from './credit-ledger';
 
 export interface ProviderCostEntry {
@@ -25,8 +27,9 @@ export class CostTracker {
   private providers: Map<string, ProviderCostEntry> = new Map();
   private config: CostConfig;
   private ledger?: CreditLedger;
+  private logger: Logger;
 
-  constructor(config: Partial<CostConfig> = {}, ledger?: CreditLedger) {
+  constructor(config: Partial<CostConfig> = {}, ledger?: CreditLedger, logger?: Logger) {
     this.config = {
       inputTokenCost: config.inputTokenCost ?? 0.001, // $0.001 per 1k tokens default
       outputTokenCost: config.outputTokenCost ?? 0.002, // $0.002 per 1k tokens default
@@ -34,6 +37,7 @@ export class CostTracker {
       alertThreshold: config.alertThreshold ?? 0.8 // 80% of max cost
     };
     this.ledger = ledger;
+    this.logger = logger ?? noopLogger;
   }
 
   /**
@@ -255,7 +259,7 @@ export class CostTracker {
     const alertThreshold = this.config.maxMonthlyCost * this.config.alertThreshold;
 
     if (currentCost >= alertThreshold) {
-      console.warn(
+      this.logger.warn(
         `[CostTracker] Cost alert for ${provider}: $${currentCost.toFixed(4)} (${((currentCost / this.config.maxMonthlyCost) * 100).toFixed(1)}% of limit)`
       );
     }
@@ -337,14 +341,15 @@ export class CostOptimizer {
    * Suggest cost reduction strategies
    */
   static suggestOptimizations(
-    costBreakdown: Record<string, any>
+    costBreakdown: Record<string, ProviderCostBreakdownEntry>
   ): string[] {
     const suggestions: string[] = [];
-    const totalCost = Object.values(costBreakdown).reduce((sum: number, p: any) => sum + p.cost, 0);
+    const entries = Object.values(costBreakdown);
+    const totalCost = entries.reduce((sum, p) => sum + p.cost, 0);
 
     // Find most expensive provider
     const mostExpensive = Object.entries(costBreakdown)
-      .sort(([,a]: [string, any], [,b]: [string, any]) => b.cost - a.cost)[0];
+      .sort(([, a], [, b]) => b.cost - a.cost)[0];
 
     if (mostExpensive && mostExpensive[1].cost > totalCost * 0.5) {
       suggestions.push(`Consider reducing usage of ${mostExpensive[0]} (${((mostExpensive[1].cost / totalCost) * 100).toFixed(1)}% of total cost)`);
@@ -352,13 +357,13 @@ export class CostOptimizer {
 
     // Check for high per-request costs
     for (const [provider, data] of Object.entries(costBreakdown)) {
-      if ((data as any).averageCostPerRequest > 0.01) { // $0.01 per request
-        suggestions.push(`${provider} has high per-request cost ($${((data as any).averageCostPerRequest).toFixed(4)}). Consider using smaller models or reducing max_tokens.`);
+      if (data.averageCostPerRequest > 0.01) { // $0.01 per request
+        suggestions.push(`${provider} has high per-request cost ($${data.averageCostPerRequest.toFixed(4)}). Consider using smaller models or reducing max_tokens.`);
       }
     }
 
     // Suggest batch processing if many small requests
-    const totalRequests = Object.values(costBreakdown).reduce((sum: number, p: any) => sum + p.requests, 0);
+    const totalRequests = entries.reduce((sum, p) => sum + p.requests, 0);
     if (totalRequests > 1000 && totalCost / totalRequests < 0.001) {
       suggestions.push('Consider batch processing for small requests to reduce overhead costs.');
     }

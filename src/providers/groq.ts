@@ -203,8 +203,8 @@ export class GroqProvider extends BaseProvider {
                   if (content) {
                     controller.enqueue(content);
                   }
-                } catch (error) {
-                  console.warn('Failed to parse SSE data:', error);
+                } catch {
+                  // Malformed SSE chunk — skip silently
                 }
               }
             }
@@ -220,7 +220,7 @@ export class GroqProvider extends BaseProvider {
 
   private async makeGroqRequest(
     endpoint: string,
-    body: any,
+    body: GroqRequest | null,
     method: string = 'POST'
   ): Promise<Response> {
     const headers: Record<string, string> = {
@@ -306,7 +306,7 @@ export class GroqProvider extends BaseProvider {
       model: data.model,
       provider: this.name,
       responseTime,
-      finishReason: choice.finish_reason as any,
+      finishReason: choice.finish_reason,
       metadata: {
         systemFingerprint: data.system_fingerprint,
         created: data.created

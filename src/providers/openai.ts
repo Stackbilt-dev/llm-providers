@@ -3,22 +3,39 @@
  * Implementation for OpenAI GPT models with streaming and tools support
  */
 
-import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities } from '../types';
+import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool } from '../types';
 import { BaseProvider } from './base';
-import { 
-  LLMErrorFactory, 
-  AuthenticationError, 
+import {
+  LLMErrorFactory,
+  AuthenticationError,
   ModelNotFoundError,
-  RateLimitError 
+  RateLimitError
 } from '../errors';
+
+interface OpenAIToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
 
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
   name?: string;
-  tool_calls?: any[];
+  tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
 }
+
+interface OpenAITool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+type OpenAIToolChoice = 'auto' | 'none' | { type: 'function'; function: { name: string } };
 
 interface OpenAIRequest {
   model: string;
@@ -26,8 +43,8 @@ interface OpenAIRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
-  tools?: any[];
-  tool_choice?: any;
+  tools?: OpenAITool[];
+  tool_choice?: OpenAIToolChoice;
   response_format?: { type: 'json_object' | 'text' };
 }
 
@@ -41,10 +58,10 @@ interface OpenAIResponse {
     message: {
       role: string;
       content: string | null;
-      tool_calls?: any[];
+      tool_calls?: OpenAIToolCall[];
     };
     finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
-    logprobs?: any;
+    logprobs?: Record<string, unknown> | null;
   }>;
   usage: {
     prompt_tokens: number;
@@ -89,14 +106,14 @@ export class OpenAIProvider extends BaseProvider {
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     this.validateRequest(request);
-    
+
     const startTime = Date.now();
 
     try {
       const response = await this.executeWithResiliency(async () => {
         const openaiRequest = this.formatRequest(request);
         const httpResponse = await this.makeOpenAIRequest('/chat/completions', openaiRequest);
-        
+
         if (!httpResponse.ok) {
           throw await LLMErrorFactory.fromFetchResponse('openai', httpResponse);
         }
@@ -107,7 +124,7 @@ export class OpenAIProvider extends BaseProvider {
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
       this.logRequest(request, response);
-      
+
       return response;
     } catch (error) {
       const responseTime = Date.now() - startTime;
@@ -128,11 +145,11 @@ export class OpenAIProvider extends BaseProvider {
   estimateCost(request: LLMRequest): number {
     const model = request.model || 'gpt-3.5-turbo';
     const capabilities = this.getModelCapabilities()[model];
-    
+
     if (!capabilities) return 0;
 
     // Estimate input tokens (rough approximation)
-    const inputTokens = request.messages.reduce((sum, msg) => 
+    const inputTokens = request.messages.reduce((sum, msg) =>
       sum + Math.ceil(msg.content.length / 4), 0
     );
     const outputTokens = request.maxTokens || 1000;
@@ -210,7 +227,7 @@ export class OpenAIProvider extends BaseProvider {
 
   private async makeOpenAIRequest(
     endpoint: string,
-    body: any,
+    body: OpenAIRequest | null,
     method: string = 'POST'
   ): Promise<Response> {
     const headers: Record<string, string> = {
@@ -256,7 +273,7 @@ export class OpenAIProvider extends BaseProvider {
       }
 
       const openaiMessage: OpenAIMessage = {
-        role: message.role as any,
+        role: message.role as OpenAIMessage['role'],
         content: message.content
       };
 
@@ -361,7 +378,7 @@ export class OpenAIProvider extends BaseProvider {
       start: async (controller) => {
         try {
           const response = await this.makeOpenAIRequest('/chat/completions', openaiRequest);
-          
+
           if (!response.ok) {
             throw await LLMErrorFactory.fromFetchResponse('openai', response);
           }
@@ -376,7 +393,7 @@ export class OpenAIProvider extends BaseProvider {
 
           while (true) {
             const { done, value } = await reader.read();
-            
+
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
@@ -386,7 +403,7 @@ export class OpenAIProvider extends BaseProvider {
             for (const line of lines) {
               if (line.startsWith('data: ')) {
                 const data = line.slice(6);
-                
+
                 if (data === '[DONE]') {
                   controller.close();
                   return;
@@ -394,13 +411,13 @@ export class OpenAIProvider extends BaseProvider {
 
                 try {
                   const parsed = JSON.parse(data);
-                  const content = parsed.choices?.[0]?.delta?.content;
-                  
-                  if (content) {
-                    controller.enqueue(content);
+                  const sseContent = parsed.choices?.[0]?.delta?.content;
+
+                  if (sseContent) {
+                    controller.enqueue(sseContent);
                   }
-                } catch (error) {
-                  console.warn('Failed to parse SSE data:', error);
+                } catch {
+                  // Malformed SSE chunk — skip silently
                 }
               }
             }

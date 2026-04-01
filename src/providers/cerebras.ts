@@ -246,8 +246,8 @@ export class CerebrasProvider extends BaseProvider {
                   if (content) {
                     controller.enqueue(content);
                   }
-                } catch (error) {
-                  console.warn('Failed to parse SSE data:', error);
+                } catch {
+                  // Malformed SSE chunk — skip silently
                 }
               }
             }
@@ -263,7 +263,7 @@ export class CerebrasProvider extends BaseProvider {
 
   private async makeCerebrasRequest(
     endpoint: string,
-    body: any,
+    body: CerebrasRequest | null,
     method: string = 'POST'
   ): Promise<Response> {
     const headers: Record<string, string> = {
@@ -395,7 +395,7 @@ export class CerebrasProvider extends BaseProvider {
       model: data.model,
       provider: this.name,
       responseTime,
-      finishReason: choice.finish_reason === 'tool_calls' ? 'tool_calls' : choice.finish_reason as any,
+      finishReason: choice.finish_reason,
       toolCalls,
       metadata: {
         systemFingerprint: data.system_fingerprint,

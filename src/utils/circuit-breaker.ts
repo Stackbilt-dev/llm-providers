@@ -4,6 +4,8 @@
  */
 
 import type { CircuitBreakerConfig, CircuitBreakerState } from '../types';
+import type { Logger } from './logger';
+import { noopLogger } from './logger';
 import { CircuitBreakerOpenError } from '../errors';
 
 const DEFAULT_DEGRADATION_CURVE = [1.0, 0.9, 0.7, 0.4, 0.1];
@@ -46,6 +48,7 @@ function normalizeConfig(config: Partial<CircuitBreakerConfig>): ResolvedCircuit
 
 export class CircuitBreaker {
   private readonly config: ResolvedCircuitBreakerConfig;
+  private readonly logger: Logger;
   private consecutiveFailures = 0;
   private totalFailures = 0;
   private totalSuccesses = 0;
@@ -58,9 +61,11 @@ export class CircuitBreaker {
 
   constructor(
     readonly name: string,
-    config: Partial<CircuitBreakerConfig> = {}
+    config: Partial<CircuitBreakerConfig> = {},
+    logger?: Logger
   ) {
     this.config = normalizeConfig(config);
+    this.logger = logger ?? noopLogger;
   }
 
   /**
@@ -85,7 +90,7 @@ export class CircuitBreaker {
     }
 
     if (primaryPct < 1 && Math.random() > primaryPct) {
-      console.log(
+      this.logger.info(
         `[CircuitBreaker] ${this.name}: degraded (${(primaryPct * 100).toFixed(0)}% primary), rejecting request for fallback`
       );
       throw new CircuitBreakerOpenError(this.name, 0, this.consecutiveFailures);
@@ -115,14 +120,14 @@ export class CircuitBreaker {
 
     const primaryPct = this.currentPrimaryTrafficPct();
     if (primaryPct <= 0) {
-      console.log(
+      this.logger.info(
         `[CircuitBreaker] ${this.name}: fully degraded (${this.consecutiveFailures} failures), using fallback`
       );
       return fallback();
     }
 
     if (primaryPct < 1 && Math.random() > primaryPct) {
-      console.log(
+      this.logger.info(
         `[CircuitBreaker] ${this.name}: degraded (${(primaryPct * 100).toFixed(0)}% primary), routing to fallback`
       );
       return fallback();
@@ -134,7 +139,7 @@ export class CircuitBreaker {
       return result;
     } catch (error) {
       this.onFailure();
-      console.warn(
+      this.logger.warn(
         `[CircuitBreaker] ${this.name}: primary failed (${this.consecutiveFailures} consecutive), trying fallback`
       );
       return fallback();
@@ -187,7 +192,7 @@ export class CircuitBreaker {
     this.lastRequestAt = undefined;
     this.lastDecayAt = 0;
     this.windowStart = Date.now();
-    console.log(`[CircuitBreaker] ${this.name}: circuit breaker reset`);
+    this.logger.info(`[CircuitBreaker] ${this.name}: circuit breaker reset`);
   }
 
   /**
@@ -199,7 +204,7 @@ export class CircuitBreaker {
     this.lastFailureAt = now;
     this.lastRequestAt = now;
     this.lastDecayAt = now;
-    console.log(`[CircuitBreaker] ${this.name}: circuit breaker force opened`);
+    this.logger.info(`[CircuitBreaker] ${this.name}: circuit breaker force opened`);
   }
 
   isOpen(): boolean {
@@ -340,7 +345,7 @@ export class CircuitBreaker {
 
     if (this.consecutiveFailures > 0) {
       this.consecutiveFailures--;
-      console.log(
+      this.logger.info(
         `[CircuitBreaker] ${this.name}: success -> recovering (${this.consecutiveFailures} failures, ${(this.currentPrimaryTrafficPct() * 100).toFixed(0)}% primary)`
       );
     }
@@ -354,14 +359,14 @@ export class CircuitBreaker {
 
     const primaryPct = this.currentPrimaryTrafficPct();
     if (primaryPct <= 0) {
-      console.log(
+      this.logger.warn(
         `[CircuitBreaker] ${this.name}: OPEN (${this.consecutiveFailures} consecutive failures)`
       );
       return;
     }
 
     if (primaryPct < 1) {
-      console.log(
+      this.logger.info(
         `[CircuitBreaker] ${this.name}: degraded -> ${(primaryPct * 100).toFixed(0)}% primary (${this.consecutiveFailures} failures)`
       );
     }
@@ -383,7 +388,7 @@ export class CircuitBreaker {
     this.lastDecayAt += steps * this.config.resetTimeout;
 
     if (before !== this.consecutiveFailures) {
-      console.log(
+      this.logger.info(
         `[CircuitBreaker] ${this.name}: time-decay ${before} -> ${this.consecutiveFailures} failures (${(this.currentPrimaryTrafficPct() * 100).toFixed(0)}% primary)`
       );
     }
@@ -402,8 +407,10 @@ export class CircuitBreaker {
 export class CircuitBreakerManager {
   private breakers: Map<string, CircuitBreaker> = new Map();
   private defaultConfig: Partial<CircuitBreakerConfig>;
+  private logger: Logger;
 
-  constructor(defaultConfig?: Partial<CircuitBreakerConfig>) {
+  constructor(defaultConfig?: Partial<CircuitBreakerConfig>, logger?: Logger) {
+    this.logger = logger ?? noopLogger;
     this.defaultConfig = {
       failureThreshold: defaultConfig?.failureThreshold ?? DEFAULT_CONFIG.failureThreshold,
       resetTimeout: defaultConfig?.resetTimeout ?? DEFAULT_CONFIG.resetTimeout,
@@ -424,7 +431,7 @@ export class CircuitBreakerManager {
           ? [...config.degradationCurve]
           : [...(this.defaultConfig.degradationCurve ?? DEFAULT_DEGRADATION_CURVE)]
       };
-      this.breakers.set(name, new CircuitBreaker(name, breakerConfig));
+      this.breakers.set(name, new CircuitBreaker(name, breakerConfig, this.logger));
     }
 
     return this.breakers.get(name)!;

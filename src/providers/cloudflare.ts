@@ -33,6 +33,52 @@ interface CloudflareRequest {
   tool_choice?: LLMRequest['toolChoice'];
 }
 
+/** Workers AI returns various response shapes depending on the model. */
+interface WorkersAIToolCall {
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string | Record<string, unknown> };
+}
+
+interface WorkersAIChoice {
+  index?: number;
+  message?: {
+    role?: string;
+    content?: string | null | Array<{ type?: string; text?: string }>;
+    tool_calls?: WorkersAIToolCall[];
+  };
+  finish_reason?: string;
+}
+
+interface WorkersAIOutputItem {
+  type?: string;
+  text?: string;
+  name?: string;
+  call_id?: string;
+  id?: string;
+  arguments?: string | Record<string, unknown>;
+  content?: Array<{ type?: string; text?: string }>;
+}
+
+interface WorkersAIUsage {
+  prompt_tokens?: number;
+  input_tokens?: number;
+  completion_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+}
+
+interface WorkersAIResult {
+  response?: string;
+  id?: string;
+  model?: string;
+  choices?: WorkersAIChoice[];
+  output?: WorkersAIOutputItem[];
+  output_text?: string;
+  usage?: WorkersAIUsage;
+  result?: WorkersAIResult; // wrapped responses
+}
+
 export class CloudflareProvider extends BaseProvider {
   name = 'cloudflare';
   models = [
@@ -70,27 +116,29 @@ export class CloudflareProvider extends BaseProvider {
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     this.validateRequest(request);
-    
+
     const startTime = Date.now();
 
     try {
       const response = await this.executeWithResiliency(async () => {
         const model = request.model || '@cf/meta/llama-3.1-8b-instruct';
         const cloudflareRequest = this.formatRequest(request, model);
-        
+
         // Validate model is supported
         if (!this.models.includes(model)) {
           throw new ModelNotFoundError('cloudflare', model);
         }
 
-        const result = await this.ai.run(model as any, cloudflareRequest);
-        
-        return this.formatResponse(result, model, request, Date.now() - startTime);
+        // Workers AI binding uses branded model names; cast at API boundary
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
+        const result = await (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(model, cloudflareRequest);
+
+        return this.formatResponse(result as WorkersAIResult, model, request, Date.now() - startTime);
       });
 
       this.updateMetrics(response.responseTime, true, response.usage?.cost || 0);
       this.logRequest(request, response);
-      
+
       return response;
     } catch (error) {
       const responseTime = Date.now() - startTime;
@@ -113,11 +161,11 @@ export class CloudflareProvider extends BaseProvider {
     // But we can estimate the computational cost
     const model = request.model || '@cf/meta/llama-3.1-8b-instruct';
     const capabilities = this.getModelCapabilities()[model];
-    
+
     if (!capabilities) return 0;
 
     // Very low cost since it's included in Workers compute
-    const inputTokens = request.messages.reduce((sum, msg) => 
+    const inputTokens = request.messages.reduce((sum, msg) =>
       sum + Math.ceil(msg.content.length / 4), 0
     );
     const outputTokens = request.maxTokens || 1000;
@@ -132,7 +180,8 @@ export class CloudflareProvider extends BaseProvider {
         max_tokens: 1
       };
 
-      await this.ai.run('@cf/meta/llama-3.1-8b-instruct' as any, testRequest);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
+      await (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run('@cf/meta/llama-3.1-8b-instruct', testRequest);
       return true;
     } catch {
       return false;
@@ -354,7 +403,7 @@ export class CloudflareProvider extends BaseProvider {
   }
 
   private formatResponse(
-    result: any,
+    result: WorkersAIResult,
     model: string,
     request: LLMRequest,
     responseTime: number
@@ -365,7 +414,7 @@ export class CloudflareProvider extends BaseProvider {
     const usage = this.extractUsage(result, model, request, content);
 
     const response: LLMResponse = {
-      id: typeof payload === 'object' && payload !== null ? payload.id : undefined,
+      id: payload?.id,
       message: content,
       content,
       usage,
@@ -386,7 +435,7 @@ export class CloudflareProvider extends BaseProvider {
     return response;
   }
 
-  private extractText(result: any): string {
+  private extractText(result: WorkersAIResult): string {
     const payload = this.unwrapResult(result);
 
     if (typeof payload === 'string') {
@@ -408,7 +457,7 @@ export class CloudflareProvider extends BaseProvider {
 
     if (Array.isArray(chatContent)) {
       return chatContent
-        .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+        .map((part: { type?: string; text?: string }) => (typeof part?.text === 'string' ? part.text : ''))
         .join('');
     }
 
@@ -418,10 +467,10 @@ export class CloudflareProvider extends BaseProvider {
 
     if (Array.isArray(payload?.output)) {
       return payload.output
-        .flatMap((item: any) => {
+        .flatMap((item: WorkersAIOutputItem) => {
           if (item?.type === 'message' && Array.isArray(item.content)) {
             return item.content
-              .map((part: any) =>
+              .map((part: { type?: string; text?: string }) =>
                 part?.type === 'output_text' || part?.type === 'text' ? part.text ?? '' : ''
               )
               .filter(Boolean);
@@ -439,13 +488,13 @@ export class CloudflareProvider extends BaseProvider {
     return JSON.stringify(payload ?? '');
   }
 
-  private extractToolCalls(result: any): ToolCall[] {
+  private extractToolCalls(result: WorkersAIResult): ToolCall[] {
     const payload = this.unwrapResult(result);
     const choiceToolCalls = payload?.choices?.[0]?.message?.tool_calls;
     if (Array.isArray(choiceToolCalls) && choiceToolCalls.length > 0) {
-      return choiceToolCalls.map((toolCall: any, index: number) => ({
+      return choiceToolCalls.map((toolCall: WorkersAIToolCall, index: number) => ({
         id: toolCall.id || `call_${index}`,
-        type: 'function',
+        type: 'function' as const,
         function: {
           name: toolCall.function?.name || 'unknown',
           arguments: this.stringifyArguments(toolCall.function?.arguments)
@@ -455,12 +504,12 @@ export class CloudflareProvider extends BaseProvider {
 
     if (Array.isArray(payload?.output)) {
       return payload.output
-        .filter((item: any) => item?.type === 'function_call' && item.name)
-        .map((item: any, index: number) => ({
+        .filter((item: WorkersAIOutputItem) => item?.type === 'function_call' && item.name)
+        .map((item: WorkersAIOutputItem, index: number) => ({
           id: item.call_id || item.id || `call_${index}`,
-          type: 'function',
+          type: 'function' as const,
           function: {
-            name: item.name,
+            name: item.name!,
             arguments: this.stringifyArguments(item.arguments)
           }
         }));
@@ -470,7 +519,7 @@ export class CloudflareProvider extends BaseProvider {
   }
 
   private extractUsage(
-    result: any,
+    result: WorkersAIResult,
     model: string,
     request: LLMRequest,
     content: string
@@ -521,7 +570,7 @@ export class CloudflareProvider extends BaseProvider {
   }
 
   private extractFinishReason(
-    result: any,
+    result: WorkersAIResult,
     toolCalls: ToolCall[]
   ): 'stop' | 'length' | 'tool_calls' | 'content_filter' {
     const payload = this.unwrapResult(result);
@@ -550,7 +599,7 @@ export class CloudflareProvider extends BaseProvider {
     return JSON.stringify(argumentsValue ?? {});
   }
 
-  private unwrapResult(result: any): any {
+  private unwrapResult(result: WorkersAIResult): WorkersAIResult | undefined {
     if (result && typeof result === 'object' && 'result' in result && result.result) {
       return result.result;
     }
@@ -571,31 +620,33 @@ export class CloudflareProvider extends BaseProvider {
       start: async (controller) => {
         try {
           // Cloudflare AI streaming support
-          const stream = await this.ai.run(model as any, cloudflareRequest);
-          
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
+          const stream = await (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(model, cloudflareRequest);
+
           if (stream instanceof ReadableStream) {
             const reader = stream.getReader();
-            
+
             while (true) {
               const { done, value } = await reader.read();
-              
+
               if (done) {
                 controller.close();
                 break;
               }
-              
+
               // Handle different chunk formats
               if (typeof value === 'string') {
                 controller.enqueue(value);
-              } else if (value?.response) {
-                controller.enqueue(value.response);
-              } else if (value?.delta?.content) {
-                controller.enqueue(value.delta.content);
+              } else if (value != null && typeof value === 'object') {
+                const chunk = value as WorkersAIResult;
+                if (typeof chunk.response === 'string') {
+                  controller.enqueue(chunk.response);
+                }
               }
             }
           } else {
             // Non-streaming response, send all at once
-            const content = typeof stream === 'string' ? stream : stream?.response || '';
+            const content = typeof stream === 'string' ? stream : (stream as WorkersAIResult)?.response || '';
             controller.enqueue(content);
             controller.close();
           }
@@ -616,7 +667,7 @@ export class CloudflareProvider extends BaseProvider {
 
     for (let i = 0; i < requests.length; i += batchSize) {
       const batch = requests.slice(i, i + batchSize);
-      
+
       const batchPromises = batch.map(async (request) => {
         try {
           return await this.generateResponse(request);

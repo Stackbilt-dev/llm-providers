@@ -3,27 +3,37 @@
  * Implementation for Claude models with streaming and tools support
  */
 
-import type { LLMRequest, LLMResponse, AnthropicConfig, ModelCapabilities } from '../types';
+import type { LLMRequest, LLMResponse, AnthropicConfig, ModelCapabilities, Tool } from '../types';
 import { BaseProvider } from './base';
-import { 
-  LLMErrorFactory, 
-  AuthenticationError, 
+import {
+  LLMErrorFactory,
+  AuthenticationError,
   ModelNotFoundError,
-  RateLimitError 
+  RateLimitError
 } from '../errors';
+
+interface AnthropicContentBlock {
+  type: 'text' | 'tool_use' | 'tool_result';
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  content?: string;
+  is_error?: boolean;
+}
 
 interface AnthropicMessage {
   role: 'user' | 'assistant';
-  content: string | Array<{
-    type: 'text' | 'tool_use' | 'tool_result';
-    text?: string;
-    id?: string;
-    name?: string;
-    input?: any;
-    content?: string;
-    is_error?: boolean;
-  }>;
+  content: string | AnthropicContentBlock[];
 }
+
+interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+type AnthropicToolChoice = 'auto' | 'none' | { type: 'function'; function: { name: string } };
 
 interface AnthropicRequest {
   model: string;
@@ -32,21 +42,23 @@ interface AnthropicRequest {
   max_tokens: number;
   temperature?: number;
   stream?: boolean;
-  tools?: any[];
-  tool_choice?: any;
+  tools?: AnthropicTool[];
+  tool_choice?: AnthropicToolChoice;
+}
+
+interface AnthropicResponseContentBlock {
+  type: 'text' | 'tool_use';
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
 }
 
 interface AnthropicResponse {
   id: string;
   type: string;
   role: string;
-  content: Array<{
-    type: 'text' | 'tool_use';
-    text?: string;
-    id?: string;
-    name?: string;
-    input?: any;
-  }>;
+  content: AnthropicResponseContentBlock[];
   model: string;
   stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use';
   stop_sequence?: string;
@@ -118,7 +130,7 @@ export class AnthropicProvider extends BaseProvider {
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
       this.logRequest(request, response);
-      
+
       return response;
     } catch (error) {
       const responseTime = Date.now() - startTime;
@@ -139,11 +151,11 @@ export class AnthropicProvider extends BaseProvider {
   estimateCost(request: LLMRequest): number {
     const model = request.model || 'claude-3-5-haiku-20241022';
     const capabilities = this.getModelCapabilities()[model];
-    
+
     if (!capabilities) return 0;
 
     // Estimate input tokens (rough approximation)
-    const inputTokens = request.messages.reduce((sum, msg) => 
+    const inputTokens = request.messages.reduce((sum, msg) =>
       sum + Math.ceil(msg.content.length / 4), 0
     );
     const outputTokens = request.maxTokens || 1000;
@@ -247,7 +259,7 @@ export class AnthropicProvider extends BaseProvider {
 
   private async makeAnthropicRequest(
     endpoint: string,
-    body: any,
+    body: AnthropicRequest | null,
     method: string = 'POST'
   ): Promise<Response> {
     const headers: Record<string, string> = {
@@ -284,16 +296,16 @@ export class AnthropicProvider extends BaseProvider {
       // Handle tool calls and results
       if (message.toolCalls && message.toolCalls.length > 0) {
         anthropicMessage.content = message.toolCalls.map(tc => ({
-          type: 'tool_use',
+          type: 'tool_use' as const,
           id: tc.id,
           name: tc.function.name,
-          input: JSON.parse(tc.function.arguments)
+          input: JSON.parse(tc.function.arguments) as Record<string, unknown>
         }));
       }
 
       if (message.toolResults && message.toolResults.length > 0) {
         anthropicMessage.content = message.toolResults.map(tr => ({
-          type: 'tool_result',
+          type: 'tool_result' as const,
           id: tr.id,
           content: tr.output,
           is_error: !!tr.error
@@ -337,7 +349,7 @@ export class AnthropicProvider extends BaseProvider {
       anthropicRequest.tools = request.tools.map(tool => ({
         name: tool.function.name,
         description: tool.function.description,
-        input_schema: tool.function.parameters
+        input_schema: tool.function.parameters as Record<string, unknown>
       }));
 
       if (request.toolChoice) {
@@ -424,7 +436,7 @@ export class AnthropicProvider extends BaseProvider {
       start: async (controller) => {
         try {
           const response = await this.makeAnthropicRequest('/v1/messages', anthropicRequest);
-          
+
           if (!response.ok) {
             throw await LLMErrorFactory.fromFetchResponse('anthropic', response);
           }
@@ -439,7 +451,7 @@ export class AnthropicProvider extends BaseProvider {
 
           while (true) {
             const { done, value } = await reader.read();
-            
+
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
@@ -449,7 +461,7 @@ export class AnthropicProvider extends BaseProvider {
             for (const line of lines) {
               if (line.startsWith('data: ')) {
                 const data = line.slice(6);
-                
+
                 if (data === '[DONE]') {
                   controller.close();
                   return;
@@ -457,12 +469,12 @@ export class AnthropicProvider extends BaseProvider {
 
                 try {
                   const parsed = JSON.parse(data);
-                  
+
                   if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
                     controller.enqueue(parsed.delta.text);
                   }
-                } catch (error) {
-                  console.warn('Failed to parse SSE data:', error);
+                } catch {
+                  // Malformed SSE chunk — skip silently
                 }
               }
             }
@@ -480,18 +492,8 @@ export class AnthropicProvider extends BaseProvider {
    * Tool usage support
    */
   async generateWithTools(
-    request: LLMRequest & { tools: any[] }
+    request: LLMRequest & { tools: Tool[] }
   ): Promise<LLMResponse> {
-    const response = await this.generateResponse(request);
-
-    // If the response contains tool calls, we need to execute them
-    // and potentially make another request with the results
-    if (response.toolCalls && response.toolCalls.length > 0) {
-      // This would typically involve executing the tools and making another request
-      // For now, we just return the response with tool calls
-      console.log('Tool calls detected in Anthropic response:', response.toolCalls);
-    }
-
-    return response;
+    return this.generateResponse(request);
   }
 }

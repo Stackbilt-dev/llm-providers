@@ -6,6 +6,9 @@
  * via snapshot()/restore() for any storage backend (D1, KV, R2, etc.).
  */
 
+import type { Logger } from './logger';
+import { noopLogger } from './logger';
+
 // ─── Types ──────────────────────────────────────────────────
 
 export type ThresholdTier = 'warning' | 'critical' | 'emergency';
@@ -201,15 +204,18 @@ export class CreditLedger {
   private lastFiredDepletionTier = new Map<string, DepletionTier>();
   private spendHistory: SpendEntry[] = [];
   private ringBufferSize: number;
+  private logger: Logger;
 
   constructor(config?: {
     thresholds?: Partial<ThresholdConfig>;
     budgets?: BudgetConfig[];
     ringBufferSize?: number;
+    logger?: Logger;
   }) {
     this.thresholds = { ...DEFAULT_THRESHOLDS, ...config?.thresholds };
     this.periodStart = Date.now();
     this.ringBufferSize = config?.ringBufferSize ?? DEFAULT_RING_BUFFER_SIZE;
+    this.logger = config?.logger ?? noopLogger;
     if (config?.budgets) {
       for (const b of config.budgets) this.setBudget(b);
     }
@@ -542,7 +548,7 @@ export class CreditLedger {
 
   restore(snapshot: CreditLedgerSnapshot): void {
     if (snapshot.version !== 1) {
-      console.warn(`[CreditLedger] Unknown snapshot version ${snapshot.version}, skipping restore`);
+      this.logger.warn(`[CreditLedger] Unknown snapshot version ${snapshot.version}, skipping restore`);
       return;
     }
 
@@ -635,7 +641,7 @@ export class CreditLedger {
       try {
         listener(event);
       } catch (err) {
-        console.warn('[CreditLedger] Listener error:', err instanceof Error ? err.message : String(err));
+        this.logger.warn('[CreditLedger] Listener error:', err instanceof Error ? err.message : String(err));
       }
     }
   }

@@ -51,11 +51,11 @@ export {
   createLLMProviderFactory,
   createCostOptimizedFactory
 } from './factory';
-export type { ProviderFactoryConfig } from './factory';
+export type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from './factory';
 
 // Local imports for use within this file
 import { LLMProviderFactory } from './factory';
-import type { ProviderFactoryConfig } from './factory';
+import type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from './factory';
 import type { LLMProvider, LLMRequest, LLMResponse } from './types';
 import { createCostOptimizedFactory } from './factory';
 import { ConfigurationError } from './errors';
@@ -83,12 +83,16 @@ export { ImageProvider, normalizeAiResponse } from './image/index';
 export type { ImageProviderConfig, ImageRequest, ImageResponse, ImageModelConfig, ImageModelInputFormat } from './image/index';
 export { IMAGE_MODELS, getImageModel } from './image/index';
 
+// Logger
+export { noopLogger, consoleLogger } from './utils/logger';
+export type { Logger } from './utils/logger';
+
 // Utility classes
 export { RetryManager, defaultRetryManager, withRetry, retry } from './utils/retry';
-export { 
-  CircuitBreaker, 
-  CircuitBreakerManager, 
-  defaultCircuitBreakerManager 
+export {
+  CircuitBreaker,
+  CircuitBreakerManager,
+  defaultCircuitBreakerManager
 } from './utils/circuit-breaker';
 export {
   CostTracker,
@@ -235,14 +239,14 @@ export class LLMProviders {
   /**
    * Get provider health status
    */
-  async getHealth(): Promise<Record<string, any>> {
+  async getHealth(): Promise<Record<string, ProviderHealthEntry>> {
     return this.factory.getProviderHealth();
   }
 
   /**
    * Get cost analytics
    */
-  getCostAnalytics(): any {
+  getCostAnalytics(): CostAnalytics {
     return this.factory.getCostAnalytics();
   }
 

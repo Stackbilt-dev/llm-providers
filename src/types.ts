@@ -3,6 +3,9 @@
  * Unified types for all LLM providers with v2 architecture support
  */
 
+import type { Logger } from './utils/logger';
+export type { Logger };
+
 export interface LLMMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -38,7 +41,7 @@ export interface LLMRequest {
   response_format?: { type: 'json_object' | 'text' };
   tenantId?: string;
   requestId?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface Tool {
@@ -48,7 +51,7 @@ export interface Tool {
     description: string;
     parameters: {
       type: 'object';
-      properties: Record<string, any>;
+      properties: Record<string, unknown>;
       required?: string[];
     };
   };
@@ -64,7 +67,7 @@ export interface LLMResponse {
   responseTime: number;
   finishReason?: 'stop' | 'length' | 'tool_calls' | 'content_filter';
   toolCalls?: ToolCall[];
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TokenUsage {
@@ -114,6 +117,7 @@ export interface ProviderConfig {
   rateLimitRpd?: number;
   organization?: string;
   project?: string;
+  logger?: Logger;
 }
 
 export interface OpenAIConfig extends ProviderConfig {

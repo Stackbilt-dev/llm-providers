@@ -14,15 +14,19 @@ import type {
   CerebrasConfig,
   GroqConfig,
   FallbackRule,
-  ProviderMetrics
+  ProviderMetrics,
+  CircuitBreakerState
 } from './types';
 
+import type { Logger } from './utils/logger';
+import { noopLogger } from './utils/logger';
 import { OpenAIProvider } from './providers/openai';
 import { AnthropicProvider } from './providers/anthropic';
 import { CloudflareProvider } from './providers/cloudflare';
 import { CerebrasProvider } from './providers/cerebras';
 import { GroqProvider } from './providers/groq';
 import { CostTracker, defaultCostTracker } from './utils/cost-tracker';
+import type { ProviderCostBreakdownEntry } from './utils/cost-tracker';
 import type { CreditLedger } from './utils/credit-ledger';
 import { defaultCircuitBreakerManager } from './utils/circuit-breaker';
 import {
@@ -45,6 +49,27 @@ export interface ProviderFactoryConfig {
   enableCircuitBreaker?: boolean;
   enableRetries?: boolean;
   ledger?: CreditLedger;
+  logger?: Logger;
+}
+
+export interface CostAnalytics {
+  breakdown?: Record<string, ProviderCostBreakdownEntry>;
+  total?: number;
+  recommendations?: string[];
+  message?: string;
+}
+
+export interface ProviderHealthEntry {
+  healthy: boolean;
+  metrics?: ProviderMetrics;
+  circuitBreaker?: CircuitBreakerState | null;
+  models?: string[];
+  capabilities?: {
+    streaming: boolean;
+    tools: boolean;
+    batching: boolean;
+  };
+  error?: string;
 }
 
 export class LLMProviderFactory {
@@ -52,9 +77,11 @@ export class LLMProviderFactory {
   private config: ProviderFactoryConfig;
   private costTracker: CostTracker;
   private fallbackRules: FallbackRule[];
+  private logger: Logger;
 
   constructor(config: ProviderFactoryConfig) {
     this.config = config;
+    this.logger = config.logger ?? noopLogger;
     this.costTracker = defaultCostTracker;
     this.fallbackRules = config.fallbackRules || this.getDefaultFallbackRules();
 
@@ -68,65 +95,65 @@ export class LLMProviderFactory {
     // Initialize OpenAI provider
     if (this.config.openai) {
       try {
-        const provider = new OpenAIProvider(this.config.openai);
+        const provider = new OpenAIProvider({ ...this.config.openai, logger: this.logger });
         if (provider.validateConfig()) {
           this.providers.set('openai', provider);
-          console.log('[LLMProviderFactory] OpenAI provider initialized');
+          this.logger.info('[LLMProviderFactory] OpenAI provider initialized');
         }
       } catch (error) {
-        console.warn('[LLMProviderFactory] Failed to initialize OpenAI provider:', error);
+        this.logger.warn('[LLMProviderFactory] Failed to initialize OpenAI provider:', (error as Error).message);
       }
     }
 
     // Initialize Anthropic provider
     if (this.config.anthropic) {
       try {
-        const provider = new AnthropicProvider(this.config.anthropic);
+        const provider = new AnthropicProvider({ ...this.config.anthropic, logger: this.logger });
         if (provider.validateConfig()) {
           this.providers.set('anthropic', provider);
-          console.log('[LLMProviderFactory] Anthropic provider initialized');
+          this.logger.info('[LLMProviderFactory] Anthropic provider initialized');
         }
       } catch (error) {
-        console.warn('[LLMProviderFactory] Failed to initialize Anthropic provider:', error);
+        this.logger.warn('[LLMProviderFactory] Failed to initialize Anthropic provider:', (error as Error).message);
       }
     }
 
     // Initialize Cloudflare provider
     if (this.config.cloudflare) {
       try {
-        const provider = new CloudflareProvider(this.config.cloudflare);
+        const provider = new CloudflareProvider({ ...this.config.cloudflare, logger: this.logger });
         if (provider.validateConfig()) {
           this.providers.set('cloudflare', provider);
-          console.log('[LLMProviderFactory] Cloudflare provider initialized');
+          this.logger.info('[LLMProviderFactory] Cloudflare provider initialized');
         }
       } catch (error) {
-        console.warn('[LLMProviderFactory] Failed to initialize Cloudflare provider:', error);
+        this.logger.warn('[LLMProviderFactory] Failed to initialize Cloudflare provider:', (error as Error).message);
       }
     }
 
     // Initialize Cerebras provider
     if (this.config.cerebras) {
       try {
-        const provider = new CerebrasProvider(this.config.cerebras);
+        const provider = new CerebrasProvider({ ...this.config.cerebras, logger: this.logger });
         if (provider.validateConfig()) {
           this.providers.set('cerebras', provider);
-          console.log('[LLMProviderFactory] Cerebras provider initialized');
+          this.logger.info('[LLMProviderFactory] Cerebras provider initialized');
         }
       } catch (error) {
-        console.warn('[LLMProviderFactory] Failed to initialize Cerebras provider:', error);
+        this.logger.warn('[LLMProviderFactory] Failed to initialize Cerebras provider:', (error as Error).message);
       }
     }
 
     // Initialize Groq provider
     if (this.config.groq) {
       try {
-        const provider = new GroqProvider(this.config.groq);
+        const provider = new GroqProvider({ ...this.config.groq, logger: this.logger });
         if (provider.validateConfig()) {
           this.providers.set('groq', provider);
-          console.log('[LLMProviderFactory] Groq provider initialized');
+          this.logger.info('[LLMProviderFactory] Groq provider initialized');
         }
       } catch (error) {
-        console.warn('[LLMProviderFactory] Failed to initialize Groq provider:', error);
+        this.logger.warn('[LLMProviderFactory] Failed to initialize Groq provider:', (error as Error).message);
       }
     }
 
@@ -151,27 +178,27 @@ export class LLMProviderFactory {
         if (this.config.enableCircuitBreaker) {
           const breaker = defaultCircuitBreakerManager.getBreaker(providerName);
           if (breaker.isOpen()) {
-            console.warn(`[LLMProviderFactory] Circuit breaker open for ${providerName}, skipping`);
+            this.logger.warn(`[LLMProviderFactory] Circuit breaker open for ${providerName}, skipping`);
             continue;
           }
         }
 
-        console.log(`[LLMProviderFactory] Trying provider: ${providerName}`);
-        
+        this.logger.debug(`[LLMProviderFactory] Trying provider: ${providerName}`);
+
         const response = await provider.generateResponse(request);
-        
+
         // Track cost if enabled
         if (this.config.costOptimization) {
           this.costTracker.trackCost(providerName, response);
         }
 
-        console.log(`[LLMProviderFactory] Successfully used provider: ${providerName}`);
+        this.logger.debug(`[LLMProviderFactory] Successfully used provider: ${providerName}`);
         return response;
 
       } catch (error) {
         lastError = error as Error;
-        console.warn(`[LLMProviderFactory] Provider ${providerName} failed:`, error);
-        
+        this.logger.warn(`[LLMProviderFactory] Provider ${providerName} failed:`, (error as Error).message);
+
         // Check if we should continue trying other providers
         if (!this.shouldFallback(error as Error)) {
           throw error;
@@ -193,7 +220,7 @@ export class LLMProviderFactory {
    */
   private buildProviderChain(request: LLMRequest): string[] {
     const chain: string[] = [];
-    
+
     // If specific provider requested, try it first
     if (request.model) {
       const providerForModel = this.getProviderForModel(request.model);
@@ -300,11 +327,16 @@ export class LLMProviderFactory {
 
     // Fallback for circuit breaker, rate limits, and server errors
     if (error instanceof CircuitBreakerOpenError ||
-        error instanceof RateLimitError ||
-        (error as any).code === 'SERVER_ERROR' ||
-        (error as any).code === 'NETWORK_ERROR' ||
-        (error as any).code === 'TIMEOUT') {
+        error instanceof RateLimitError) {
       return true;
+    }
+
+    if (error instanceof LLMProviderError) {
+      if (error.code === 'SERVER_ERROR' ||
+          error.code === 'NETWORK_ERROR' ||
+          error.code === 'TIMEOUT') {
+        return true;
+      }
     }
 
     // Check custom fallback rules
@@ -324,10 +356,10 @@ export class LLMProviderFactory {
     switch (rule.condition) {
       case 'error':
         return true; // Any error triggers fallback
-      
+
       case 'rate_limit':
         return error instanceof RateLimitError;
-      
+
       case 'cost':
         // Check if cost threshold exceeded
         if (rule.threshold && this.config.costOptimization) {
@@ -335,11 +367,11 @@ export class LLMProviderFactory {
           return totalCost > rule.threshold;
         }
         return false;
-      
+
       case 'latency':
         // Would need to track latency to implement this
         return false;
-      
+
       default:
         return false;
     }
@@ -383,14 +415,14 @@ export class LLMProviderFactory {
   /**
    * Get provider health status
    */
-  async getProviderHealth(): Promise<Record<string, any>> {
-    const health: Record<string, any> = {};
+  async getProviderHealth(): Promise<Record<string, ProviderHealthEntry>> {
+    const health: Record<string, ProviderHealthEntry> = {};
 
     for (const [name, provider] of this.providers) {
       try {
         const isHealthy = await provider.healthCheck();
         const metrics = provider.getMetrics();
-        const circuitState = this.config.enableCircuitBreaker 
+        const circuitState = this.config.enableCircuitBreaker
           ? defaultCircuitBreakerManager.getBreaker(name).getState()
           : null;
 
@@ -419,7 +451,7 @@ export class LLMProviderFactory {
   /**
    * Get cost analytics
    */
-  getCostAnalytics(): any {
+  getCostAnalytics(): CostAnalytics {
     if (!this.config.costOptimization) {
       return { message: 'Cost optimization not enabled' };
     }
@@ -478,7 +510,7 @@ export class LLMProviderFactory {
    */
   updateConfig(config: Partial<ProviderFactoryConfig>): void {
     this.config = { ...this.config, ...config };
-    
+
     if (config.fallbackRules) {
       this.fallbackRules = config.fallbackRules;
     }

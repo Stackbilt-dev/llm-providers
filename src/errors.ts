@@ -117,11 +117,22 @@ export class CircuitBreakerOpenError extends LLMProviderError {
 /**
  * Error factory for creating provider-specific errors from HTTP responses
  */
+/** Shape of error response bodies across all LLM providers. */
+interface ErrorResponseBody {
+  message?: string;
+  error?: {
+    message?: string;
+    code?: string;
+    type?: string;
+    param?: string;
+  };
+}
+
 export class LLMErrorFactory {
   static fromHttpResponse(
     provider: string,
     statusCode: number,
-    responseBody?: any,
+    responseBody?: ErrorResponseBody,
     message?: string
   ): LLMProviderError {
     const defaultMessage = message || responseBody?.message || responseBody?.error?.message || 'Unknown error';
@@ -139,9 +150,10 @@ export class LLMErrorFactory {
       case 401:
         return new AuthenticationError(provider, defaultMessage);
 
-      case 404:
+      case 404: {
         const model = responseBody?.error?.param || 'unknown';
         return new ModelNotFoundError(provider, model);
+      }
 
       case 408:
         return new TimeoutError(provider, defaultMessage);
@@ -176,12 +188,12 @@ export class LLMErrorFactory {
     provider: string,
     response: Response
   ): Promise<LLMProviderError> {
-    let responseBody: any;
-    
+    let responseBody: ErrorResponseBody;
+
     try {
       const contentType = response.headers.get('content-type');
       if (contentType?.includes('application/json')) {
-        responseBody = await response.json();
+        responseBody = await response.json() as ErrorResponseBody;
       } else {
         responseBody = { message: await response.text() };
       }

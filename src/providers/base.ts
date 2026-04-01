@@ -3,14 +3,16 @@
  * Abstract base class for all LLM providers with common functionality
  */
 
-import type { 
-  LLMProvider, 
-  LLMRequest, 
-  LLMResponse, 
+import type {
+  LLMProvider,
+  LLMRequest,
+  LLMResponse,
   ProviderConfig,
   ModelCapabilities,
-  ProviderMetrics 
+  ProviderMetrics
 } from '../types';
+import type { Logger } from '../utils/logger';
+import { noopLogger } from '../utils/logger';
 import { RetryManager } from '../utils/retry';
 import { CircuitBreaker, defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { CostTracker } from '../utils/cost-tracker';
@@ -24,6 +26,7 @@ export abstract class BaseProvider implements LLMProvider {
   abstract supportsBatching: boolean;
 
   protected config: ProviderConfig;
+  protected logger: Logger;
   protected retryManager: RetryManager;
   protected circuitBreaker: CircuitBreaker;
   protected costTracker: CostTracker;
@@ -37,15 +40,17 @@ export abstract class BaseProvider implements LLMProvider {
       ...config
     };
 
+    this.logger = config.logger ?? noopLogger;
+
     this.retryManager = new RetryManager({
       maxRetries: this.config.maxRetries,
       initialDelay: this.config.retryDelay
-    });
+    }, this.logger);
 
     // Note: this.name is set by the subclass after super() returns.
     // The circuit breaker name is updated lazily on first use.
-    this.circuitBreaker = new CircuitBreaker('pending');
-    this.costTracker = new CostTracker();
+    this.circuitBreaker = new CircuitBreaker('pending', {}, this.logger);
+    this.costTracker = new CostTracker({}, undefined, this.logger);
 
     this.metrics = {
       requestCount: 0,
@@ -286,7 +291,7 @@ export abstract class BaseProvider implements LLMProvider {
     usage: { inputTokens: number; outputTokens: number },
     model: string,
     responseTime: number,
-    metadata?: Record<string, any>
+    metadata?: Record<string, unknown>
   ): LLMResponse {
     const cost = this.calculateCost(usage.inputTokens, usage.outputTokens, model);
 
@@ -324,9 +329,9 @@ export abstract class BaseProvider implements LLMProvider {
     };
 
     if (error) {
-      console.error(`[${this.name}] Request failed:`, logData);
+      this.logger.error(`[${this.name}] Request failed:`, logData);
     } else {
-      console.log(`[${this.name}] Request completed:`, logData);
+      this.logger.debug(`[${this.name}] Request completed:`, logData);
     }
   }
 }
