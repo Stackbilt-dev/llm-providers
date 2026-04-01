@@ -2,7 +2,7 @@
   "name": "@stackbilt/llm-providers",
   "version": "1.0.0",
   "description": "Multi-LLM failover with circuit breakers, cost tracking, and intelligent retry. Cloudflare Workers native.",
-  "author": "Kurt Overmier <kurt@stackbilt.dev>",
+  "author": "Stackbilt <admin@stackbilt.dev>",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
