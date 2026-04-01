@@ -3,6 +3,31 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-04-01
+
+### Added
+- **Structured Logger** — `Logger` interface with `noopLogger` (silent default) and `consoleLogger` (opt-in). All components accept an optional `logger` via config. Zero `console.*` calls in production code.
+- **Rate limit enforcement** — `LLMProviderFactory` now checks `CreditLedger.checkRateLimit(rpm/rpd)` before dispatching to each provider, skipping exceeded providers.
+- **Claude 4.6 models** — `claude-opus-4-6-20250618`, `claude-sonnet-4-6-20250618` added to Anthropic provider.
+- **Claude Haiku 4.5** — `claude-haiku-4-5-20251001` added.
+- **Claude 3.7 Sonnet** — `claude-3-7-sonnet-20250219` added (replaces incorrect `claude-sonnet-3.7` ID).
+- **`CostAnalytics`** and **`ProviderHealthEntry`** — typed return values for `getCostAnalytics()` and `getProviderHealth()`.
+
+### Fixed
+- **30+ `any` types eliminated** — all provider interfaces, tool call types, Workers AI response shapes, error bodies, cost analytics returns, and decorator signatures fully typed. Three boundary casts for Cloudflare `Ai.run()` retained with explicit eslint-disable.
+- **Data leak removed** — `console.log` at `anthropic.ts:492` that dumped full tool call payloads into worker logs.
+- **Anthropic JSON mode** — only prepends `{` if the response doesn't already start with one, preventing `{{...}` corruption.
+- **OpenAI `supportsBatching`** — set to `false` (was `true` but `processBatch()` is a sequential loop).
+- **Default model** — OpenAI default changed from deprecated `gpt-3.5-turbo` to `gpt-4o-mini`.
+- **Default fallback chain** — now includes all 5 configured providers (was hardcoded to cloudflare/anthropic/openai, excluding Cerebras and Groq).
+- **Anthropic healthCheck** — switched from real API call (burned tokens) to lightweight OPTIONS reachability check.
+- **`TokenUsage.cost`** — made required (was optional, causing NaN accumulation in cost tracker).
+- **Circuit breaker test isolation** — `defaultCircuitBreakerManager.resetAll()` in all test `beforeEach` blocks to prevent cross-test state leaks.
+
+### Changed
+- **Logging default** — library is now silent by default (`noopLogger`). Pass `consoleLogger` or a custom `Logger` to enable output.
+- **Model catalog** — updated to current-gen models; removed stale/incorrect model IDs and TBD pricing.
+
 ## [1.1.0] — 2026-04-01
 
 ### Added
