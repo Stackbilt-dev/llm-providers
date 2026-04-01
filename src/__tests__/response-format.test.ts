@@ -9,6 +9,7 @@ import { AnthropicProvider } from '../providers/anthropic';
 import { CloudflareProvider } from '../providers/cloudflare';
 import { CerebrasProvider } from '../providers/cerebras';
 import { GroqProvider } from '../providers/groq';
+import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import type { LLMRequest } from '../types';
 
 // ---------- shared mocks ----------
@@ -41,6 +42,7 @@ describe('OpenAI response_format', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
     provider = new OpenAIProvider({ apiKey: 'test-key' });
   });
 
@@ -89,6 +91,7 @@ describe('Groq response_format', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
     provider = new GroqProvider({ apiKey: 'test-key' });
   });
 
@@ -124,6 +127,7 @@ describe('Anthropic response_format', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
     provider = new AnthropicProvider({ apiKey: 'test-key' });
   });
 
@@ -261,6 +265,7 @@ describe('Cloudflare response_format', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
     mockAiRun = vi.fn();
     provider = new CloudflareProvider({
       ai: { run: mockAiRun } as unknown as Ai
@@ -325,6 +330,7 @@ describe('Cerebras response_format', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
     provider = new CerebrasProvider({ apiKey: 'test-key' });
   });
 

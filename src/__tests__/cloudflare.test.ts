@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CloudflareProvider } from '../providers/cloudflare';
 import { ConfigurationError } from '../errors';
+import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import type { LLMRequest } from '../types';
 
 class TestableCloudflareProvider extends CloudflareProvider {
@@ -51,6 +52,7 @@ describe('CloudflareProvider', () => {
 
   beforeEach(() => {
     mockAiRun = vi.fn();
+    defaultCircuitBreakerManager.resetAll();
     provider = new TestableCloudflareProvider({
       ai: { run: mockAiRun } as unknown as Ai
     });
