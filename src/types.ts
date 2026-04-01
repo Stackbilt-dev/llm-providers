@@ -74,7 +74,7 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  cost?: number; // Cost in USD
+  cost: number; // Cost in USD
 }
 
 export interface LLMProvider {

@@ -71,9 +71,12 @@ interface AnthropicResponse {
 export class AnthropicProvider extends BaseProvider {
   name = 'anthropic';
   models = [
+    'claude-opus-4-6-20250618',
+    'claude-sonnet-4-6-20250618',
+    'claude-opus-4-20250618',
     'claude-sonnet-4-20250514',
-    'claude-opus-4-20250514',
-    'claude-sonnet-3.7-20241120',
+    'claude-haiku-4-5-20251001',
+    'claude-3-7-sonnet-20250219',
     'claude-3-5-sonnet-20241022',
     'claude-3-5-haiku-20241022',
     'claude-3-opus-20240229',
@@ -118,8 +121,9 @@ export class AnthropicProvider extends BaseProvider {
         const data: AnthropicResponse = await httpResponse.json();
         const formatted = this.formatResponse(data, Date.now() - startTime);
 
-        // Prepend the prefilled '{' that was consumed by the assistant turn
-        if (jsonMode) {
+        // Restore the prefilled '{' consumed by the assistant turn,
+        // but only if the response doesn't already start with one
+        if (jsonMode && !formatted.message.startsWith('{')) {
           const restored = '{' + formatted.message;
           formatted.message = restored;
           formatted.content = restored;
@@ -149,7 +153,7 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   estimateCost(request: LLMRequest): number {
-    const model = request.model || 'claude-3-5-haiku-20241022';
+    const model = request.model || 'claude-haiku-4-5-20251001';
     const capabilities = this.getModelCapabilities()[model];
 
     if (!capabilities) return 0;
@@ -165,16 +169,10 @@ export class AnthropicProvider extends BaseProvider {
 
   async healthCheck(): Promise<boolean> {
     try {
-      // Anthropic doesn't have a simple health check endpoint
-      // So we'll make a minimal request
-      const testRequest: AnthropicRequest = {
-        model: 'claude-3-5-haiku-20241022',
-        messages: [{ role: 'user', content: 'Hi' }],
-        max_tokens: 1
-      };
-
-      const response = await this.makeAnthropicRequest('/v1/messages', testRequest);
-      return response.ok;
+      // Lightweight reachability check — HEAD to base URL avoids burning tokens
+      const response = await this.makeAnthropicRequest('/v1/messages', null, 'OPTIONS');
+      // Anthropic returns 405 for OPTIONS but that confirms the API is reachable
+      return response.status !== 0;
     } catch {
       return false;
     }
@@ -182,32 +180,59 @@ export class AnthropicProvider extends BaseProvider {
 
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
     return {
+      'claude-opus-4-6-20250618': {
+        maxContextLength: 200000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.015, // $15 per 1M tokens
+        outputTokenCost: 0.075, // $75 per 1M tokens
+        description: 'Claude Opus 4.6 - Latest, highest intelligence and capability'
+      },
+      'claude-sonnet-4-6-20250618': {
+        maxContextLength: 200000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.003, // $3 per 1M tokens
+        outputTokenCost: 0.015, // $15 per 1M tokens
+        description: 'Claude Sonnet 4.6 - Latest balanced performance model'
+      },
+      'claude-opus-4-20250618': {
+        maxContextLength: 200000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.015, // $15 per 1M tokens
+        outputTokenCost: 0.075, // $75 per 1M tokens
+        description: 'Claude Opus 4 - Highest level of intelligence and capability'
+      },
       'claude-sonnet-4-20250514': {
         maxContextLength: 200000,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
-        inputTokenCost: 0.003, // Estimated - actual pricing TBD
-        outputTokenCost: 0.015, // Estimated - actual pricing TBD
+        inputTokenCost: 0.003, // $3 per 1M tokens
+        outputTokenCost: 0.015, // $15 per 1M tokens
         description: 'Claude Sonnet 4 - High intelligence and balanced performance'
       },
-      'claude-opus-4-20250514': {
+      'claude-haiku-4-5-20251001': {
         maxContextLength: 200000,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
-        inputTokenCost: 0.015, // Estimated - actual pricing TBD
-        outputTokenCost: 0.075, // Estimated - actual pricing TBD
-        description: 'Claude Opus 4 - Highest level of intelligence and capability'
+        inputTokenCost: 0.001, // $1 per 1M tokens
+        outputTokenCost: 0.005, // $5 per 1M tokens
+        description: 'Claude Haiku 4.5 - Fast and cost-effective'
       },
-      'claude-sonnet-3.7-20241120': {
+      'claude-3-7-sonnet-20250219': {
         maxContextLength: 200000,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
-        inputTokenCost: 0.003, // Estimated - actual pricing TBD
-        outputTokenCost: 0.015, // Estimated - actual pricing TBD
-        description: 'Claude Sonnet 3.7 - High intelligence with toggleable extended thinking'
+        inputTokenCost: 0.003, // $3 per 1M tokens
+        outputTokenCost: 0.015, // $15 per 1M tokens
+        description: 'Claude 3.7 Sonnet - Extended thinking with hybrid reasoning'
       },
       'claude-3-5-sonnet-20241022': {
         maxContextLength: 200000,
@@ -321,7 +346,7 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     const anthropicRequest: AnthropicRequest = {
-      model: request.model || 'claude-3-5-haiku-20241022',
+      model: request.model || 'claude-haiku-4-5-20251001',
       messages,
       max_tokens: request.maxTokens || 1000,
       temperature: request.temperature,

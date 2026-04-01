@@ -84,7 +84,7 @@ export class OpenAIProvider extends BaseProvider {
   ];
   supportsStreaming = true;
   supportsTools = true;
-  supportsBatching = true;
+  supportsBatching = false;
 
   private apiKey: string;
   private baseUrl: string;
@@ -143,7 +143,7 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   estimateCost(request: LLMRequest): number {
-    const model = request.model || 'gpt-3.5-turbo';
+    const model = request.model || 'gpt-4o-mini';
     const capabilities = this.getModelCapabilities()[model];
 
     if (!capabilities) return 0;
@@ -172,7 +172,7 @@ export class OpenAIProvider extends BaseProvider {
         maxContextLength: 128000,
         supportsStreaming: true,
         supportsTools: true,
-        supportsBatching: true,
+        supportsBatching: false,
         inputTokenCost: 0.005, // $5 per 1M tokens
         outputTokenCost: 0.015, // $15 per 1M tokens
         description: 'GPT-4 Omni - Latest multimodal model'
@@ -181,7 +181,7 @@ export class OpenAIProvider extends BaseProvider {
         maxContextLength: 128000,
         supportsStreaming: true,
         supportsTools: true,
-        supportsBatching: true,
+        supportsBatching: false,
         inputTokenCost: 0.00015, // $0.15 per 1M tokens
         outputTokenCost: 0.0006, // $0.60 per 1M tokens
         description: 'GPT-4 Omni Mini - Cost-effective version'
@@ -190,7 +190,7 @@ export class OpenAIProvider extends BaseProvider {
         maxContextLength: 128000,
         supportsStreaming: true,
         supportsTools: true,
-        supportsBatching: true,
+        supportsBatching: false,
         inputTokenCost: 0.01, // $10 per 1M tokens
         outputTokenCost: 0.03, // $30 per 1M tokens
         description: 'GPT-4 Turbo - High performance model'
@@ -199,7 +199,7 @@ export class OpenAIProvider extends BaseProvider {
         maxContextLength: 8192,
         supportsStreaming: true,
         supportsTools: true,
-        supportsBatching: true,
+        supportsBatching: false,
         inputTokenCost: 0.03, // $30 per 1M tokens
         outputTokenCost: 0.06, // $60 per 1M tokens
         description: 'GPT-4 - Original high-capability model'
@@ -208,7 +208,7 @@ export class OpenAIProvider extends BaseProvider {
         maxContextLength: 16385,
         supportsStreaming: true,
         supportsTools: true,
-        supportsBatching: true,
+        supportsBatching: false,
         inputTokenCost: 0.0005, // $0.50 per 1M tokens
         outputTokenCost: 0.0015, // $1.50 per 1M tokens
         description: 'GPT-3.5 Turbo - Fast and cost-effective'
@@ -217,7 +217,7 @@ export class OpenAIProvider extends BaseProvider {
         maxContextLength: 16385,
         supportsStreaming: true,
         supportsTools: true,
-        supportsBatching: true,
+        supportsBatching: false,
         inputTokenCost: 0.001, // $1 per 1M tokens
         outputTokenCost: 0.002, // $2 per 1M tokens
         description: 'GPT-3.5 Turbo 16k - Extended context'
@@ -291,7 +291,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     const openaiRequest: OpenAIRequest = {
-      model: request.model || 'gpt-3.5-turbo',
+      model: request.model || 'gpt-4o-mini',
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
@@ -447,8 +447,8 @@ export class OpenAIProvider extends BaseProvider {
         // Handle individual request failures
         responses.push({
           message: '',
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          model: request.model || 'gpt-3.5-turbo',
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 },
+          model: request.model || 'gpt-4o-mini',
           provider: this.name,
           responseTime: 0,
           metadata: { error: (error as Error).message }

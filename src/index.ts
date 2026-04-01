@@ -305,6 +305,12 @@ export const MODELS = {
   GPT_3_5_TURBO: 'gpt-3.5-turbo',
 
   // Anthropic models
+  CLAUDE_OPUS_4_6: 'claude-opus-4-6-20250618',
+  CLAUDE_SONNET_4_6: 'claude-sonnet-4-6-20250618',
+  CLAUDE_OPUS_4: 'claude-opus-4-20250618',
+  CLAUDE_SONNET_4: 'claude-sonnet-4-20250514',
+  CLAUDE_HAIKU_4_5: 'claude-haiku-4-5-20251001',
+  CLAUDE_3_7_SONNET: 'claude-3-7-sonnet-20250219',
   CLAUDE_3_5_SONNET: 'claude-3-5-sonnet-20241022',
   CLAUDE_3_5_HAIKU: 'claude-3-5-haiku-20241022',
   CLAUDE_3_OPUS: 'claude-3-opus-20240229',
@@ -337,40 +343,43 @@ export const MODEL_RECOMMENDATIONS = {
   COST_EFFECTIVE: [
     MODELS.CEREBRAS_LLAMA_3_1_8B,
     MODELS.TINY_LLAMA,
-    MODELS.CLAUDE_3_5_HAIKU,
+    MODELS.CLAUDE_HAIKU_4_5,
     MODELS.GPT_4O_MINI
   ],
 
   // High-performance models
   HIGH_PERFORMANCE: [
+    MODELS.CLAUDE_OPUS_4_6,
+    MODELS.CLAUDE_SONNET_4_6,
     MODELS.CEREBRAS_ZAI_GLM_4_7,
     MODELS.GPT_4O,
-    MODELS.CLAUDE_3_5_SONNET,
     MODELS.CEREBRAS_QWEN_3_235B,
     MODELS.LLAMA_3_1_70B
   ],
 
   // Balanced models
   BALANCED: [
-    MODELS.GPT_3_5_TURBO,
-    MODELS.CLAUDE_3_HAIKU,
+    MODELS.CLAUDE_SONNET_4,
+    MODELS.CLAUDE_HAIKU_4_5,
+    MODELS.GPT_4O_MINI,
     MODELS.LLAMA_3_1_8B
   ],
 
   // Tool/function calling
   TOOL_CALLING: [
+    MODELS.CLAUDE_SONNET_4_6,
     MODELS.GPT_4O,
-    MODELS.CLAUDE_3_5_SONNET,
+    MODELS.CLAUDE_SONNET_4,
     MODELS.CEREBRAS_ZAI_GLM_4_7,
-    MODELS.CEREBRAS_QWEN_3_235B,
-    MODELS.GPT_4_TURBO
+    MODELS.CEREBRAS_QWEN_3_235B
   ],
 
   // Long context tasks
   LONG_CONTEXT: [
-    MODELS.CLAUDE_3_5_SONNET,
-    MODELS.GPT_4_TURBO,
-    MODELS.CLAUDE_3_OPUS
+    MODELS.CLAUDE_OPUS_4_6,
+    MODELS.CLAUDE_SONNET_4_6,
+    MODELS.CLAUDE_3_7_SONNET,
+    MODELS.GPT_4_TURBO
   ]
 } as const;
 
@@ -408,10 +417,10 @@ export function getRecommendedModel(
     return MODELS.LLAMA_3_1_8B;
   }
   if (availableProviders.includes('anthropic')) {
-    return MODELS.CLAUDE_3_HAIKU;
+    return MODELS.CLAUDE_HAIKU_4_5;
   }
   if (availableProviders.includes('openai')) {
-    return MODELS.GPT_3_5_TURBO;
+    return MODELS.GPT_4O_MINI;
   }
 
   throw new Error('No available providers configured');

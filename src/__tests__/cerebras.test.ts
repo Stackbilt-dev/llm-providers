@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { CerebrasProvider } from '../providers/cerebras';
 import { AuthenticationError } from '../errors';
+import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import type { LLMRequest } from '../types';
 
 // Mock global fetch
@@ -24,6 +25,7 @@ describe('CerebrasProvider', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
     provider = new CerebrasProvider({
       apiKey: 'test-cerebras-key'
     });

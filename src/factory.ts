@@ -183,6 +183,20 @@ export class LLMProviderFactory {
           }
         }
 
+        // Check rate limits if ledger is configured
+        if (this.config.ledger) {
+          const rpmCheck = this.config.ledger.checkRateLimit(providerName, 'rpm');
+          if (!rpmCheck.allowed) {
+            this.logger.warn(`[LLMProviderFactory] Rate limit (rpm) exceeded for ${providerName} (${rpmCheck.used}/${rpmCheck.limit}), skipping`);
+            continue;
+          }
+          const rpdCheck = this.config.ledger.checkRateLimit(providerName, 'rpd');
+          if (!rpdCheck.allowed) {
+            this.logger.warn(`[LLMProviderFactory] Rate limit (rpd) exceeded for ${providerName} (${rpdCheck.used}/${rpdCheck.limit}), skipping`);
+            continue;
+          }
+        }
+
         this.logger.debug(`[LLMProviderFactory] Trying provider: ${providerName}`);
 
         const response = await provider.generateResponse(request);
@@ -253,8 +267,9 @@ export class LLMProviderFactory {
    */
   private getPrioritizedProviders(request: LLMRequest): string[] {
     if (!this.config.costOptimization) {
-      // Default priority: Cloudflare (cheapest) -> Anthropic -> OpenAI
-      return ['cloudflare', 'anthropic', 'openai'];
+      // Default priority: all configured providers, cheapest first
+      return ['cloudflare', 'cerebras', 'groq', 'anthropic', 'openai']
+        .filter(p => this.providers.has(p));
     }
 
     // Cost-optimized routing

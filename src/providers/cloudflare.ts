@@ -675,7 +675,7 @@ export class CloudflareProvider extends BaseProvider {
           // Return error response for failed requests
           return {
             message: '',
-            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 },
             model: request.model || '@cf/meta/llama-3.1-8b-instruct',
             provider: this.name,
             responseTime: 0,
