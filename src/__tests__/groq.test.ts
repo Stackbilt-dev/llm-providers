@@ -36,8 +36,9 @@ describe('GroqProvider', () => {
       expect(provider.name).toBe('groq');
       expect(provider.models).toContain('llama-3.3-70b-versatile');
       expect(provider.models).toContain('llama-3.1-8b-instant');
+      expect(provider.models).toContain('openai/gpt-oss-120b');
       expect(provider.supportsStreaming).toBe(true);
-      expect(provider.supportsTools).toBe(false);
+      expect(provider.supportsTools).toBe(true);
       expect(provider.supportsBatching).toBe(false);
     });
 
@@ -69,7 +70,7 @@ describe('GroqProvider', () => {
   describe('getModels', () => {
     it('should return available models', () => {
       const models = provider.getModels();
-      expect(models).toEqual(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']);
+      expect(models).toEqual(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-120b']);
     });
 
     it('should return a copy of the models array', () => {
@@ -222,6 +223,14 @@ describe('GroqProvider', () => {
       expect(cost).toBeGreaterThan(0);
     });
 
+    it('should estimate cost for openai/gpt-oss-120b', () => {
+      const cost = provider.estimateCost({
+        ...testRequest,
+        model: 'openai/gpt-oss-120b'
+      });
+      expect(cost).toBeGreaterThan(0);
+    });
+
     it('should return 0 for unknown model', () => {
       const cost = provider.estimateCost({
         ...testRequest,
@@ -234,6 +243,175 @@ describe('GroqProvider', () => {
       const cost70b = provider.estimateCost({ ...testRequest, model: 'llama-3.3-70b-versatile' });
       const cost8b = provider.estimateCost({ ...testRequest, model: 'llama-3.1-8b-instant' });
       expect(cost70b).toBeGreaterThan(cost8b);
+    });
+  });
+
+  describe('tool calling', () => {
+    const toolRequest: LLMRequest = {
+      messages: [{ role: 'user', content: 'What is the weather?' }],
+      model: 'openai/gpt-oss-120b',
+      maxTokens: 100,
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'get_weather',
+          description: 'Get current weather',
+          parameters: { type: 'object', properties: { location: { type: 'string' } } }
+        }
+      }],
+      toolChoice: 'auto'
+    };
+
+    const toolCallResponse = {
+      id: 'chatcmpl-tool-1',
+      object: 'chat.completion',
+      created: 1700000000,
+      model: 'openai/gpt-oss-120b',
+      choices: [{
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'call_abc123',
+            type: 'function',
+            function: { name: 'get_weather', arguments: '{"location":"London"}' }
+          }]
+        },
+        finish_reason: 'tool_calls'
+      }],
+      usage: { prompt_tokens: 20, completion_tokens: 15, total_tokens: 35 }
+    };
+
+    it('should pass tools and parse tool_calls in response', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => toolCallResponse,
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+
+      const response = await provider.generateResponse(toolRequest);
+
+      // Verify response has tool calls
+      expect(response.toolCalls).toHaveLength(1);
+      expect(response.toolCalls![0].id).toBe('call_abc123');
+      expect(response.toolCalls![0].function.name).toBe('get_weather');
+      expect(response.toolCalls![0].function.arguments).toBe('{"location":"London"}');
+      expect(response.finishReason).toBe('tool_calls');
+
+      // Verify request body included tools
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.tools).toHaveLength(1);
+      expect(body.tools[0].function.name).toBe('get_weather');
+      expect(body.tool_choice).toBe('auto');
+    });
+
+    it('should handle multi-turn tool conversations', async () => {
+      const multiTurnRequest: LLMRequest = {
+        messages: [
+          { role: 'user', content: 'What is the weather?' },
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [{
+              id: 'call_abc123',
+              type: 'function',
+              function: { name: 'get_weather', arguments: '{"location":"London"}' }
+            }]
+          },
+          {
+            role: 'user',
+            content: '',
+            toolResults: [{
+              id: 'call_abc123',
+              output: '{"temp": 15, "condition": "cloudy"}'
+            }]
+          }
+        ],
+        model: 'openai/gpt-oss-120b',
+        maxTokens: 100,
+        tools: toolRequest.tools
+      };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'chatcmpl-tool-2',
+          object: 'chat.completion',
+          created: 1700000000,
+          model: 'openai/gpt-oss-120b',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'It is 15°C and cloudy in London.' },
+            finish_reason: 'stop'
+          }],
+          usage: { prompt_tokens: 40, completion_tokens: 15, total_tokens: 55 }
+        }),
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+
+      const response = await provider.generateResponse(multiTurnRequest);
+
+      expect(response.message).toBe('It is 15°C and cloudy in London.');
+
+      // Verify the serialized messages include tool_calls and tool role
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const assistantMsg = body.messages.find((m: Record<string, unknown>) => m.role === 'assistant');
+      expect(assistantMsg.tool_calls).toHaveLength(1);
+      expect(assistantMsg.tool_calls[0].id).toBe('call_abc123');
+
+      const toolMsg = body.messages.find((m: Record<string, unknown>) => m.role === 'tool');
+      expect(toolMsg.tool_call_id).toBe('call_abc123');
+      expect(toolMsg.content).toBe('{"temp": 15, "condition": "cloudy"}');
+    });
+
+    it('should not include tools for non-tool-capable models', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'chatcmpl-123',
+          object: 'chat.completion',
+          created: 1700000000,
+          model: 'llama-3.1-8b-instant',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'I cannot call tools.' },
+            finish_reason: 'stop'
+          }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+        }),
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+
+      await provider.generateResponse({
+        ...toolRequest,
+        model: 'llama-3.1-8b-instant'
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.tools).toBeUndefined();
+      expect(body.tool_choice).toBeUndefined();
+    });
+
+    it('should support tool calling on llama-3.3-70b-versatile', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ...toolCallResponse,
+          model: 'llama-3.3-70b-versatile'
+        }),
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+
+      const response = await provider.generateResponse({
+        ...toolRequest,
+        model: 'llama-3.3-70b-versatile'
+      });
+
+      expect(response.toolCalls).toHaveLength(1);
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.tools).toHaveLength(1);
     });
   });
 

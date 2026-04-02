@@ -312,8 +312,8 @@ export class LLMProviderFactory {
       return 'cloudflare';
     }
 
-    // Groq models
-    if (model.includes('-versatile') || model.includes('-instant')) {
+    // Groq models (openai/gpt-oss-120b is Groq-hosted, not @cf/ prefixed)
+    if (model.includes('-versatile') || model.includes('-instant') || model === 'openai/gpt-oss-120b') {
       return 'groq';
     }
 

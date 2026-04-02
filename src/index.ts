@@ -332,7 +332,8 @@ export const MODELS = {
 
   // Groq models
   GROQ_LLAMA_3_3_70B_VERSATILE: 'llama-3.3-70b-versatile',
-  GROQ_LLAMA_3_1_8B_INSTANT: 'llama-3.1-8b-instant'
+  GROQ_LLAMA_3_1_8B_INSTANT: 'llama-3.1-8b-instant',
+  GROQ_GPT_OSS_120B: 'openai/gpt-oss-120b'
 } as const;
 
 /**
@@ -371,7 +372,9 @@ export const MODEL_RECOMMENDATIONS = {
     MODELS.GPT_4O,
     MODELS.CLAUDE_SONNET_4,
     MODELS.CEREBRAS_ZAI_GLM_4_7,
-    MODELS.CEREBRAS_QWEN_3_235B
+    MODELS.CEREBRAS_QWEN_3_235B,
+    MODELS.GROQ_GPT_OSS_120B,
+    MODELS.GROQ_LLAMA_3_3_70B_VERSATILE
   ],
 
   // Long context tasks
@@ -407,7 +410,7 @@ export function getRecommendedModel(
         || model.startsWith('zai-glm') || model.startsWith('qwen-3-235b')) && availableProviders.includes('cerebras')) {
       return model;
     }
-    if ((model.includes('-versatile') || model.includes('-instant')) && availableProviders.includes('groq')) {
+    if ((model.includes('-versatile') || model.includes('-instant') || model === 'openai/gpt-oss-120b') && availableProviders.includes('groq')) {
       return model;
     }
   }

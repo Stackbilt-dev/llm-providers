@@ -3,7 +3,7 @@
  * Implementation for Groq fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities } from '../types';
+import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ToolCall } from '../types';
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
@@ -11,8 +11,19 @@ import {
 } from '../errors';
 
 interface GroqMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
+  tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+  tool_call_id?: string;
+}
+
+interface GroqTool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
 interface GroqRequest {
@@ -22,6 +33,8 @@ interface GroqRequest {
   max_tokens?: number;
   stream?: boolean;
   response_format?: { type: 'json_object' | 'text' };
+  tools?: GroqTool[];
+  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
 }
 
 interface GroqResponse {
@@ -34,8 +47,13 @@ interface GroqResponse {
     message: {
       role: string;
       content: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: 'function';
+        function: { name: string; arguments: string };
+      }>;
     };
-    finish_reason: 'stop' | 'length' | 'content_filter';
+    finish_reason: 'stop' | 'length' | 'content_filter' | 'tool_calls';
   }>;
   usage: {
     prompt_tokens: number;
@@ -45,14 +63,21 @@ interface GroqResponse {
   system_fingerprint?: string;
 }
 
+// Models that support tool calling
+const TOOL_CAPABLE_MODELS = new Set([
+  'openai/gpt-oss-120b',
+  'llama-3.3-70b-versatile',
+]);
+
 export class GroqProvider extends BaseProvider {
   name = 'groq';
   models = [
     'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant'
+    'llama-3.1-8b-instant',
+    'openai/gpt-oss-120b',
   ];
   supportsStreaming = true;
-  supportsTools = false;
+  supportsTools = true;
   supportsBatching = false;
 
   private apiKey: string;
@@ -135,7 +160,7 @@ export class GroqProvider extends BaseProvider {
       'llama-3.3-70b-versatile': {
         maxContextLength: 128000,
         supportsStreaming: true,
-        supportsTools: false,
+        supportsTools: true,
         supportsBatching: false,
         inputTokenCost: 0.00059, // $0.59 per 1M tokens
         outputTokenCost: 0.00079, // $0.79 per 1M tokens
@@ -149,6 +174,15 @@ export class GroqProvider extends BaseProvider {
         inputTokenCost: 0.00005, // $0.05 per 1M tokens
         outputTokenCost: 0.00008, // $0.08 per 1M tokens
         description: 'Llama 3.1 8B Instant - Ultra-fast inference on Groq'
+      },
+      'openai/gpt-oss-120b': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.00015, // $0.15 per 1M tokens (cached: $0.075/MTok)
+        outputTokenCost: 0.0006,  // $0.60 per 1M tokens
+        description: 'GPT-OSS 120B - OpenAI-compatible tool calling on Groq'
       }
     };
   }
@@ -242,11 +276,19 @@ export class GroqProvider extends BaseProvider {
 
   private formatRequest(request: LLMRequest): GroqRequest {
     const messages: GroqMessage[] = [];
+    const model = request.model || 'llama-3.3-70b-versatile';
+    const jsonMode = request.response_format?.type === 'json_object';
+    const jsonInstruction = '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
 
     if (request.systemPrompt) {
       messages.push({
         role: 'system',
-        content: request.systemPrompt
+        content: jsonMode ? request.systemPrompt + jsonInstruction : request.systemPrompt
+      });
+    } else if (jsonMode) {
+      messages.push({
+        role: 'system',
+        content: jsonInstruction.trimStart()
       });
     }
 
@@ -255,14 +297,32 @@ export class GroqProvider extends BaseProvider {
         continue;
       }
 
-      messages.push({
+      const msg: GroqMessage = {
         role: message.role,
         content: message.content
-      });
+      };
+
+      // Carry tool calls for multi-turn tool conversations
+      if (message.toolCalls) {
+        msg.tool_calls = message.toolCalls.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.function.name, arguments: tc.function.arguments }
+        }));
+      }
+      if (message.toolResults) {
+        // Tool results come as separate messages in OpenAI format
+        for (const tr of message.toolResults) {
+          messages.push({ role: 'tool', content: tr.output, tool_call_id: tr.id });
+        }
+        continue; // Don't push the original message — tool results replace it
+      }
+
+      messages.push(msg);
     }
 
     const groqRequest: GroqRequest = {
-      model: request.model || 'llama-3.3-70b-versatile',
+      model,
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
@@ -272,6 +332,21 @@ export class GroqProvider extends BaseProvider {
     // Pass through response_format if provided
     if (request.response_format) {
       groqRequest.response_format = request.response_format;
+    }
+
+    // Add tools if the model supports them and tools are provided
+    if (request.tools && request.tools.length > 0 && TOOL_CAPABLE_MODELS.has(model)) {
+      groqRequest.tools = request.tools.map(t => ({
+        type: 'function',
+        function: {
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters as Record<string, unknown>,
+        }
+      }));
+      if (request.toolChoice) {
+        groqRequest.tool_choice = request.toolChoice;
+      }
     }
 
     return groqRequest;
@@ -298,6 +373,16 @@ export class GroqProvider extends BaseProvider {
       )
     };
 
+    // Extract tool calls if present
+    let toolCalls: ToolCall[] | undefined;
+    if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+      toolCalls = choice.message.tool_calls.map(tc => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: { name: tc.function.name, arguments: tc.function.arguments }
+      }));
+    }
+
     return {
       id: data.id,
       message: content,
@@ -307,6 +392,7 @@ export class GroqProvider extends BaseProvider {
       provider: this.name,
       responseTime,
       finishReason: choice.finish_reason,
+      toolCalls,
       metadata: {
         systemFingerprint: data.system_fingerprint,
         created: data.created
