@@ -9,14 +9,15 @@ import type {
   LLMResponse,
   ProviderConfig,
   ModelCapabilities,
-  ProviderMetrics
+  ProviderMetrics,
+  ToolCall
 } from '../types';
 import type { Logger } from '../utils/logger';
 import { noopLogger } from '../utils/logger';
 import { RetryManager } from '../utils/retry';
 import { CircuitBreaker, defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { CostTracker } from '../utils/cost-tracker';
-import { ConfigurationError, TimeoutError } from '../errors';
+import { ConfigurationError, TimeoutError, InvalidRequestError } from '../errors';
 
 export abstract class BaseProvider implements LLMProvider {
   abstract name: string;
@@ -264,6 +265,73 @@ export abstract class BaseProvider implements LLMProvider {
         `Model '${request.model}' not supported. Available models: ${this.models.join(', ')}`
       );
     }
+  }
+
+  /**
+   * Validate and sanitize tool calls returned by the provider.
+   *
+   * Ensures each tool call has the required fields (`id`, `type`, `function.name`,
+   * `function.arguments`) and that their types are correct. Malformed entries are
+   * dropped and logged rather than propagated to the caller.
+   *
+   * Returns `undefined` when the input is empty or all entries are invalid, so the
+   * result can be assigned directly to `response.toolCalls`.
+   */
+  protected validateToolCalls(toolCalls: ToolCall[] | undefined): ToolCall[] | undefined {
+    if (!toolCalls || toolCalls.length === 0) {
+      return undefined;
+    }
+
+    const valid: ToolCall[] = [];
+
+    for (let i = 0; i < toolCalls.length; i++) {
+      const tc = toolCalls[i];
+
+      // Must be an object
+      if (tc == null || typeof tc !== 'object') {
+        this.logger.warn(`[${this.name}] Dropping tool_call[${i}]: not an object`);
+        continue;
+      }
+
+      // id — must be a non-empty string
+      if (typeof tc.id !== 'string' || tc.id.length === 0) {
+        this.logger.warn(`[${this.name}] Dropping tool_call[${i}]: missing or empty id`);
+        continue;
+      }
+
+      // type — must be 'function'
+      if (tc.type !== 'function') {
+        this.logger.warn(`[${this.name}] Dropping tool_call[${i}]: invalid type "${String(tc.type)}"`);
+        continue;
+      }
+
+      // function — must be an object with name and arguments
+      if (tc.function == null || typeof tc.function !== 'object') {
+        this.logger.warn(`[${this.name}] Dropping tool_call[${i}]: missing function object`);
+        continue;
+      }
+
+      if (typeof tc.function.name !== 'string' || tc.function.name.length === 0) {
+        this.logger.warn(`[${this.name}] Dropping tool_call[${i}]: missing or empty function.name`);
+        continue;
+      }
+
+      if (typeof tc.function.arguments !== 'string') {
+        this.logger.warn(`[${this.name}] Dropping tool_call[${i}]: function.arguments is not a string`);
+        continue;
+      }
+
+      valid.push({
+        id: tc.id,
+        type: 'function',
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        },
+      });
+    }
+
+    return valid.length > 0 ? valid : undefined;
   }
 
   /**

@@ -354,13 +354,14 @@ export class OpenAIProvider extends BaseProvider {
       }
     };
 
-    // Add tool calls if present
+    // Add tool calls if present (validated at provider boundary)
     if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-      response.toolCalls = choice.message.tool_calls.map(tc => ({
+      const raw: ToolCall[] = choice.message.tool_calls.map(tc => ({
         id: tc.id,
         type: tc.type,
         function: tc.function
       }));
+      response.toolCalls = this.validateToolCalls(raw);
     }
 
     return response;

@@ -373,14 +373,15 @@ export class GroqProvider extends BaseProvider {
       )
     };
 
-    // Extract tool calls if present
+    // Extract tool calls if present (validated at provider boundary)
     let toolCalls: ToolCall[] | undefined;
     if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-      toolCalls = choice.message.tool_calls.map(tc => ({
+      const raw: ToolCall[] = choice.message.tool_calls.map(tc => ({
         id: tc.id,
         type: 'function' as const,
         function: { name: tc.function.name, arguments: tc.function.arguments }
       }));
+      toolCalls = this.validateToolCalls(raw);
     }
 
     return {
