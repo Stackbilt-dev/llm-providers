@@ -4,7 +4,8 @@
  */
 
 import type { Logger } from './utils/logger';
-export type { Logger };
+import type { ObservabilityHooks } from './utils/hooks';
+export type { Logger, ObservabilityHooks };
 
 export interface LLMMessage {
   role: 'user' | 'assistant' | 'system';
@@ -118,6 +119,7 @@ export interface ProviderConfig {
   organization?: string;
   project?: string;
   logger?: Logger;
+  hooks?: ObservabilityHooks;
 }
 
 export interface OpenAIConfig extends ProviderConfig {

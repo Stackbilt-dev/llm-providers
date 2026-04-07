@@ -87,6 +87,28 @@ export { IMAGE_MODELS, getImageModel } from './image/index';
 export { noopLogger, consoleLogger } from './utils/logger';
 export type { Logger } from './utils/logger';
 
+// Observability hooks
+export { noopHooks, composeHooks } from './utils/hooks';
+export type {
+  ObservabilityHooks,
+  RequestStartEvent,
+  RequestEndEvent,
+  RequestErrorEvent,
+  RetryEvent,
+  FallbackEvent,
+  CircuitStateChangeEvent,
+  QuotaExhaustedEvent,
+  BudgetThresholdEvent,
+} from './utils/hooks';
+
+// Exhaustion registry
+export { ExhaustionRegistry, defaultExhaustionRegistry } from './utils/exhaustion';
+export type { ExhaustionEntry } from './utils/exhaustion';
+
+// Latency histogram
+export { LatencyHistogram, defaultLatencyHistogram } from './utils/latency-histogram';
+export type { LatencySummary } from './utils/latency-histogram';
+
 // Utility classes
 export { RetryManager, defaultRetryManager, withRetry, retry } from './utils/retry';
 export {
@@ -134,6 +156,7 @@ export interface FromEnvOverrides {
   enableRetries?: boolean;
   fallbackRules?: ProviderFactoryConfig['fallbackRules'];
   ledger?: ProviderFactoryConfig['ledger'];
+  hooks?: ProviderFactoryConfig['hooks'];
 }
 
 /**
@@ -211,6 +234,9 @@ export class LLMProviders {
     if (overrides.ledger !== undefined) {
       config.ledger = overrides.ledger;
     }
+    if (overrides.hooks !== undefined) {
+      config.hooks = overrides.hooks;
+    }
 
     return new LLMProviders(config);
   }
@@ -248,6 +274,20 @@ export class LLMProviders {
    */
   getCostAnalytics(): CostAnalytics {
     return this.factory.getCostAnalytics();
+  }
+
+  /**
+   * Get latency histogram summaries for all providers
+   */
+  getLatencyHistogram(): Record<string, import('./utils/latency-histogram').LatencySummary> {
+    return this.factory.getLatencyHistogram();
+  }
+
+  /**
+   * Get currently quota-exhausted providers
+   */
+  getExhaustedProviders(): string[] {
+    return this.factory.getExhaustedProviders();
   }
 
   /**

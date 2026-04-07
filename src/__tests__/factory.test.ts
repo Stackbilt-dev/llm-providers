@@ -9,6 +9,8 @@ import { AuthenticationError } from '../errors';
 import type { LLMRequest, LLMResponse } from '../types';
 import { defaultCostTracker } from '../utils/cost-tracker';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
+import { defaultExhaustionRegistry } from '../utils/exhaustion';
+import { defaultLatencyHistogram } from '../utils/latency-histogram';
 
 // Mock providers
 const mockOpenAIProvider = {
@@ -124,6 +126,8 @@ describe('LLMProviderFactory', () => {
     vi.clearAllMocks();
     defaultCostTracker.reset();
     defaultCircuitBreakerManager.resetAll();
+    defaultExhaustionRegistry.reset();
+    defaultLatencyHistogram.reset();
     
     factory = new LLMProviderFactory({
       openai: { apiKey: 'test-openai-key' },

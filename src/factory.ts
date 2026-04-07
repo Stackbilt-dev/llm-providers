@@ -8,6 +8,7 @@ import type {
   LLMConfig,
   LLMRequest,
   LLMResponse,
+  ProviderConfig,
   OpenAIConfig,
   AnthropicConfig,
   CloudflareConfig,
@@ -20,6 +21,8 @@ import type {
 
 import type { Logger } from './utils/logger';
 import { noopLogger } from './utils/logger';
+import type { ObservabilityHooks } from './utils/hooks';
+import { noopHooks } from './utils/hooks';
 import { OpenAIProvider } from './providers/openai';
 import { AnthropicProvider } from './providers/anthropic';
 import { CloudflareProvider } from './providers/cloudflare';
@@ -29,12 +32,15 @@ import { CostTracker, defaultCostTracker } from './utils/cost-tracker';
 import type { ProviderCostBreakdownEntry } from './utils/cost-tracker';
 import type { CreditLedger } from './utils/credit-ledger';
 import { defaultCircuitBreakerManager } from './utils/circuit-breaker';
+import { defaultExhaustionRegistry } from './utils/exhaustion';
+import { defaultLatencyHistogram } from './utils/latency-histogram';
 import {
   LLMProviderError,
   ConfigurationError,
   CircuitBreakerOpenError,
   AuthenticationError,
-  RateLimitError
+  RateLimitError,
+  QuotaExceededError,
 } from './errors';
 
 export interface ProviderFactoryConfig {
@@ -50,6 +56,7 @@ export interface ProviderFactoryConfig {
   enableRetries?: boolean;
   ledger?: CreditLedger;
   logger?: Logger;
+  hooks?: ObservabilityHooks;
 }
 
 export interface CostAnalytics {
@@ -78,10 +85,12 @@ export class LLMProviderFactory {
   private costTracker: CostTracker;
   private fallbackRules: FallbackRule[];
   private logger: Logger;
+  private hooks: ObservabilityHooks;
 
   constructor(config: ProviderFactoryConfig) {
     this.config = config;
     this.logger = config.logger ?? noopLogger;
+    this.hooks = config.hooks ?? noopHooks;
     this.costTracker = defaultCostTracker;
     this.fallbackRules = config.fallbackRules || this.getDefaultFallbackRules();
 
@@ -92,68 +101,30 @@ export class LLMProviderFactory {
    * Initialize all configured providers
    */
   private initializeProviders(): void {
-    // Initialize OpenAI provider
-    if (this.config.openai) {
-      try {
-        const provider = new OpenAIProvider({ ...this.config.openai, logger: this.logger });
-        if (provider.validateConfig()) {
-          this.providers.set('openai', provider);
-          this.logger.info('[LLMProviderFactory] OpenAI provider initialized');
-        }
-      } catch (error) {
-        this.logger.warn('[LLMProviderFactory] Failed to initialize OpenAI provider:', (error as Error).message);
-      }
-    }
+    const providerEntries: Array<[string, new (config: ProviderConfig) => LLMProvider]> = [
+      ['openai', OpenAIProvider],
+      ['anthropic', AnthropicProvider],
+      ['cloudflare', CloudflareProvider],
+      ['cerebras', CerebrasProvider],
+      ['groq', GroqProvider],
+    ];
 
-    // Initialize Anthropic provider
-    if (this.config.anthropic) {
-      try {
-        const provider = new AnthropicProvider({ ...this.config.anthropic, logger: this.logger });
-        if (provider.validateConfig()) {
-          this.providers.set('anthropic', provider);
-          this.logger.info('[LLMProviderFactory] Anthropic provider initialized');
-        }
-      } catch (error) {
-        this.logger.warn('[LLMProviderFactory] Failed to initialize Anthropic provider:', (error as Error).message);
-      }
-    }
+    for (const [name, ProviderClass] of providerEntries) {
+      const providerConfig = this.config[name as keyof ProviderFactoryConfig] as ProviderConfig | undefined;
+      if (!providerConfig) continue;
 
-    // Initialize Cloudflare provider
-    if (this.config.cloudflare) {
       try {
-        const provider = new CloudflareProvider({ ...this.config.cloudflare, logger: this.logger });
+        const provider = new ProviderClass({
+          ...providerConfig,
+          logger: this.logger,
+          hooks: this.hooks,
+        });
         if (provider.validateConfig()) {
-          this.providers.set('cloudflare', provider);
-          this.logger.info('[LLMProviderFactory] Cloudflare provider initialized');
+          this.providers.set(name, provider);
+          this.logger.info(`[LLMProviderFactory] ${name} provider initialized`);
         }
       } catch (error) {
-        this.logger.warn('[LLMProviderFactory] Failed to initialize Cloudflare provider:', (error as Error).message);
-      }
-    }
-
-    // Initialize Cerebras provider
-    if (this.config.cerebras) {
-      try {
-        const provider = new CerebrasProvider({ ...this.config.cerebras, logger: this.logger });
-        if (provider.validateConfig()) {
-          this.providers.set('cerebras', provider);
-          this.logger.info('[LLMProviderFactory] Cerebras provider initialized');
-        }
-      } catch (error) {
-        this.logger.warn('[LLMProviderFactory] Failed to initialize Cerebras provider:', (error as Error).message);
-      }
-    }
-
-    // Initialize Groq provider
-    if (this.config.groq) {
-      try {
-        const provider = new GroqProvider({ ...this.config.groq, logger: this.logger });
-        if (provider.validateConfig()) {
-          this.providers.set('groq', provider);
-          this.logger.info('[LLMProviderFactory] Groq provider initialized');
-        }
-      } catch (error) {
-        this.logger.warn('[LLMProviderFactory] Failed to initialize Groq provider:', (error as Error).message);
+        this.logger.warn(`[LLMProviderFactory] Failed to initialize ${name} provider:`, (error as Error).message);
       }
     }
 
@@ -168,11 +139,18 @@ export class LLMProviderFactory {
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     const providerChain = this.buildProviderChain(request);
     let lastError: Error | null = null;
+    let previousProvider: string | null = null;
 
     for (const providerName of providerChain) {
       try {
         const provider = this.providers.get(providerName);
         if (!provider) continue;
+
+        // Check exhaustion registry
+        if (defaultExhaustionRegistry.isExhausted(providerName)) {
+          this.logger.warn(`[LLMProviderFactory] Provider ${providerName} is quota-exhausted, skipping`);
+          continue;
+        }
 
         // Check circuit breaker
         if (this.config.enableCircuitBreaker) {
@@ -197,9 +175,43 @@ export class LLMProviderFactory {
           }
         }
 
+        // Emit fallback event if this isn't the first provider attempted
+        if (previousProvider && lastError) {
+          this.hooks.onFallback?.({
+            fromProvider: previousProvider,
+            toProvider: providerName,
+            requestId: request.requestId,
+            reason: lastError.message,
+            errorCode: (lastError as { code?: string }).code,
+            timestamp: Date.now(),
+          });
+        }
+
         this.logger.debug(`[LLMProviderFactory] Trying provider: ${providerName}`);
 
+        const model = request.model || provider.models[0] || 'unknown';
+        this.hooks.onRequestStart?.({
+          provider: providerName,
+          model,
+          requestId: request.requestId,
+          tenantId: request.tenantId,
+          timestamp: Date.now(),
+        });
+
+        const startTime = Date.now();
         const response = await provider.generateResponse(request);
+        const durationMs = Date.now() - startTime;
+
+        this.hooks.onRequestEnd?.({
+          provider: providerName,
+          model: response.model,
+          requestId: request.requestId,
+          tenantId: request.tenantId,
+          durationMs,
+          usage: response.usage,
+          finishReason: response.finishReason,
+          timestamp: Date.now(),
+        });
 
         // Track cost if enabled
         if (this.config.costOptimization) {
@@ -210,8 +222,32 @@ export class LLMProviderFactory {
         return response;
 
       } catch (error) {
-        lastError = error as Error;
-        this.logger.warn(`[LLMProviderFactory] Provider ${providerName} failed:`, (error as Error).message);
+        const err = error as Error;
+        lastError = err;
+        previousProvider = providerName;
+        this.logger.warn(`[LLMProviderFactory] Provider ${providerName} failed:`, err.message);
+
+        this.hooks.onRequestError?.({
+          provider: providerName,
+          model: request.model || 'unknown',
+          requestId: request.requestId,
+          tenantId: request.tenantId,
+          error: err,
+          errorCode: (err as { code?: string }).code,
+          attempt: 1,
+          willRetry: this.shouldFallback(err),
+          timestamp: Date.now(),
+        });
+
+        // Auto-mark quota-exhausted providers
+        if (err instanceof QuotaExceededError) {
+          defaultExhaustionRegistry.markExhausted(providerName);
+          this.hooks.onQuotaExhausted?.({
+            provider: providerName,
+            resetAfterMs: defaultExhaustionRegistry.defaultResetMs,
+            timestamp: Date.now(),
+          });
+        }
 
         // Check if we should continue trying other providers
         if (!this.shouldFallback(error as Error)) {
@@ -505,7 +541,21 @@ export class LLMProviderFactory {
   }
 
   /**
-   * Reset all provider metrics and circuit breakers
+   * Get latency histogram data for all providers
+   */
+  getLatencyHistogram(): Record<string, import('./utils/latency-histogram').LatencySummary> {
+    return defaultLatencyHistogram.allSummaries();
+  }
+
+  /**
+   * Get currently exhausted providers
+   */
+  getExhaustedProviders(): string[] {
+    return defaultExhaustionRegistry.getExhaustedProviders();
+  }
+
+  /**
+   * Reset all provider metrics, circuit breakers, exhaustion, and histograms
    */
   reset(): void {
     for (const [name, provider] of this.providers) {
@@ -518,6 +568,9 @@ export class LLMProviderFactory {
     if (this.config.costOptimization) {
       this.costTracker.reset();
     }
+
+    defaultExhaustionRegistry.reset();
+    defaultLatencyHistogram.reset();
   }
 
   /**

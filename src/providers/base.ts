@@ -17,6 +17,7 @@ import { noopLogger } from '../utils/logger';
 import { RetryManager } from '../utils/retry';
 import { CircuitBreaker, defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { CostTracker } from '../utils/cost-tracker';
+import { defaultLatencyHistogram } from '../utils/latency-histogram';
 import { ConfigurationError, TimeoutError, InvalidRequestError } from '../errors';
 
 export abstract class BaseProvider implements LLMProvider {
@@ -161,6 +162,9 @@ export abstract class BaseProvider implements LLMProvider {
     this.metrics.averageLatency = (totalLatency + measuredLatency) / this.metrics.requestCount;
 
     this.metrics.totalCost += cost;
+
+    // Record to latency histogram for percentile tracking
+    defaultLatencyHistogram.record(this.name, measuredLatency);
   }
 
   /**

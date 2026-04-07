@@ -61,23 +61,36 @@ export class CostTracker {
    */
   trackCost(provider: string, response: LLMResponse): void {
     if (!response.usage) return;
+    this.record(
+      provider,
+      response.usage.cost || 0,
+      response.usage.inputTokens,
+      response.usage.outputTokens,
+      response.model || 'unknown',
+    );
+  }
 
+  /**
+   * Record cost directly without requiring a full LLMResponse.
+   * This is the simplified API — callers pass provider + cost + tokens.
+   */
+  record(
+    provider: string,
+    cost: number,
+    inputTokens: number = 0,
+    outputTokens: number = 0,
+    model: string = 'unknown',
+  ): void {
     // Delegate to CreditLedger when present
     if (this.ledger) {
-      this.ledger.record(
-        provider,
-        response.model || 'unknown',
-        response.usage.cost || 0,
-        response.usage.inputTokens,
-        response.usage.outputTokens,
-      );
+      this.ledger.record(provider, model, cost, inputTokens, outputTokens);
     }
 
     const entry = this.providers.get(provider) || this.createProviderEntry();
-    entry.totalCost += response.usage.cost || 0;
+    entry.totalCost += cost;
     entry.requestCount++;
-    entry.inputTokens += response.usage.inputTokens;
-    entry.outputTokens += response.usage.outputTokens;
+    entry.inputTokens += inputTokens;
+    entry.outputTokens += outputTokens;
     entry.lastRecordedAt = Date.now();
     this.providers.set(provider, entry);
 
