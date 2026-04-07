@@ -6,3 +6,8 @@ dist/
 .DS_Store
 coverage/
 .turbo/
+# cc-taskrunner worktree protection
+C:*
+node_modules/
+.pnpm-store/
+__pycache__/
