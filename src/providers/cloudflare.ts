@@ -429,7 +429,7 @@ export class CloudflareProvider extends BaseProvider {
     };
 
     if (toolCalls.length > 0) {
-      response.toolCalls = toolCalls;
+      response.toolCalls = this.validateToolCalls(toolCalls);
     }
 
     return response;

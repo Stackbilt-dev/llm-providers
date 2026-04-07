@@ -3,7 +3,7 @@
  * Implementation for Claude models with streaming and tools support
  */
 
-import type { LLMRequest, LLMResponse, AnthropicConfig, ModelCapabilities, Tool } from '../types';
+import type { LLMRequest, LLMResponse, AnthropicConfig, ModelCapabilities, Tool, ToolCall } from '../types';
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
@@ -420,17 +420,18 @@ export class AnthropicProvider extends BaseProvider {
       }
     };
 
-    // Extract tool calls if present
+    // Extract tool calls if present (validated at provider boundary)
     const toolUses = data.content.filter(block => block.type === 'tool_use');
     if (toolUses.length > 0) {
-      response.toolCalls = toolUses.map(tool => ({
+      const raw: ToolCall[] = toolUses.map(tool => ({
         id: tool.id!,
-        type: 'function',
+        type: 'function' as const,
         function: {
           name: tool.name!,
           arguments: JSON.stringify(tool.input)
         }
       }));
+      response.toolCalls = this.validateToolCalls(raw);
     }
 
     return response;
