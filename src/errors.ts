@@ -127,6 +127,33 @@ export class ToolLoopAbortedError extends LLMProviderError {
 }
 
 /**
+ * Thrown when a provider's response envelope fails runtime schema validation.
+ *
+ * Indicates the upstream API silently changed shape - a field was renamed,
+ * removed, or had its type changed. Non-retryable: retrying hits the same
+ * broken shape. The factory treats this as fallback-eligible so traffic
+ * routes to a healthy provider while the drift is investigated.
+ */
+export class SchemaDriftError extends LLMProviderError {
+  path: string;
+  expected: string;
+  actual: string;
+
+  constructor(provider: string, path: string, expected: string, actual: string) {
+    super(
+      `Response schema drift at ${path}: expected ${expected}, got ${actual}`,
+      'SCHEMA_DRIFT',
+      provider,
+      false,
+      502
+    );
+    this.path = path;
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
+/**
  * Error factory for creating provider-specific errors from HTTP responses
  */
 /** Shape of error response bodies across all LLM providers. */

@@ -19,6 +19,22 @@ import {
   ModelNotFoundError,
   RateLimitError
 } from '../errors';
+import { validateSchema, type SchemaField } from '../utils/schema-validator';
+
+/**
+ * Minimum envelope fields the Anthropic response parser reads. Changing this
+ * list is a contract change — keep it in sync with formatResponse below.
+ * Optional fields (e.g. stop_sequence) are not listed.
+ */
+const ANTHROPIC_RESPONSE_SCHEMA: SchemaField[] = [
+  { path: 'id', type: 'string' },
+  { path: 'content', type: 'array' },
+  { path: 'model', type: 'string' },
+  { path: 'stop_reason', type: 'string' },
+  { path: 'usage', type: 'object' },
+  { path: 'usage.input_tokens', type: 'number' },
+  { path: 'usage.output_tokens', type: 'number' },
+];
 
 interface AnthropicContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'image';
@@ -132,8 +148,9 @@ export class AnthropicProvider extends BaseProvider {
           throw await LLMErrorFactory.fromFetchResponse('anthropic', httpResponse);
         }
 
-        const data: AnthropicResponse = await httpResponse.json();
-        const formatted = this.formatResponse(data, Date.now() - startTime);
+        const data = await httpResponse.json() as unknown;
+        validateSchema('anthropic', data, ANTHROPIC_RESPONSE_SCHEMA);
+        const formatted = this.formatResponse(data as AnthropicResponse, Date.now() - startTime);
 
         // Restore the prefilled '{' consumed by the assistant turn,
         // but only if the response doesn't already start with one

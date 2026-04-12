@@ -112,6 +112,16 @@ export interface ProviderBalanceEvent {
   timestamp: number;
 }
 
+export interface SchemaDriftEvent {
+  provider: string;
+  model?: string;
+  requestId?: string;
+  path: string;
+  expected: string;
+  actual: string;
+  timestamp: number;
+}
+
 // ── Hooks interface ──────────────────────────────────────────────────────
 
 export interface ObservabilityHooks {
@@ -126,6 +136,7 @@ export interface ObservabilityHooks {
   onQuotaCheck?(event: QuotaCheckEvent): void;
   onQuotaDenied?(event: QuotaDeniedEvent): void;
   onProviderBalance?(event: ProviderBalanceEvent): void;
+  onSchemaDrift?(event: SchemaDriftEvent): void;
 }
 
 /** Silent hooks — default. */
@@ -140,7 +151,7 @@ export function composeHooks(...implementations: ObservabilityHooks[]): Observab
     'onRequestStart', 'onRequestEnd', 'onRequestError',
     'onRetry', 'onFallback', 'onCircuitStateChange',
     'onQuotaExhausted', 'onBudgetThreshold', 'onQuotaCheck',
-    'onQuotaDenied', 'onProviderBalance',
+    'onQuotaDenied', 'onProviderBalance', 'onSchemaDrift',
   ] as const;
 
   const composed: ObservabilityHooks = {};
