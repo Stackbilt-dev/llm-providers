@@ -15,6 +15,19 @@ export interface LLMMessage {
   toolResults?: ToolResult[];
 }
 
+export interface LLMImageInput {
+  data?: string;
+  url?: string;
+  mimeType?: string;
+}
+
+export interface GatewayMetadata {
+  requestId?: string;
+  cacheKey?: string;
+  cacheTtl?: number;
+  customMetadata?: Record<string, string>;
+}
+
 export interface ToolCall {
   id: string;
   type: 'function';
@@ -37,9 +50,12 @@ export interface LLMRequest {
   maxTokens?: number;
   stream?: boolean;
   systemPrompt?: string;
+  images?: LLMImageInput[];
   tools?: Tool[];
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   response_format?: { type: 'json_object' | 'text' };
+  seed?: number;
+  gatewayMetadata?: GatewayMetadata;
   tenantId?: string;
   requestId?: string;
   metadata?: Record<string, unknown>;
@@ -84,8 +100,11 @@ export interface LLMProvider {
   supportsStreaming: boolean;
   supportsTools: boolean;
   supportsBatching: boolean;
+  supportsVision?: boolean;
 
   generateResponse(request: LLMRequest): Promise<LLMResponse>;
+  streamResponse?(request: LLMRequest): Promise<ReadableStream<string>>;
+  getProviderBalance?(): Promise<ProviderBalance>;
   validateConfig(): boolean;
   getModels(): string[];
   estimateCost(request: LLMRequest): number;
@@ -211,6 +230,7 @@ export interface ModelCapabilities {
   maxContextLength: number;
   supportsStreaming: boolean;
   supportsTools: boolean;
+  supportsVision?: boolean;
   toolCalling?: boolean;
   supportsBatching: boolean;
   inputTokenCost: number;
@@ -243,6 +263,103 @@ export interface StreamChunk {
 export interface StreamResponse {
   stream: ReadableStream<StreamChunk>;
   controller: ReadableStreamDefaultController<StreamChunk>;
+}
+
+export interface QuotaCheckInput {
+  tenantId?: string;
+  provider: string;
+  model: string;
+  estimatedCost: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface QuotaCheckResult {
+  allowed: boolean;
+  reason?: string;
+  remainingBudget?: number;
+}
+
+export interface QuotaRecordInput {
+  tenantId?: string;
+  provider: string;
+  model: string;
+  actualCost: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface QuotaHook {
+  check(input: QuotaCheckInput): Promise<QuotaCheckResult>;
+  record(input: QuotaRecordInput): Promise<void>;
+}
+
+export interface ToolExecutor {
+  execute(name: string, argumentsValue: unknown): Promise<unknown>;
+}
+
+export interface ToolLoopState {
+  iteration: number;
+  cumulativeCost: number;
+  messageCount: number;
+  lastToolCalls: ToolCall[];
+}
+
+export interface ToolLoopOptions {
+  maxIterations?: number;
+  maxCostUSD?: number;
+  onIteration?: (iteration: number, state: ToolLoopState) => void | Promise<void>;
+  abortSignal?: AbortSignal;
+}
+
+export interface ClassifyOptions<T = unknown> {
+  schema?: Record<string, unknown> | { parse(data: unknown): T };
+  systemPrompt?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  confidenceField?: string;
+  seed?: number;
+}
+
+export interface ClassifyResult<T = unknown> {
+  data: T;
+  confidence?: number;
+  response: LLMResponse;
+}
+
+export interface AnalyzeImageInput {
+  image: LLMImageInput;
+  prompt: string;
+  model?: string;
+  systemPrompt?: string;
+  temperature?: number;
+  maxTokens?: number;
+  response_format?: LLMRequest['response_format'];
+  tenantId?: string;
+  requestId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RateLimitBalance {
+  limit?: number;
+  used?: number;
+  remaining?: number;
+}
+
+export interface ProviderBalance {
+  provider: string;
+  status: 'available' | 'unavailable' | 'error';
+  source: 'provider_api' | 'ledger' | 'headers' | 'not_supported';
+  currentSpend?: number;
+  monthlyBudget?: number;
+  remainingBudget?: number;
+  usedTokens?: number;
+  requestCount?: number;
+  rateLimits?: Record<string, RateLimitBalance>;
+  resetAt?: string;
+  message?: string;
+  raw?: unknown;
 }
 
 // Batch processing

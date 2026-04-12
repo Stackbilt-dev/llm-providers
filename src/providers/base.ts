@@ -5,6 +5,7 @@
 
 import type {
   LLMProvider,
+  LLMImageInput,
   LLMRequest,
   LLMResponse,
   ProviderConfig,
@@ -265,10 +266,60 @@ export abstract class BaseProvider implements LLMProvider {
     // Validate model if specified
     if (request.model && !this.models.includes(request.model)) {
       throw new ConfigurationError(
-        this.name, 
+        this.name,
         `Model '${request.model}' not supported. Available models: ${this.models.join(', ')}`
       );
     }
+
+    if (request.images) {
+      for (const image of request.images) {
+        this.validateImageInput(image);
+      }
+    }
+  }
+
+  protected estimateTextTokens(request: LLMRequest): number {
+    return (
+      (request.systemPrompt ? Math.ceil(request.systemPrompt.length / 4) : 0) +
+      request.messages.reduce((sum, msg) => sum + Math.ceil(msg.content.length / 4), 0)
+    );
+  }
+
+  protected validateImageInput(image: LLMImageInput): void {
+    if (!image.data && !image.url) {
+      throw new ConfigurationError(this.name, 'Image input must include data or url');
+    }
+
+    if (image.data && !image.mimeType) {
+      throw new ConfigurationError(this.name, 'Base64 image input must include mimeType');
+    }
+  }
+
+  protected getAIGatewayHeaders(request?: LLMRequest): Record<string, string> {
+    const baseUrl = typeof this.config.baseUrl === 'string' ? this.config.baseUrl : '';
+    if (!baseUrl.includes('gateway.ai.cloudflare.com') || !request?.gatewayMetadata) {
+      return {};
+    }
+
+    const headers: Record<string, string> = {};
+    const metadata = {
+      ...(request.gatewayMetadata.customMetadata ?? {}),
+      ...(request.gatewayMetadata.requestId ? { requestId: request.gatewayMetadata.requestId } : {}),
+      ...(request.requestId ? { llmRequestId: request.requestId } : {}),
+      ...(request.tenantId ? { tenantId: request.tenantId } : {}),
+    };
+
+    if (Object.keys(metadata).length > 0) {
+      headers['cf-aig-metadata'] = JSON.stringify(metadata);
+    }
+    if (request.gatewayMetadata.cacheKey) {
+      headers['cf-aig-cache-key'] = request.gatewayMetadata.cacheKey;
+    }
+    if (typeof request.gatewayMetadata.cacheTtl === 'number') {
+      headers['cf-aig-cache-ttl'] = String(request.gatewayMetadata.cacheTtl);
+    }
+
+    return headers;
   }
 
   /**

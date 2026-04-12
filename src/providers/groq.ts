@@ -3,7 +3,7 @@
  * Implementation for Groq fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ToolCall } from '../types';
+import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall } from '../types';
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
@@ -36,6 +36,7 @@ interface GroqRequest {
   response_format?: { type: 'json_object' | 'text' };
   tools?: GroqTool[];
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  seed?: number;
 }
 
 interface GroqResponse {
@@ -103,7 +104,7 @@ export class GroqProvider extends BaseProvider {
     try {
       const response = await this.executeWithResiliency(async () => {
         const groqRequest = this.formatRequest(request);
-        const httpResponse = await this.makeGroqRequest('/chat/completions', groqRequest);
+        const httpResponse = await this.makeGroqRequest('/chat/completions', groqRequest, 'POST', request);
 
         if (!httpResponse.ok) {
           throw await LLMErrorFactory.fromFetchResponse('groq', httpResponse);
@@ -156,6 +157,15 @@ export class GroqProvider extends BaseProvider {
     }
   }
 
+  async getProviderBalance(): Promise<ProviderBalance> {
+    return {
+      provider: this.name,
+      status: 'unavailable',
+      source: 'not_supported',
+      message: 'Groq does not expose a public billing or credit-balance API; use CreditLedger reporting for local quota state.'
+    };
+  }
+
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
     return {
       'llama-3.3-70b-versatile': {
@@ -199,7 +209,7 @@ export class GroqProvider extends BaseProvider {
     return new ReadableStream({
       start: async (controller) => {
         try {
-          const response = await this.makeGroqRequest('/chat/completions', groqRequest);
+          const response = await this.makeGroqRequest('/chat/completions', groqRequest, 'POST', request);
 
           if (!response.ok) {
             throw await LLMErrorFactory.fromFetchResponse('groq', response);
@@ -256,11 +266,13 @@ export class GroqProvider extends BaseProvider {
   private async makeGroqRequest(
     endpoint: string,
     body: GroqRequest | null,
-    method: string = 'POST'
+    method: string = 'POST',
+    request?: LLMRequest
   ): Promise<Response> {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.apiKey}`,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      ...this.getAIGatewayHeaders(request)
     };
 
     const options: RequestInit = {
@@ -339,7 +351,8 @@ export class GroqProvider extends BaseProvider {
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
-      stream: request.stream
+      stream: request.stream,
+      seed: request.seed
     };
 
     // Pass through response_format if provided
