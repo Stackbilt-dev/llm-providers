@@ -411,36 +411,49 @@ describe('SchemaDriftError and circuit breaker', () => {
   });
 
   it('repeated drift trips the circuit breaker open (M-1)', async () => {
-    const provider = new AnthropicProvider({ apiKey: 'test-key', maxRetries: 0 });
+    // The default breaker uses a graduated degradation curve with a
+    // probabilistic rejection gate at DEGRADED levels. To get deterministic
+    // progression all the way to OPEN, stub Math.random so the gate always
+    // admits the request through to fn() - where the drift throws and the
+    // breaker advances one failure. Without this stub, the test is racy:
+    // locally it would pass by luck, CI would fail when the random sequence
+    // bounced attempts off the degradation gate without advancing.
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
 
-    // Return drifted response every call — missing usage.input_tokens
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        id: 'msg_1', type: 'message', role: 'assistant',
-        content: [],
-        model: 'claude-3-haiku-20240307',
-        stop_reason: 'end_turn',
-        usage: { output_tokens: 5 },
-      }),
-      headers: new Headers({ 'content-type': 'application/json' }),
-    });
+    try {
+      const provider = new AnthropicProvider({ apiKey: 'test-key', maxRetries: 0 });
 
-    // Hit the provider until something opens the breaker. Default threshold
-    // is low enough that this is bounded; 10 tries is plenty of headroom.
-    for (let i = 0; i < 10; i++) {
-      try {
-        await provider.generateResponse({
-          messages: [{ role: 'user', content: 'hi' }],
+      // Return drifted response every call - missing usage.input_tokens
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 'msg_1', type: 'message', role: 'assistant',
+          content: [],
           model: 'claude-3-haiku-20240307',
-        });
-      } catch {
-        // Expected — drift or circuit-open
-      }
-    }
+          stop_reason: 'end_turn',
+          usage: { output_tokens: 5 },
+        }),
+        headers: new Headers({ 'content-type': 'application/json' }),
+      });
 
-    const breaker = defaultCircuitBreakerManager.getBreaker('anthropic');
-    expect(breaker.getState().state).toBe('OPEN');
+      // Default failureThreshold = 5. 10 attempts is more than enough with
+      // the probabilistic gate pinned open.
+      for (let i = 0; i < 10; i++) {
+        try {
+          await provider.generateResponse({
+            messages: [{ role: 'user', content: 'hi' }],
+            model: 'claude-3-haiku-20240307',
+          });
+        } catch {
+          // Expected - drift or circuit-open
+        }
+      }
+
+      const breaker = defaultCircuitBreakerManager.getBreaker('anthropic');
+      expect(breaker.getState().state).toBe('OPEN');
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 });
 
