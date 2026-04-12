@@ -3,7 +3,15 @@
  * Implementation for Claude models with streaming and tools support
  */
 
-import type { LLMRequest, LLMResponse, AnthropicConfig, ModelCapabilities, Tool, ToolCall } from '../types';
+import type {
+  LLMRequest,
+  LLMResponse,
+  AnthropicConfig,
+  ModelCapabilities,
+  ProviderBalance,
+  Tool,
+  ToolCall
+} from '../types';
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
@@ -13,13 +21,18 @@ import {
 } from '../errors';
 
 interface AnthropicContentBlock {
-  type: 'text' | 'tool_use' | 'tool_result';
+  type: 'text' | 'tool_use' | 'tool_result' | 'image';
   text?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
   content?: string;
   is_error?: boolean;
+  source?: {
+    type: 'base64';
+    media_type: string;
+    data: string;
+  };
 }
 
 interface AnthropicMessage {
@@ -86,6 +99,7 @@ export class AnthropicProvider extends BaseProvider {
   supportsStreaming = true;
   supportsTools = true;
   supportsBatching = false;
+  supportsVision = true;
 
   private apiKey: string;
   private baseUrl: string;
@@ -112,7 +126,7 @@ export class AnthropicProvider extends BaseProvider {
     try {
       const response = await this.executeWithResiliency(async () => {
         const anthropicRequest = this.formatRequest(request);
-        const httpResponse = await this.makeAnthropicRequest('/v1/messages', anthropicRequest);
+        const httpResponse = await this.makeAnthropicRequest('/v1/messages', anthropicRequest, 'POST', request);
 
         if (!httpResponse.ok) {
           throw await LLMErrorFactory.fromFetchResponse('anthropic', httpResponse);
@@ -178,12 +192,42 @@ export class AnthropicProvider extends BaseProvider {
     }
   }
 
+  async getProviderBalance(): Promise<ProviderBalance> {
+    try {
+      const response = await this.makeAnthropicRequest('/v1/organizations/cost_report', null, 'GET');
+      if (!response.ok) {
+        return {
+          provider: this.name,
+          status: 'unavailable',
+          source: 'provider_api',
+          message: `Anthropic usage API returned HTTP ${response.status}`
+        };
+      }
+
+      const raw = await response.json();
+      return {
+        provider: this.name,
+        status: 'available',
+        source: 'provider_api',
+        raw
+      };
+    } catch (error) {
+      return {
+        provider: this.name,
+        status: 'error',
+        source: 'provider_api',
+        message: (error as Error).message
+      };
+    }
+  }
+
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
     return {
       'claude-opus-4-6-20250618': {
         maxContextLength: 200000,
         supportsStreaming: true,
         supportsTools: true,
+        supportsVision: true,
         supportsBatching: false,
         inputTokenCost: 0.015, // $15 per 1M tokens
         outputTokenCost: 0.075, // $75 per 1M tokens
@@ -193,6 +237,7 @@ export class AnthropicProvider extends BaseProvider {
         maxContextLength: 200000,
         supportsStreaming: true,
         supportsTools: true,
+        supportsVision: true,
         supportsBatching: false,
         inputTokenCost: 0.003, // $3 per 1M tokens
         outputTokenCost: 0.015, // $15 per 1M tokens
@@ -285,12 +330,14 @@ export class AnthropicProvider extends BaseProvider {
   private async makeAnthropicRequest(
     endpoint: string,
     body: AnthropicRequest | null,
-    method: string = 'POST'
+    method: string = 'POST',
+    request?: LLMRequest
   ): Promise<Response> {
     const headers: Record<string, string> = {
       'x-api-key': this.apiKey,
       'anthropic-version': this.version,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      ...this.getAIGatewayHeaders(request)
     };
 
     const options: RequestInit = {
@@ -315,7 +362,7 @@ export class AnthropicProvider extends BaseProvider {
 
       const anthropicMessage: AnthropicMessage = {
         role: message.role as 'user' | 'assistant',
-        content: message.content
+        content: this.formatMessageContent(message.content, message.role === 'user' ? request.images : undefined)
       };
 
       // Handle tool calls and results
@@ -383,6 +430,36 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     return anthropicRequest;
+  }
+
+  private formatMessageContent(
+    text: string,
+    images?: LLMRequest['images']
+  ): string | AnthropicContentBlock[] {
+    if (!images || images.length === 0) {
+      return text;
+    }
+
+    return [
+      { type: 'text', text },
+      ...images.map(image => {
+        if (image.url) {
+          return {
+            type: 'text' as const,
+            text: `[Image URL: ${image.url}]`
+          };
+        }
+
+        return {
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: image.mimeType || 'image/jpeg',
+            data: image.data || ''
+          }
+        };
+      })
+    ];
   }
 
   private formatResponse(
@@ -461,7 +538,7 @@ export class AnthropicProvider extends BaseProvider {
     return new ReadableStream({
       start: async (controller) => {
         try {
-          const response = await this.makeAnthropicRequest('/v1/messages', anthropicRequest);
+          const response = await this.makeAnthropicRequest('/v1/messages', anthropicRequest, 'POST', request);
 
           if (!response.ok) {
             throw await LLMErrorFactory.fromFetchResponse('anthropic', response);

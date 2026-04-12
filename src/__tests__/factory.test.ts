@@ -21,6 +21,7 @@ const mockOpenAIProvider = {
   supportsStreaming: true,
   supportsTools: true,
   supportsBatching: true,
+  supportsVision: true,
   generateResponse: vi.fn().mockResolvedValue({
     message: 'OpenAI response',
     usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.001 },
@@ -28,6 +29,8 @@ const mockOpenAIProvider = {
     provider: 'openai',
     responseTime: 1000
   } as LLMResponse),
+  streamResponse: vi.fn(),
+  getProviderBalance: vi.fn(),
   validateConfig: vi.fn().mockReturnValue(true),
   getModels: vi.fn().mockReturnValue(['gpt-4', 'gpt-3.5-turbo']),
   estimateCost: vi.fn().mockReturnValue(0.001),
@@ -50,6 +53,7 @@ const mockAnthropicProvider = {
   supportsStreaming: true,
   supportsTools: true,
   supportsBatching: false,
+  supportsVision: true,
   generateResponse: vi.fn().mockResolvedValue({
     message: 'Anthropic response',
     usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.002 },
@@ -57,6 +61,8 @@ const mockAnthropicProvider = {
     provider: 'anthropic',
     responseTime: 1200
   } as LLMResponse),
+  streamResponse: vi.fn(),
+  getProviderBalance: vi.fn(),
   validateConfig: vi.fn().mockReturnValue(true),
   getModels: vi.fn().mockReturnValue(['claude-3-haiku-20240307', 'claude-3-sonnet-20240229']),
   estimateCost: vi.fn().mockReturnValue(0.002),
@@ -79,6 +85,7 @@ const mockCloudflareProvider = {
   supportsStreaming: true,
   supportsTools: false,
   supportsBatching: true,
+  supportsVision: false,
   generateResponse: vi.fn().mockResolvedValue({
     message: 'Cloudflare response',
     usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.0001 },
@@ -86,6 +93,8 @@ const mockCloudflareProvider = {
     provider: 'cloudflare',
     responseTime: 800
   } as LLMResponse),
+  streamResponse: vi.fn(),
+  getProviderBalance: vi.fn(),
   validateConfig: vi.fn().mockReturnValue(true),
   getModels: vi.fn().mockReturnValue(['@cf/meta/llama-3.1-8b-instruct']),
   estimateCost: vi.fn().mockReturnValue(0.0001),
@@ -138,6 +147,17 @@ describe('LLMProviderFactory', () => {
       provider: 'openai',
       responseTime: 1000
     } as LLMResponse);
+    mockOpenAIProvider.streamResponse.mockReset().mockResolvedValue(new ReadableStream<string>({
+      start(controller) {
+        controller.enqueue('OpenAI stream');
+        controller.close();
+      }
+    }));
+    mockOpenAIProvider.getProviderBalance.mockReset().mockResolvedValue({
+      provider: 'openai',
+      status: 'available',
+      source: 'provider_api'
+    });
     mockAnthropicProvider.generateResponse.mockReset().mockResolvedValue({
       message: 'Anthropic response',
       usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.002 },
@@ -145,6 +165,17 @@ describe('LLMProviderFactory', () => {
       provider: 'anthropic',
       responseTime: 1200
     } as LLMResponse);
+    mockAnthropicProvider.streamResponse.mockReset().mockResolvedValue(new ReadableStream<string>({
+      start(controller) {
+        controller.enqueue('Anthropic stream');
+        controller.close();
+      }
+    }));
+    mockAnthropicProvider.getProviderBalance.mockReset().mockResolvedValue({
+      provider: 'anthropic',
+      status: 'available',
+      source: 'provider_api'
+    });
     mockCloudflareProvider.generateResponse.mockReset().mockResolvedValue({
       message: 'Cloudflare response',
       usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.0001 },
@@ -152,6 +183,17 @@ describe('LLMProviderFactory', () => {
       provider: 'cloudflare',
       responseTime: 800
     } as LLMResponse);
+    mockCloudflareProvider.streamResponse.mockReset().mockResolvedValue(new ReadableStream<string>({
+      start(controller) {
+        controller.enqueue('Cloudflare stream');
+        controller.close();
+      }
+    }));
+    mockCloudflareProvider.getProviderBalance.mockReset().mockResolvedValue({
+      provider: 'cloudflare',
+      status: 'unavailable',
+      source: 'not_supported'
+    });
 
     factory = new LLMProviderFactory({
       openai: { apiKey: 'test-openai-key' },
@@ -348,6 +390,169 @@ describe('LLMProviderFactory', () => {
     });
   });
 
+  describe('Streaming, tools, classification, and vision', () => {
+    async function readStream(stream: ReadableStream<string>): Promise<string> {
+      const reader = stream.getReader();
+      let output = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        output += value;
+      }
+      return output;
+    }
+
+    it('should stream through the factory and fallback before the first chunk', async () => {
+      const streamFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        anthropic: { apiKey: 'test-anthropic-key' },
+        defaultProvider: 'openai',
+        costOptimization: false,
+        fallbackRules: [{ condition: 'error', fallbackProvider: 'anthropic' }]
+      });
+
+      mockOpenAIProvider.streamResponse.mockRejectedValueOnce(new Error('stream start failed'));
+
+      const stream = await streamFactory.generateResponseStream(testRequest);
+
+      expect(await readStream(stream)).toBe('Anthropic stream');
+      expect(mockOpenAIProvider.streamResponse).toHaveBeenCalled();
+      expect(mockAnthropicProvider.streamResponse).toHaveBeenCalled();
+    });
+
+    it('should call quota hooks before and after successful dispatch', async () => {
+      const quotaHook = {
+        check: vi.fn().mockResolvedValue({ allowed: true, remainingBudget: 1 }),
+        record: vi.fn().mockResolvedValue(undefined)
+      };
+      const quotaFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'openai',
+        costOptimization: false,
+        quotaHook
+      });
+
+      await quotaFactory.generateResponse({ ...testRequest, tenantId: 'tenant-1' });
+
+      expect(quotaHook.check).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId: 'tenant-1',
+        provider: 'openai',
+        model: 'gpt-4'
+      }));
+      expect(quotaHook.record).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId: 'tenant-1',
+        provider: 'openai',
+        actualCost: 0.001,
+        inputTokens: 10,
+        outputTokens: 20
+      }));
+    });
+
+    it('should deny dispatch when quota hook rejects the request', async () => {
+      const quotaFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'openai',
+        costOptimization: false,
+        quotaHook: {
+          check: vi.fn().mockResolvedValue({ allowed: false, reason: 'budget exhausted' }),
+          record: vi.fn()
+        }
+      });
+
+      await expect(quotaFactory.generateResponse(testRequest)).rejects.toThrow('budget exhausted');
+      expect(mockOpenAIProvider.generateResponse).not.toHaveBeenCalled();
+    });
+
+    it('should execute tool loops until the final response has no tool calls', async () => {
+      const toolResponse: LLMResponse = {
+        message: '',
+        usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10, cost: 0.001 },
+        model: 'gpt-3.5-turbo',
+        provider: 'openai',
+        responseTime: 10,
+        finishReason: 'tool_calls',
+        toolCalls: [{
+          id: 'call-1',
+          type: 'function',
+          function: { name: 'lookup', arguments: '{"id":42}' }
+        }]
+      };
+      const finalResponse: LLMResponse = {
+        message: 'done',
+        usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10, cost: 0.001 },
+        model: 'gpt-3.5-turbo',
+        provider: 'openai',
+        responseTime: 10
+      };
+      mockOpenAIProvider.generateResponse
+        .mockResolvedValueOnce(toolResponse)
+        .mockResolvedValueOnce(finalResponse);
+
+      const loopFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'openai',
+        costOptimization: false
+      });
+      const executor = { execute: vi.fn().mockResolvedValue({ value: 42 }) };
+
+      const response = await loopFactory.generateResponseWithTools(testRequest, executor);
+
+      expect(response.message).toBe('done');
+      expect(executor.execute).toHaveBeenCalledWith('lookup', { id: 42 });
+      expect(mockOpenAIProvider.generateResponse).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              toolResults: [{ id: 'call-1', output: '{"value":42}' }]
+            })
+          ])
+        })
+      );
+    });
+
+    it('should classify JSON responses and expose confidence', async () => {
+      mockOpenAIProvider.generateResponse.mockResolvedValueOnce({
+        message: '{"label":"recipe","confidence":0.92}',
+        usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10, cost: 0.001 },
+        model: 'gpt-3.5-turbo',
+        provider: 'openai',
+        responseTime: 10
+      } as LLMResponse);
+
+      const classifyFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'openai',
+        costOptimization: false
+      });
+
+      const result = await classifyFactory.classify<{ label: string; confidence: number }>('classify this');
+
+      expect(result.data.label).toBe('recipe');
+      expect(result.confidence).toBe(0.92);
+    });
+
+    it('should route image analysis to a vision-capable provider', async () => {
+      const visionFactory = new LLMProviderFactory({
+        anthropic: { apiKey: 'test-anthropic-key' },
+        cloudflare: { ai: {} as Ai },
+        costOptimization: false
+      });
+
+      await visionFactory.analyzeImage({
+        image: { data: 'abc123', mimeType: 'image/jpeg' },
+        prompt: 'Extract recipe text'
+      });
+
+      expect(mockAnthropicProvider.generateResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          images: [{ data: 'abc123', mimeType: 'image/jpeg' }],
+          model: 'claude-haiku-4-5-20251001'
+        })
+      );
+      expect(mockCloudflareProvider.generateResponse).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Error Handling', () => {
     it('should handle all providers failing', async () => {
       // Make all providers fail
@@ -448,6 +653,33 @@ describe('LLMProviderFactory', () => {
       expect(accumulator!.rateLimits.rpd!.used).toBe(1);
       expect(accumulator!.rateLimits.tpm!.used).toBe(30);
       expect(accumulator!.rateLimits.tpd!.used).toBe(30);
+    });
+
+    it('should expose provider balance from the configured ledger', async () => {
+      const ledger = new CreditLedger({
+        budgets: [{
+          provider: 'cloudflare',
+          monthlyBudget: 1,
+          rateLimits: { rpm: 10 }
+        }]
+      });
+      const balanceFactory = new LLMProviderFactory({
+        cloudflare: { ai: {} as Ai },
+        ledger
+      });
+
+      await balanceFactory.generateResponse(testRequest);
+      const balance = await balanceFactory.getProviderBalance('cloudflare');
+
+      expect(balance).toMatchObject({
+        provider: 'cloudflare',
+        status: 'available',
+        source: 'ledger',
+        currentSpend: 0.0001,
+        monthlyBudget: 1,
+        requestCount: 1
+      });
+      expect((balance as { rateLimits: Record<string, { used: number }> }).rateLimits.rpm.used).toBe(1);
     });
   });
 });

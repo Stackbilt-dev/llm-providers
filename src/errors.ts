@@ -114,6 +114,18 @@ export class CircuitBreakerOpenError extends LLMProviderError {
   }
 }
 
+export class ToolLoopLimitError extends LLMProviderError {
+  constructor(provider: string, message: string = 'Tool loop limit exceeded') {
+    super(message, 'TOOL_LOOP_LIMIT', provider, false, 400);
+  }
+}
+
+export class ToolLoopAbortedError extends LLMProviderError {
+  constructor(provider: string, message: string = 'Tool loop aborted') {
+    super(message, 'TOOL_LOOP_ABORTED', provider, false, 400);
+  }
+}
+
 /**
  * Error factory for creating provider-specific errors from HTTP responses
  */

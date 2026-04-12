@@ -8,6 +8,9 @@ import type {
   LLMConfig,
   LLMRequest,
   LLMResponse,
+  AnalyzeImageInput,
+  ClassifyOptions,
+  ClassifyResult,
   ProviderConfig,
   OpenAIConfig,
   AnthropicConfig,
@@ -16,7 +19,14 @@ import type {
   GroqConfig,
   FallbackRule,
   ProviderMetrics,
-  CircuitBreakerState
+  CircuitBreakerState,
+  ProviderBalance,
+  QuotaHook,
+  QuotaCheckInput,
+  QuotaRecordInput,
+  ToolExecutor,
+  ToolLoopOptions,
+  ToolLoopState
 } from './types';
 
 import type { Logger } from './utils/logger';
@@ -41,6 +51,8 @@ import {
   AuthenticationError,
   RateLimitError,
   QuotaExceededError,
+  ToolLoopAbortedError,
+  ToolLoopLimitError,
 } from './errors';
 
 export interface ProviderFactoryConfig {
@@ -55,6 +67,8 @@ export interface ProviderFactoryConfig {
   enableCircuitBreaker?: boolean;
   enableRetries?: boolean;
   ledger?: CreditLedger;
+  quotaHook?: QuotaHook;
+  quotaFailPolicy?: 'closed' | 'open';
   logger?: Logger;
   hooks?: ObservabilityHooks;
 }
@@ -197,6 +211,8 @@ export class LLMProviderFactory {
 
         const providerRequest = this.requestForProvider(request, providerName, providerModels);
         const model = providerRequest.model || provider.models[0] || 'unknown';
+        await this.checkQuota(providerName, provider, providerRequest, model);
+
         this.hooks.onRequestStart?.({
           provider: providerName,
           model,
@@ -224,6 +240,7 @@ export class LLMProviderFactory {
         if (this.config.costOptimization || this.config.ledger) {
           this.costTracker.trackCost(providerName, response);
         }
+        this.recordQuota(providerName, response, providerRequest);
 
         this.logger.debug(`[LLMProviderFactory] Successfully used provider: ${providerName}`);
         return response;
@@ -280,6 +297,261 @@ export class LLMProviderFactory {
     );
   }
 
+  async generateResponseStream(request: LLMRequest): Promise<ReadableStream<string>> {
+    const providerChain = this.buildProviderChain({ ...request, stream: true });
+    const providerModels = new Map<string, string>();
+    let lastError: Error | null = null;
+    let previousProvider: string | null = null;
+
+    for (let index = 0; index < providerChain.length; index++) {
+      const providerName = providerChain[index];
+      try {
+        const provider = this.providers.get(providerName);
+        if (!provider || !provider.supportsStreaming || !provider.streamResponse) continue;
+        if (defaultExhaustionRegistry.isExhausted(providerName)) continue;
+        if (this.config.enableCircuitBreaker && defaultCircuitBreakerManager.getBreaker(providerName).isOpen()) continue;
+        if (this.config.ledger && this.isLedgerLimited(providerName)) continue;
+
+        if (previousProvider && lastError) {
+          this.hooks.onFallback?.({
+            fromProvider: previousProvider,
+            toProvider: providerName,
+            requestId: request.requestId,
+            reason: lastError.message,
+            errorCode: (lastError as { code?: string }).code,
+            timestamp: Date.now(),
+          });
+        }
+
+        const providerRequest = {
+          ...this.requestForProvider(request, providerName, providerModels),
+          stream: true
+        };
+        const model = providerRequest.model || provider.models[0] || 'unknown';
+        const estimatedCost = await this.checkQuota(providerName, provider, providerRequest, model);
+
+        this.hooks.onRequestStart?.({
+          provider: providerName,
+          model,
+          requestId: request.requestId,
+          tenantId: request.tenantId,
+          timestamp: Date.now(),
+        });
+
+        const startTime = Date.now();
+        const opened = await this.openStreamWithFirstChunk(provider, providerRequest);
+        return this.buildFactoryStream(
+          opened.reader,
+          opened.firstChunk,
+          opened.done,
+          providerName,
+          model,
+          providerRequest,
+          startTime,
+          estimatedCost
+        );
+      } catch (error) {
+        const err = error as Error;
+        lastError = err;
+        previousProvider = providerName;
+
+        this.hooks.onRequestError?.({
+          provider: providerName,
+          model: request.model || 'unknown',
+          requestId: request.requestId,
+          tenantId: request.tenantId,
+          error: err,
+          errorCode: (err as { code?: string }).code,
+          attempt: 1,
+          willRetry: this.shouldFallback(err),
+          timestamp: Date.now(),
+        });
+
+        const fallbackDecision = this.getFallbackDecision(err);
+        if (!fallbackDecision.shouldFallback) {
+          throw error;
+        }
+
+        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels);
+      }
+    }
+
+    throw lastError || new LLMProviderError(
+      'All streaming providers failed',
+      'ALL_PROVIDERS_FAILED',
+      'factory',
+      false
+    );
+  }
+
+  async generateResponseWithTools(
+    request: LLMRequest,
+    toolExecutor: ToolExecutor,
+    opts: ToolLoopOptions = {}
+  ): Promise<LLMResponse> {
+    const maxIterations = opts.maxIterations ?? 10;
+    let cumulativeCost = 0;
+    let messages = [...request.messages];
+
+    for (let iteration = 0; iteration <= maxIterations; iteration++) {
+      if (opts.abortSignal?.aborted) {
+        throw new ToolLoopAbortedError('factory');
+      }
+
+      const response = await this.generateResponse({ ...request, messages });
+      cumulativeCost += response.usage.cost;
+
+      if (opts.maxCostUSD !== undefined && cumulativeCost > opts.maxCostUSD) {
+        throw new ToolLoopLimitError(
+          'factory',
+          `Tool loop exceeded max cost ${opts.maxCostUSD}`
+        );
+      }
+
+      if (!response.toolCalls || response.toolCalls.length === 0) {
+        return {
+          ...response,
+          metadata: {
+            ...response.metadata,
+            cumulativeCost,
+            toolIterations: iteration
+          }
+        };
+      }
+
+      if (iteration >= maxIterations) {
+        throw new ToolLoopLimitError('factory', `Tool loop exceeded ${maxIterations} iterations`);
+      }
+
+      const toolResults = [];
+      for (const toolCall of response.toolCalls) {
+        if (opts.abortSignal?.aborted) {
+          throw new ToolLoopAbortedError('factory');
+        }
+
+        let parsedArguments: unknown;
+        try {
+          parsedArguments = JSON.parse(toolCall.function.arguments);
+        } catch {
+          parsedArguments = toolCall.function.arguments;
+        }
+
+        try {
+          const output = await toolExecutor.execute(toolCall.function.name, parsedArguments);
+          toolResults.push({
+            id: toolCall.id,
+            output: typeof output === 'string' ? output : JSON.stringify(output)
+          });
+        } catch (error) {
+          toolResults.push({
+            id: toolCall.id,
+            output: '',
+            error: (error as Error).message
+          });
+        }
+      }
+
+      messages = [
+        ...messages,
+        {
+          role: 'assistant',
+          content: response.message,
+          toolCalls: response.toolCalls
+        },
+        {
+          role: 'user',
+          content: '',
+          toolResults
+        }
+      ];
+
+      const state: ToolLoopState = {
+        iteration: iteration + 1,
+        cumulativeCost,
+        messageCount: messages.length,
+        lastToolCalls: response.toolCalls
+      };
+      await opts.onIteration?.(iteration + 1, state);
+    }
+
+    throw new ToolLoopLimitError('factory', `Tool loop exceeded ${maxIterations} iterations`);
+  }
+
+  async classify<T = unknown>(
+    input: string | LLMRequest,
+    options: ClassifyOptions<T> = {}
+  ): Promise<ClassifyResult<T>> {
+    const parser = options.schema && typeof (options.schema as { parse?: unknown }).parse === 'function'
+      ? (options.schema as { parse(data: unknown): T }).parse
+      : undefined;
+    const schemaDescription = options.schema && !parser
+      ? `\nJSON schema:\n${JSON.stringify(options.schema)}`
+      : '';
+    const systemPrompt = options.systemPrompt ||
+      `Classify the input and return only valid JSON.${schemaDescription}`;
+    const request: LLMRequest = typeof input === 'string'
+      ? {
+          messages: [{ role: 'user', content: input }],
+          model: options.model,
+          temperature: options.temperature ?? 0,
+          maxTokens: options.maxTokens,
+          response_format: { type: 'json_object' },
+          systemPrompt,
+          seed: options.seed
+        }
+      : {
+          ...input,
+          model: options.model ?? input.model,
+          temperature: options.temperature ?? input.temperature ?? 0,
+          maxTokens: options.maxTokens ?? input.maxTokens,
+          response_format: { type: 'json_object' },
+          systemPrompt: options.systemPrompt ?? input.systemPrompt ?? systemPrompt,
+          seed: options.seed ?? input.seed
+        };
+
+    const response = await this.generateResponse(request);
+    const parsed = this.parseJsonResponse(response.message);
+    const data = parser ? parser(parsed) : parsed as T;
+    const confidenceValue = (parsed as Record<string, unknown>)[options.confidenceField ?? 'confidence'];
+
+    return {
+      data,
+      confidence: typeof confidenceValue === 'number' ? confidenceValue : undefined,
+      response
+    };
+  }
+
+  async analyzeImage(input: AnalyzeImageInput): Promise<LLMResponse> {
+    return this.generateResponse({
+      messages: [{ role: 'user', content: input.prompt }],
+      images: [input.image],
+      model: input.model ?? this.getDefaultVisionModel(),
+      systemPrompt: input.systemPrompt,
+      temperature: input.temperature,
+      maxTokens: input.maxTokens,
+      response_format: input.response_format,
+      tenantId: input.tenantId,
+      requestId: input.requestId,
+      metadata: input.metadata
+    });
+  }
+
+  async getProviderBalance(provider?: string): Promise<ProviderBalance | Record<string, ProviderBalance>> {
+    if (provider) {
+      const balance = await this.getSingleProviderBalance(provider);
+      this.hooks.onProviderBalance?.({ provider, balance, timestamp: Date.now() });
+      return balance;
+    }
+
+    const result: Record<string, ProviderBalance> = {};
+    for (const providerName of this.providers.keys()) {
+      const balance = await this.getSingleProviderBalance(providerName);
+      result[providerName] = balance;
+      this.hooks.onProviderBalance?.({ provider: providerName, balance, timestamp: Date.now() });
+    }
+    return result;
+  }
+
   /**
    * Build provider chain based on request and configuration
    */
@@ -317,14 +589,17 @@ export class LLMProviderFactory {
    * Get prioritized list of providers based on cost optimization and capabilities
    */
   private getPrioritizedProviders(request: LLMRequest): string[] {
+    const visionOnly = (request.images?.length ?? 0) > 0;
     if (!this.config.costOptimization) {
       // Default priority: all configured providers, cheapest first
       return ['cloudflare', 'cerebras', 'groq', 'anthropic', 'openai']
-        .filter(p => this.providers.has(p));
+        .filter(p => this.providers.has(p))
+        .filter(p => !visionOnly || this.providerSupportsVision(p));
     }
 
     // Cost-optimized routing
-    const providers = Array.from(this.providers.keys());
+    const providers = Array.from(this.providers.keys())
+      .filter(p => !visionOnly || this.providerSupportsVision(p));
     const sortedProviders = [...providers].sort((a, b) => {
       const providerA = this.providers.get(a)!;
       const providerB = this.providers.get(b)!;
@@ -627,6 +902,218 @@ export class LLMProviderFactory {
       this.providers.clear();
       this.initializeProviders();
     }
+  }
+
+  private async openStreamWithFirstChunk(
+    provider: LLMProvider,
+    request: LLMRequest
+  ): Promise<{ reader: ReadableStreamDefaultReader<string>; firstChunk?: string; done: boolean }> {
+    if (!provider.streamResponse) {
+      throw new ConfigurationError(provider.name, 'Provider does not support streaming');
+    }
+
+    const stream = await provider.streamResponse(request);
+    const reader = stream.getReader();
+    const first = await reader.read();
+    return {
+      reader,
+      firstChunk: first.value,
+      done: first.done
+    };
+  }
+
+  private buildFactoryStream(
+    reader: ReadableStreamDefaultReader<string>,
+    firstChunk: string | undefined,
+    firstDone: boolean,
+    providerName: string,
+    model: string,
+    request: LLMRequest,
+    startTime: number,
+    estimatedCost: number
+  ): ReadableStream<string> {
+    return new ReadableStream<string>({
+      start: async (controller) => {
+        try {
+          if (!firstDone && firstChunk !== undefined) {
+            controller.enqueue(firstChunk);
+          }
+
+          if (!firstDone) {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value !== undefined) controller.enqueue(value);
+            }
+          }
+
+          const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: estimatedCost };
+          this.hooks.onRequestEnd?.({
+            provider: providerName,
+            model,
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            durationMs: Date.now() - startTime,
+            usage,
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          });
+          this.recordQuotaInput({
+            tenantId: request.tenantId,
+            provider: providerName,
+            model,
+            actualCost: estimatedCost,
+            metadata: request.metadata
+          });
+          controller.close();
+        } catch (error) {
+          controller.error(error);
+        } finally {
+          reader.releaseLock();
+        }
+      }
+    });
+  }
+
+  private async checkQuota(
+    providerName: string,
+    provider: LLMProvider,
+    request: LLMRequest,
+    model: string
+  ): Promise<number> {
+    const estimatedCost = provider.estimateCost(request);
+    if (!this.config.quotaHook) {
+      return estimatedCost;
+    }
+
+    const input: QuotaCheckInput = {
+      tenantId: request.tenantId,
+      provider: providerName,
+      model,
+      estimatedCost,
+      metadata: request.metadata
+    };
+
+    try {
+      const result = await this.config.quotaHook.check(input);
+      this.hooks.onQuotaCheck?.({ input, result, timestamp: Date.now() });
+      if (!result.allowed) {
+        this.hooks.onQuotaDenied?.({ input, reason: result.reason, timestamp: Date.now() });
+        throw new QuotaExceededError(providerName, result.reason || 'Quota hook denied request');
+      }
+    } catch (error) {
+      if (error instanceof QuotaExceededError) {
+        throw error;
+      }
+
+      if ((this.config.quotaFailPolicy ?? 'closed') === 'open') {
+        this.logger.warn(`[LLMProviderFactory] Quota check failed open for ${providerName}:`, (error as Error).message);
+        return estimatedCost;
+      }
+
+      const reason = (error as Error).message;
+      this.hooks.onQuotaDenied?.({ input, reason, timestamp: Date.now() });
+      throw new QuotaExceededError(providerName, reason);
+    }
+
+    return estimatedCost;
+  }
+
+  private recordQuota(providerName: string, response: LLMResponse, request: LLMRequest): void {
+    this.recordQuotaInput({
+      tenantId: request.tenantId,
+      provider: providerName,
+      model: response.model,
+      actualCost: response.usage.cost,
+      inputTokens: response.usage.inputTokens,
+      outputTokens: response.usage.outputTokens,
+      metadata: request.metadata
+    });
+  }
+
+  private recordQuotaInput(input: QuotaRecordInput): void {
+    if (!this.config.quotaHook) return;
+
+    void this.config.quotaHook.record(input).catch(error => {
+      this.logger.warn(`[LLMProviderFactory] Quota record failed for ${input.provider}:`, (error as Error).message);
+    });
+  }
+
+  private parseJsonResponse(message: string): unknown {
+    try {
+      return JSON.parse(message);
+    } catch {
+      const start = message.indexOf('{');
+      const end = message.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        return JSON.parse(message.slice(start, end + 1));
+      }
+      throw new ConfigurationError('factory', 'Classification response was not valid JSON');
+    }
+  }
+
+  private getDefaultVisionModel(): string | undefined {
+    if (this.providers.has('anthropic')) return 'claude-haiku-4-5-20251001';
+    if (this.providers.has('openai')) return 'gpt-4o-mini';
+    return undefined;
+  }
+
+  private providerSupportsVision(providerName: string): boolean {
+    return this.providers.get(providerName)?.supportsVision === true;
+  }
+
+  private async getSingleProviderBalance(providerName: string): Promise<ProviderBalance> {
+    const ledgerBalance = this.getLedgerBalance(providerName);
+    if (ledgerBalance) {
+      return ledgerBalance;
+    }
+
+    const provider = this.providers.get(providerName);
+    if (!provider) {
+      return {
+        provider: providerName,
+        status: 'error',
+        source: 'not_supported',
+        message: `Provider '${providerName}' is not configured`
+      };
+    }
+
+    if (provider.getProviderBalance) {
+      return provider.getProviderBalance();
+    }
+
+    return {
+      provider: providerName,
+      status: 'unavailable',
+      source: 'not_supported',
+      message: `Provider '${providerName}' does not expose balance reporting`
+    };
+  }
+
+  private getLedgerBalance(providerName: string): ProviderBalance | undefined {
+    const acc = this.config.ledger?.getProviderAccumulator(providerName);
+    if (!acc) return undefined;
+
+    const rateLimits: ProviderBalance['rateLimits'] = {};
+    for (const [dimension, window] of Object.entries(acc.rateLimits)) {
+      rateLimits[dimension] = {
+        limit: window.limit,
+        used: window.used,
+        remaining: Math.max(window.limit - window.used, 0)
+      };
+    }
+
+    return {
+      provider: providerName,
+      status: 'available',
+      source: 'ledger',
+      currentSpend: acc.spend,
+      monthlyBudget: acc.budget ?? undefined,
+      remainingBudget: acc.budget === null ? undefined : acc.budget - acc.spend,
+      usedTokens: acc.inputTokens + acc.outputTokens,
+      requestCount: acc.requestCount,
+      rateLimits
+    };
   }
 
   private isLedgerLimited(providerName: string): boolean {

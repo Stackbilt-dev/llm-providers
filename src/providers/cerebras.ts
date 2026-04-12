@@ -35,6 +35,7 @@ interface CerebrasRequest {
   stream?: boolean;
   tools?: CerebrasTool[];
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  seed?: number;
 }
 
 interface CerebrasResponse {
@@ -103,7 +104,7 @@ export class CerebrasProvider extends BaseProvider {
     try {
       const response = await this.executeWithResiliency(async () => {
         const cerebrasRequest = this.formatRequest(request);
-        const httpResponse = await this.makeCerebrasRequest('/chat/completions', cerebrasRequest);
+        const httpResponse = await this.makeCerebrasRequest('/chat/completions', cerebrasRequest, 'POST', request);
 
         if (!httpResponse.ok) {
           throw await LLMErrorFactory.fromFetchResponse('cerebras', httpResponse);
@@ -208,7 +209,7 @@ export class CerebrasProvider extends BaseProvider {
     return new ReadableStream({
       start: async (controller) => {
         try {
-          const response = await this.makeCerebrasRequest('/chat/completions', cerebrasRequest);
+          const response = await this.makeCerebrasRequest('/chat/completions', cerebrasRequest, 'POST', request);
 
           if (!response.ok) {
             throw await LLMErrorFactory.fromFetchResponse('cerebras', response);
@@ -265,11 +266,13 @@ export class CerebrasProvider extends BaseProvider {
   private async makeCerebrasRequest(
     endpoint: string,
     body: CerebrasRequest | null,
-    method: string = 'POST'
+    method: string = 'POST',
+    request?: LLMRequest
   ): Promise<Response> {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.apiKey}`,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      ...this.getAIGatewayHeaders(request)
     };
 
     const options: RequestInit = {
@@ -348,7 +351,8 @@ export class CerebrasProvider extends BaseProvider {
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
-      stream: request.stream
+      stream: request.stream,
+      seed: request.seed
     };
 
     // Add tools if provided. Unsupported tool models are rejected above.
