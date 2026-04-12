@@ -69,6 +69,7 @@ export interface ProviderFactoryConfig {
   ledger?: CreditLedger;
   quotaHook?: QuotaHook;
   quotaFailPolicy?: 'closed' | 'open';
+  defaultVisionModel?: string;
   logger?: Logger;
   hooks?: ObservabilityHooks;
 }
@@ -393,13 +394,31 @@ export class LLMProviderFactory {
     let cumulativeCost = 0;
     let messages = [...request.messages];
 
+    let lastResponseCost = 0;
+
     for (let iteration = 0; iteration <= maxIterations; iteration++) {
       if (opts.abortSignal?.aborted) {
         throw new ToolLoopAbortedError('factory');
       }
 
+      // Pre-flight cost guard: use the previous iteration's cost as an
+      // estimate for the next one.  This prevents obvious overshoots where
+      // a single expensive response would blow past the cap.  The cap is
+      // still soft (±1 iteration tolerance) because the actual cost is
+      // only known after the response.
+      if (opts.maxCostUSD !== undefined && iteration > 0) {
+        const projectedCost = cumulativeCost + lastResponseCost;
+        if (projectedCost > opts.maxCostUSD) {
+          throw new ToolLoopLimitError(
+            'factory',
+            `Tool loop would exceed max cost ${opts.maxCostUSD} (projected ${projectedCost.toFixed(4)})`
+          );
+        }
+      }
+
       const response = await this.generateResponse({ ...request, messages });
-      cumulativeCost += response.usage.cost;
+      lastResponseCost = response.usage.cost;
+      cumulativeCost += lastResponseCost;
 
       if (opts.maxCostUSD !== undefined && cumulativeCost > opts.maxCostUSD) {
         throw new ToolLoopLimitError(
@@ -1043,16 +1062,25 @@ export class LLMProviderFactory {
     try {
       return JSON.parse(message);
     } catch {
-      const start = message.indexOf('{');
-      const end = message.lastIndexOf('}');
-      if (start >= 0 && end > start) {
-        return JSON.parse(message.slice(start, end + 1));
+      // Strip markdown fences (```json ... ``` or ``` ... ```) before
+      // falling back to brace extraction so fenced JSON parses cleanly.
+      const fenced = message.replace(/^```(?:json)?\s*\n?/m, '').replace(/\n?```\s*$/m, '');
+      try {
+        return JSON.parse(fenced);
+      } catch {
+        // Last resort: extract outermost braces.
+        const start = fenced.indexOf('{');
+        const end = fenced.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+          return JSON.parse(fenced.slice(start, end + 1));
+        }
       }
       throw new ConfigurationError('factory', 'Classification response was not valid JSON');
     }
   }
 
   private getDefaultVisionModel(): string | undefined {
+    if (this.config.defaultVisionModel) return this.config.defaultVisionModel;
     if (this.providers.has('anthropic')) return 'claude-haiku-4-5-20251001';
     if (this.providers.has('openai')) return 'gpt-4o-mini';
     return undefined;

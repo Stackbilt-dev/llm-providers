@@ -150,7 +150,7 @@ export class GroqProvider extends BaseProvider {
 
   async healthCheck(): Promise<boolean> {
     try {
-    const response = await this.makeGroqRequest('/models', null, 'GET');
+      const response = await this.makeGroqRequest('/models', null, 'GET');
       return response.ok;
     } catch {
       return false;
