@@ -145,7 +145,7 @@ export class SchemaDriftError extends LLMProviderError {
       'SCHEMA_DRIFT',
       provider,
       false,
-      502
+      422
     );
     this.path = path;
     this.expected = expected;

@@ -351,4 +351,308 @@ describe('LLMProviderFactory schema drift fallback', () => {
     });
     expect(driftEvents[0].timestamp).toBeGreaterThan(0);
   });
+
+  it('propagates SchemaDriftError at end of chain when no fallback is available (M-2)', async () => {
+    // Single-provider chain: if anthropic drifts, there is nowhere to fall
+    // over to. The factory must surface the SchemaDriftError to the caller
+    // without wrapping it as generic ALL_PROVIDERS_FAILED, and the hook must
+    // still fire so ops sees the drift.
+    //
+    // (Multi-provider end-of-chain coverage lands with the follow-up PR
+    // that wires schema validation into the other providers — until then,
+    // the other providers' parsers throw TypeError on drift, which isn't
+    // this test's concern.)
+    const driftEvents: SchemaDriftEvent[] = [];
+    const hooks: ObservabilityHooks = {
+      onSchemaDrift: (e) => driftEvents.push(e),
+    };
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'msg_1', type: 'message', role: 'assistant',
+        model: 'claude-3-haiku-20240307',
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 5 },
+        // content intentionally missing — drift
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    const factory = new LLMProviderFactory({
+      anthropic: { apiKey: 'test-anthropic', maxRetries: 0 },
+      preferredProvider: 'anthropic',
+      hooks,
+    });
+
+    await expect(factory.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      requestId: 'req-eoc-1',
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      provider: 'anthropic',
+      path: 'content',
+    });
+
+    expect(driftEvents).toHaveLength(1);
+    expect(driftEvents[0]).toMatchObject({
+      provider: 'anthropic',
+      requestId: 'req-eoc-1',
+    });
+  });
+});
+
+// ── Circuit breaker + drift interaction ──────────────────────────────────
+
+describe('SchemaDriftError and circuit breaker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
+  });
+
+  it('repeated drift trips the circuit breaker open (M-1)', async () => {
+    const provider = new AnthropicProvider({ apiKey: 'test-key', maxRetries: 0 });
+
+    // Return drifted response every call — missing usage.input_tokens
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'msg_1', type: 'message', role: 'assistant',
+        content: [],
+        model: 'claude-3-haiku-20240307',
+        stop_reason: 'end_turn',
+        usage: { output_tokens: 5 },
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    // Hit the provider until something opens the breaker. Default threshold
+    // is low enough that this is bounded; 10 tries is plenty of headroom.
+    for (let i = 0; i < 10; i++) {
+      try {
+        await provider.generateResponse({
+          messages: [{ role: 'user', content: 'hi' }],
+          model: 'claude-3-haiku-20240307',
+        });
+      } catch {
+        // Expected — drift or circuit-open
+      }
+    }
+
+    const breaker = defaultCircuitBreakerManager.getBreaker('anthropic');
+    expect(breaker.getState().state).toBe('OPEN');
+  });
+});
+
+// ── Security: no value leakage in error surface ──────────────────────────
+
+describe('SchemaDriftError message surface (security)', () => {
+  it('error message and hook payload contain only path + type names, never values', async () => {
+    vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
+    const provider = new AnthropicProvider({ apiKey: 'test-key', maxRetries: 0 });
+
+    // Drifted response contains a sensitive-looking value. If it leaks into
+    // the error message we have a telemetry PII problem.
+    const SECRET_VALUE = 'sk-verysecret-api-key-shouldnotleak';
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: SECRET_VALUE, // intentionally put a "secret" where we expect a string
+        // content missing — triggers drift on content path instead of id
+        model: 'claude-3-haiku-20240307',
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    try {
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: SECRET_VALUE }],
+        model: 'claude-3-haiku-20240307',
+      });
+      expect.fail('should have thrown');
+    } catch (err) {
+      const message = (err as Error).message;
+      const serialized = JSON.stringify(err, Object.getOwnPropertyNames(err));
+
+      // The path, expected type, actual type should all be present
+      expect(message).toContain('content');
+      expect(message).toContain('array');
+      expect(message).toContain('undefined');
+
+      // The secret value should NEVER be in the error surface
+      expect(message).not.toContain(SECRET_VALUE);
+      expect(serialized).not.toContain(SECRET_VALUE);
+    }
+  });
+});
+
+// ── H-2: nested content block validation ─────────────────────────────────
+
+describe('Anthropic nested content-block validation (H-2 / #42)', () => {
+  let provider: AnthropicProvider;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
+    provider = new AnthropicProvider({ apiKey: 'test-key', maxRetries: 0 });
+  });
+
+  const envelope = (content: unknown[]) => ({
+    id: 'msg_1',
+    type: 'message',
+    role: 'assistant',
+    content,
+    model: 'claude-3-haiku-20240307',
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 10, output_tokens: 5 },
+  });
+
+  it('accepts a valid tool_use block', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => envelope([
+        { type: 'tool_use', id: 'toolu_1', name: 'search', input: { q: 'test' } },
+      ]),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    const res = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-3-haiku-20240307',
+    });
+    expect(res.toolCalls).toHaveLength(1);
+  });
+
+  it('detects tool_use block with missing id', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => envelope([
+        { type: 'tool_use', name: 'search', input: { q: 'test' } },
+      ]),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-3-haiku-20240307',
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      path: 'content[0].id',
+      expected: 'string',
+      actual: 'undefined',
+    });
+  });
+
+  it('detects tool_use block with wrong-typed input', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => envelope([
+        { type: 'tool_use', id: 'toolu_1', name: 'search', input: 'should-be-object' },
+      ]),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-3-haiku-20240307',
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      path: 'content[0].input',
+      expected: 'object',
+      actual: 'string',
+    });
+  });
+
+  it('detects text block with missing .text field', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => envelope([
+        { type: 'text' }, // .text renamed/removed
+      ]),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-3-haiku-20240307',
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      path: 'content[0].text',
+    });
+  });
+
+  it('detects element that is not an object', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => envelope(['a bare string, not a block']),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-3-haiku-20240307',
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      path: 'content[0]',
+      expected: 'object',
+      actual: 'string',
+    });
+  });
+
+  it('detects missing discriminator (type field)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => envelope([
+        { text: 'no type field' },
+      ]),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-3-haiku-20240307',
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      path: 'content[0].type',
+      expected: 'string',
+    });
+  });
+
+  it('accepts unknown block types (forward-compat)', async () => {
+    // Anthropic adds a new block type 'reasoning' — we should pass without
+    // error so the next deploy doesn't break on additive changes.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => envelope([
+        { type: 'text', text: 'hello' },
+        { type: 'reasoning', thoughts: 'internal thinking trace', confidence: 0.9 },
+      ]),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    const res = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-3-haiku-20240307',
+    });
+    // Text content extracted; unknown block silently ignored by filter
+    expect(res.content).toBe('hello');
+  });
+
+  it('accepts response without stop_sequence (optional field)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => envelope([{ type: 'text', text: 'hi' }]),
+      // Note: no stop_sequence key — it's optional
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    const res = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-3-haiku-20240307',
+    });
+    expect(res.content).toBe('hi');
+  });
 });

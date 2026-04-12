@@ -37,9 +37,7 @@ export type SchemaFieldType =
 export interface SchemaField {
   /**
    * Dot-separated path into the response object. Array indices not supported
-   * because we validate shape, not contents — if you care about element
-   * shape, validate the array type here and the elements at their own
-   * parse site.
+   * in the path itself — use `items` to validate array element shapes.
    */
   path: string;
   type: SchemaFieldType;
@@ -48,6 +46,23 @@ export interface SchemaField {
    * are genuinely optional (e.g. stop_sequence on Anthropic).
    */
   optional?: boolean;
+  /**
+   * For type: 'array' — validate each element against a nested schema.
+   *
+   * - `shape`: a flat SchemaField[] applied to every element (all elements
+   *   the same shape).
+   * - `variants` + `discriminator`: discriminated union. Each element is
+   *   routed by the value of `discriminator` (a field name on the element)
+   *   to the matching variant schema. **Unknown discriminator values are
+   *   allowed and skipped** — we want forward-compat for additive API
+   *   changes (e.g. Anthropic adds a new content block type). Only *missing*
+   *   discriminators or *wrong-typed* known variants trigger drift.
+   */
+  items?: {
+    shape?: SchemaField[];
+    discriminator?: string;
+    variants?: Record<string, SchemaField[]>;
+  };
 }
 
 /**
@@ -98,6 +113,89 @@ function matchesType(value: unknown, type: SchemaFieldType): boolean {
 }
 
 /**
+ * Validate a single object against a flat SchemaField list, prefixing any
+ * error path with `pathPrefix` so nested element errors read like
+ * `content[2].id` instead of bare `id`.
+ */
+function validateFields(
+  provider: string,
+  data: unknown,
+  fields: SchemaField[],
+  pathPrefix: string
+): void {
+  if (data == null || typeof data !== 'object') {
+    throw new SchemaDriftError(
+      provider,
+      pathPrefix || '$root',
+      'object',
+      describeType(data)
+    );
+  }
+
+  for (const field of fields) {
+    const fullPath = pathPrefix ? `${pathPrefix}.${field.path}` : field.path;
+    const value = getPath(data, field.path);
+
+    if (value === undefined) {
+      if (field.optional) continue;
+      throw new SchemaDriftError(provider, fullPath, field.type, 'undefined');
+    }
+
+    if (!matchesType(value, field.type)) {
+      throw new SchemaDriftError(provider, fullPath, field.type, describeType(value));
+    }
+
+    if (field.type === 'array' && field.items) {
+      validateArrayItems(provider, value as unknown[], field.items, fullPath);
+    }
+  }
+}
+
+/**
+ * Validate the elements of an array against either a flat `shape` or a
+ * discriminated `variants` map. Unknown discriminator values are
+ * forward-compatible and skipped.
+ */
+function validateArrayItems(
+  provider: string,
+  items: unknown[],
+  spec: NonNullable<SchemaField['items']>,
+  arrayPath: string
+): void {
+  for (let i = 0; i < items.length; i++) {
+    const element = items[i];
+    const elementPath = `${arrayPath}[${i}]`;
+
+    if (element == null || typeof element !== 'object') {
+      throw new SchemaDriftError(provider, elementPath, 'object', describeType(element));
+    }
+
+    if (spec.discriminator && spec.variants) {
+      const disc = (element as Record<string, unknown>)[spec.discriminator];
+      if (typeof disc !== 'string') {
+        throw new SchemaDriftError(
+          provider,
+          `${elementPath}.${spec.discriminator}`,
+          'string',
+          describeType(disc)
+        );
+      }
+      const variantFields = spec.variants[disc];
+      // Unknown discriminator value — forward-compat. Skip validation
+      // rather than reject, so adding a new block type upstream doesn't
+      // break every consumer on the next deploy.
+      if (!variantFields) continue;
+      validateFields(provider, element, variantFields, elementPath);
+      continue;
+    }
+
+    if (spec.shape) {
+      validateFields(provider, element, spec.shape, elementPath);
+    }
+  }
+}
+
+/**
  * Validate a response envelope against a minimal field schema.
  * Throws SchemaDriftError on the first mismatch, with provider + path +
  * expected/actual types surfaced for observability.
@@ -111,35 +209,5 @@ export function validateSchema(
   data: unknown,
   fields: SchemaField[]
 ): void {
-  if (data == null || typeof data !== 'object') {
-    throw new SchemaDriftError(
-      provider,
-      '$root',
-      'object',
-      describeType(data)
-    );
-  }
-
-  for (const field of fields) {
-    const value = getPath(data, field.path);
-
-    if (value === undefined) {
-      if (field.optional) continue;
-      throw new SchemaDriftError(
-        provider,
-        field.path,
-        field.type,
-        'undefined'
-      );
-    }
-
-    if (!matchesType(value, field.type)) {
-      throw new SchemaDriftError(
-        provider,
-        field.path,
-        field.type,
-        describeType(value)
-      );
-    }
-  }
+  validateFields(provider, data, fields, '');
 }

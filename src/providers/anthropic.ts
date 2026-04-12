@@ -24,13 +24,33 @@ import { validateSchema, type SchemaField } from '../utils/schema-validator';
 /**
  * Minimum envelope fields the Anthropic response parser reads. Changing this
  * list is a contract change — keep it in sync with formatResponse below.
- * Optional fields (e.g. stop_sequence) are not listed.
+ *
+ * Content blocks are validated as a discriminated union on `type`. Unknown
+ * block types are forward-compatible (skipped) so Anthropic adding a new
+ * block variant doesn't instantly break the fallback routing on every deploy.
  */
 const ANTHROPIC_RESPONSE_SCHEMA: SchemaField[] = [
   { path: 'id', type: 'string' },
-  { path: 'content', type: 'array' },
+  {
+    path: 'content',
+    type: 'array',
+    items: {
+      discriminator: 'type',
+      variants: {
+        text: [
+          { path: 'text', type: 'string' },
+        ],
+        tool_use: [
+          { path: 'id', type: 'string' },
+          { path: 'name', type: 'string' },
+          { path: 'input', type: 'object' },
+        ],
+      },
+    },
+  },
   { path: 'model', type: 'string' },
   { path: 'stop_reason', type: 'string' },
+  { path: 'stop_sequence', type: 'string', optional: true },
   { path: 'usage', type: 'object' },
   { path: 'usage.input_tokens', type: 'number' },
   { path: 'usage.output_tokens', type: 'number' },
@@ -514,14 +534,17 @@ export class AnthropicProvider extends BaseProvider {
       }
     };
 
-    // Extract tool calls if present (validated at provider boundary)
+    // Extract tool calls if present. id/name/input are guaranteed non-null
+    // for tool_use blocks by ANTHROPIC_RESPONSE_SCHEMA's discriminated-union
+    // validation — if they were missing, validateSchema would have thrown
+    // SchemaDriftError before we got here.
     const toolUses = data.content.filter(block => block.type === 'tool_use');
     if (toolUses.length > 0) {
       const raw: ToolCall[] = toolUses.map(tool => ({
-        id: tool.id!,
+        id: tool.id as string,
         type: 'function' as const,
         function: {
-          name: tool.name!,
+          name: tool.name as string,
           arguments: JSON.stringify(tool.input)
         }
       }));
