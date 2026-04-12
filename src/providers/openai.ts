@@ -18,9 +18,15 @@ interface OpenAIToolCall {
   function: { name: string; arguments: string };
 }
 
+interface OpenAIContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string };
+}
+
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | null | OpenAIContentPart[];
   name?: string;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
@@ -46,6 +52,7 @@ interface OpenAIRequest {
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
   response_format?: { type: 'json_object' | 'text' };
+  seed?: number;
 }
 
 interface OpenAIResponse {
@@ -85,6 +92,7 @@ export class OpenAIProvider extends BaseProvider {
   supportsStreaming = true;
   supportsTools = true;
   supportsBatching = false;
+  supportsVision = true;
 
   private apiKey: string;
   private baseUrl: string;
@@ -112,7 +120,7 @@ export class OpenAIProvider extends BaseProvider {
     try {
       const response = await this.executeWithResiliency(async () => {
         const openaiRequest = this.formatRequest(request);
-        const httpResponse = await this.makeOpenAIRequest('/chat/completions', openaiRequest);
+        const httpResponse = await this.makeOpenAIRequest('/chat/completions', openaiRequest, 'POST', request);
 
         if (!httpResponse.ok) {
           throw await LLMErrorFactory.fromFetchResponse('openai', httpResponse);
@@ -172,6 +180,7 @@ export class OpenAIProvider extends BaseProvider {
         maxContextLength: 128000,
         supportsStreaming: true,
         supportsTools: true,
+        supportsVision: true,
         supportsBatching: false,
         inputTokenCost: 0.005, // $5 per 1M tokens
         outputTokenCost: 0.015, // $15 per 1M tokens
@@ -181,6 +190,7 @@ export class OpenAIProvider extends BaseProvider {
         maxContextLength: 128000,
         supportsStreaming: true,
         supportsTools: true,
+        supportsVision: true,
         supportsBatching: false,
         inputTokenCost: 0.00015, // $0.15 per 1M tokens
         outputTokenCost: 0.0006, // $0.60 per 1M tokens
@@ -228,11 +238,13 @@ export class OpenAIProvider extends BaseProvider {
   private async makeOpenAIRequest(
     endpoint: string,
     body: OpenAIRequest | null,
-    method: string = 'POST'
+    method: string = 'POST',
+    request?: LLMRequest
   ): Promise<Response> {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.apiKey}`,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      ...this.getAIGatewayHeaders(request)
     };
 
     if (this.organization) {
@@ -274,7 +286,7 @@ export class OpenAIProvider extends BaseProvider {
 
       const openaiMessage: OpenAIMessage = {
         role: message.role as OpenAIMessage['role'],
-        content: message.content
+        content: this.formatMessageContent(message.content, message.role === 'user' ? request.images : undefined)
       };
 
       // Add tool calls if present
@@ -287,6 +299,19 @@ export class OpenAIProvider extends BaseProvider {
         openaiMessage.content = null; // Content must be null when tool_calls present
       }
 
+      if (message.toolResults && message.toolResults.length > 0) {
+        for (const toolResult of message.toolResults) {
+          messages.push({
+            role: 'tool',
+            content: toolResult.error
+              ? JSON.stringify({ output: toolResult.output, error: toolResult.error })
+              : toolResult.output,
+            tool_call_id: toolResult.id
+          });
+        }
+        continue;
+      }
+
       messages.push(openaiMessage);
     }
 
@@ -295,7 +320,8 @@ export class OpenAIProvider extends BaseProvider {
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
-      stream: request.stream
+      stream: request.stream,
+      seed: request.seed
     };
 
     // Add tools if provided
@@ -316,6 +342,25 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     return openaiRequest;
+  }
+
+  private formatMessageContent(
+    text: string,
+    images?: LLMRequest['images']
+  ): OpenAIMessage['content'] {
+    if (!images || images.length === 0) {
+      return text;
+    }
+
+    return [
+      { type: 'text', text },
+      ...images.map(image => ({
+        type: 'image_url' as const,
+        image_url: {
+          url: image.url || `data:${image.mimeType};base64,${image.data}`
+        }
+      }))
+    ];
   }
 
   private formatResponse(
@@ -378,7 +423,7 @@ export class OpenAIProvider extends BaseProvider {
     return new ReadableStream({
       start: async (controller) => {
         try {
-          const response = await this.makeOpenAIRequest('/chat/completions', openaiRequest);
+          const response = await this.makeOpenAIRequest('/chat/completions', openaiRequest, 'POST', request);
 
           if (!response.ok) {
             throw await LLMErrorFactory.fromFetchResponse('openai', response);

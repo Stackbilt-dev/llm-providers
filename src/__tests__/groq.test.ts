@@ -80,6 +80,18 @@ describe('GroqProvider', () => {
     });
   });
 
+  describe('getProviderBalance', () => {
+    it('should report Groq billing API as unavailable', async () => {
+      const balance = await provider.getProviderBalance();
+
+      expect(balance).toMatchObject({
+        provider: 'groq',
+        status: 'unavailable',
+        source: 'not_supported'
+      });
+    });
+  });
+
   describe('generateResponse', () => {
     it('should generate a response successfully', async () => {
       mockFetch.mockResolvedValueOnce({
@@ -112,6 +124,51 @@ describe('GroqProvider', () => {
       expect(response.usage.outputTokens).toBe(5);
       expect(response.usage.totalTokens).toBe(15);
       expect(response.finishReason).toBe('stop');
+    });
+
+    it('should forward Cloudflare AI Gateway metadata headers only for gateway base URLs', async () => {
+      provider = new GroqProvider({
+        apiKey: 'test-groq-key',
+        baseUrl: 'https://gateway.ai.cloudflare.com/v1/account/gateway/groq'
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'chatcmpl-123',
+          object: 'chat.completion',
+          created: 1700000000,
+          model: 'llama-3.3-70b-versatile',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Hello!' },
+            finish_reason: 'stop'
+          }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+        }),
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+
+      await provider.generateResponse({
+        ...testRequest,
+        requestId: 'req-1',
+        tenantId: 'tenant-1',
+        gatewayMetadata: {
+          requestId: 'gw-req-1',
+          cacheKey: 'cache-key',
+          cacheTtl: 60,
+          customMetadata: { feature: 'demo' }
+        }
+      });
+
+      const headers = mockFetch.mock.calls[0][1].headers;
+      expect(headers['cf-aig-cache-key']).toBe('cache-key');
+      expect(headers['cf-aig-cache-ttl']).toBe('60');
+      expect(JSON.parse(headers['cf-aig-metadata'])).toMatchObject({
+        requestId: 'gw-req-1',
+        llmRequestId: 'req-1',
+        tenantId: 'tenant-1',
+        feature: 'demo'
+      });
     });
 
     it('should send correct request format', async () => {

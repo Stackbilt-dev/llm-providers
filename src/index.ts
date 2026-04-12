@@ -7,6 +7,8 @@
 // Core types
 export type {
   LLMProvider,
+  LLMImageInput,
+  GatewayMetadata,
   LLMRequest,
   LLMResponse,
   LLMMessage,
@@ -32,6 +34,18 @@ export type {
   LLMError,
   StreamChunk,
   StreamResponse,
+  QuotaHook,
+  QuotaCheckInput,
+  QuotaCheckResult,
+  QuotaRecordInput,
+  ToolExecutor,
+  ToolLoopOptions,
+  ToolLoopState,
+  ClassifyOptions,
+  ClassifyResult,
+  AnalyzeImageInput,
+  ProviderBalance,
+  RateLimitBalance,
   BatchRequest,
   BatchResponse,
   BatchJob
@@ -56,7 +70,17 @@ export type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from '
 // Local imports for use within this file
 import { LLMProviderFactory } from './factory';
 import type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from './factory';
-import type { LLMProvider, LLMRequest, LLMResponse } from './types';
+import type {
+  AnalyzeImageInput,
+  ClassifyOptions,
+  ClassifyResult,
+  LLMProvider,
+  LLMRequest,
+  LLMResponse,
+  ProviderBalance,
+  ToolExecutor,
+  ToolLoopOptions
+} from './types';
 import { createCostOptimizedFactory } from './factory';
 import { ConfigurationError } from './errors';
 
@@ -75,6 +99,8 @@ export {
   TokenLimitError,
   ConfigurationError,
   CircuitBreakerOpenError,
+  ToolLoopLimitError,
+  ToolLoopAbortedError,
   LLMErrorFactory
 } from './errors';
 
@@ -99,6 +125,9 @@ export type {
   CircuitStateChangeEvent,
   QuotaExhaustedEvent,
   BudgetThresholdEvent,
+  QuotaCheckEvent,
+  QuotaDeniedEvent,
+  ProviderBalanceEvent,
 } from './utils/hooks';
 
 // Exhaustion registry
@@ -156,6 +185,8 @@ export interface FromEnvOverrides {
   enableRetries?: boolean;
   fallbackRules?: ProviderFactoryConfig['fallbackRules'];
   ledger?: ProviderFactoryConfig['ledger'];
+  quotaHook?: ProviderFactoryConfig['quotaHook'];
+  quotaFailPolicy?: ProviderFactoryConfig['quotaFailPolicy'];
   hooks?: ProviderFactoryConfig['hooks'];
 }
 
@@ -234,6 +265,12 @@ export class LLMProviders {
     if (overrides.ledger !== undefined) {
       config.ledger = overrides.ledger;
     }
+    if (overrides.quotaHook !== undefined) {
+      config.quotaHook = overrides.quotaHook;
+    }
+    if (overrides.quotaFailPolicy !== undefined) {
+      config.quotaFailPolicy = overrides.quotaFailPolicy;
+    }
     if (overrides.hooks !== undefined) {
       config.hooks = overrides.hooks;
     }
@@ -246,6 +283,33 @@ export class LLMProviders {
    */
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     return this.factory.generateResponse(request);
+  }
+
+  async generateResponseStream(request: LLMRequest): Promise<ReadableStream<string>> {
+    return this.factory.generateResponseStream(request);
+  }
+
+  async generateResponseWithTools(
+    request: LLMRequest,
+    toolExecutor: ToolExecutor,
+    opts?: ToolLoopOptions
+  ): Promise<LLMResponse> {
+    return this.factory.generateResponseWithTools(request, toolExecutor, opts);
+  }
+
+  async classify<T = unknown>(
+    input: string | LLMRequest,
+    options?: ClassifyOptions<T>
+  ): Promise<ClassifyResult<T>> {
+    return this.factory.classify(input, options);
+  }
+
+  async analyzeImage(input: AnalyzeImageInput): Promise<LLMResponse> {
+    return this.factory.analyzeImage(input);
+  }
+
+  async getProviderBalance(provider?: string): Promise<ProviderBalance | Record<string, ProviderBalance>> {
+    return this.factory.getProviderBalance(provider);
   }
 
   /**

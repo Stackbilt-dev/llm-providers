@@ -9,7 +9,14 @@
  * interface stays for debug output; hooks are for structured observability.
  */
 
-import type { CircuitBreakerState, ProviderMetrics, TokenUsage } from '../types';
+import type {
+  CircuitBreakerState,
+  ProviderBalance,
+  ProviderMetrics,
+  QuotaCheckInput,
+  QuotaCheckResult,
+  TokenUsage
+} from '../types';
 
 // ── Event types ──────────────────────────────────────────────────────────
 
@@ -87,6 +94,24 @@ export interface BudgetThresholdEvent {
   timestamp: number;
 }
 
+export interface QuotaCheckEvent {
+  input: QuotaCheckInput;
+  result: QuotaCheckResult;
+  timestamp: number;
+}
+
+export interface QuotaDeniedEvent {
+  input: QuotaCheckInput;
+  reason?: string;
+  timestamp: number;
+}
+
+export interface ProviderBalanceEvent {
+  provider: string;
+  balance: ProviderBalance;
+  timestamp: number;
+}
+
 // ── Hooks interface ──────────────────────────────────────────────────────
 
 export interface ObservabilityHooks {
@@ -98,6 +123,9 @@ export interface ObservabilityHooks {
   onCircuitStateChange?(event: CircuitStateChangeEvent): void;
   onQuotaExhausted?(event: QuotaExhaustedEvent): void;
   onBudgetThreshold?(event: BudgetThresholdEvent): void;
+  onQuotaCheck?(event: QuotaCheckEvent): void;
+  onQuotaDenied?(event: QuotaDeniedEvent): void;
+  onProviderBalance?(event: ProviderBalanceEvent): void;
 }
 
 /** Silent hooks — default. */
@@ -111,7 +139,8 @@ export function composeHooks(...implementations: ObservabilityHooks[]): Observab
   const methods = [
     'onRequestStart', 'onRequestEnd', 'onRequestError',
     'onRetry', 'onFallback', 'onCircuitStateChange',
-    'onQuotaExhausted', 'onBudgetThreshold',
+    'onQuotaExhausted', 'onBudgetThreshold', 'onQuotaCheck',
+    'onQuotaDenied', 'onProviderBalance',
   ] as const;
 
   const composed: ObservabilityHooks = {};
