@@ -99,10 +99,15 @@ export {
   TokenLimitError,
   ConfigurationError,
   CircuitBreakerOpenError,
+  SchemaDriftError,
   ToolLoopLimitError,
   ToolLoopAbortedError,
   LLMErrorFactory
 } from './errors';
+
+// Schema validator (for custom provider authors)
+export { validateSchema } from './utils/schema-validator';
+export type { SchemaField, SchemaFieldType } from './utils/schema-validator';
 
 // Image generation
 export { ImageProvider, normalizeAiResponse } from './image/index';
@@ -128,6 +133,7 @@ export type {
   QuotaCheckEvent,
   QuotaDeniedEvent,
   ProviderBalanceEvent,
+  SchemaDriftEvent,
 } from './utils/hooks';
 
 // Exhaustion registry

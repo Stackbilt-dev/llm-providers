@@ -51,6 +51,7 @@ import {
   AuthenticationError,
   RateLimitError,
   QuotaExceededError,
+  SchemaDriftError,
   ToolLoopAbortedError,
   ToolLoopLimitError,
 } from './errors';
@@ -270,6 +271,20 @@ export class LLMProviderFactory {
           this.hooks.onQuotaExhausted?.({
             provider: providerName,
             resetAfterMs: defaultExhaustionRegistry.defaultResetMs,
+            timestamp: Date.now(),
+          });
+        }
+
+        // Schema drift — the upstream API silently changed shape. Surface
+        // structured telemetry so oncall sees the drift before it cascades.
+        if (err instanceof SchemaDriftError) {
+          this.hooks.onSchemaDrift?.({
+            provider: providerName,
+            model: request.model,
+            requestId: request.requestId,
+            path: err.path,
+            expected: err.expected,
+            actual: err.actual,
             timestamp: Date.now(),
           });
         }
@@ -709,10 +724,17 @@ export class LLMProviderFactory {
       return { shouldFallback: true };
     }
 
+    // Schema drift: provider's response shape changed. Retry won't help;
+    // only another provider can. Defense against silent API deprecations.
+    if (error instanceof SchemaDriftError) {
+      return { shouldFallback: true };
+    }
+
     if (error instanceof LLMProviderError) {
       if (error.code === 'SERVER_ERROR' ||
           error.code === 'NETWORK_ERROR' ||
-          error.code === 'TIMEOUT') {
+          error.code === 'TIMEOUT' ||
+          error.code === 'SCHEMA_DRIFT') {
         return { shouldFallback: true };
       }
     }

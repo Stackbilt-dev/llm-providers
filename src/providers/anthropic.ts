@@ -19,6 +19,42 @@ import {
   ModelNotFoundError,
   RateLimitError
 } from '../errors';
+import { validateSchema, type SchemaField } from '../utils/schema-validator';
+
+/**
+ * Minimum envelope fields the Anthropic response parser reads. Changing this
+ * list is a contract change — keep it in sync with formatResponse below.
+ *
+ * Content blocks are validated as a discriminated union on `type`. Unknown
+ * block types are forward-compatible (skipped) so Anthropic adding a new
+ * block variant doesn't instantly break the fallback routing on every deploy.
+ */
+const ANTHROPIC_RESPONSE_SCHEMA: SchemaField[] = [
+  { path: 'id', type: 'string' },
+  {
+    path: 'content',
+    type: 'array',
+    items: {
+      discriminator: 'type',
+      variants: {
+        text: [
+          { path: 'text', type: 'string' },
+        ],
+        tool_use: [
+          { path: 'id', type: 'string' },
+          { path: 'name', type: 'string' },
+          { path: 'input', type: 'object' },
+        ],
+      },
+    },
+  },
+  { path: 'model', type: 'string' },
+  { path: 'stop_reason', type: 'string' },
+  { path: 'stop_sequence', type: 'string', optional: true },
+  { path: 'usage', type: 'object' },
+  { path: 'usage.input_tokens', type: 'number' },
+  { path: 'usage.output_tokens', type: 'number' },
+];
 
 interface AnthropicContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'image';
@@ -132,8 +168,9 @@ export class AnthropicProvider extends BaseProvider {
           throw await LLMErrorFactory.fromFetchResponse('anthropic', httpResponse);
         }
 
-        const data: AnthropicResponse = await httpResponse.json();
-        const formatted = this.formatResponse(data, Date.now() - startTime);
+        const data = await httpResponse.json() as unknown;
+        validateSchema('anthropic', data, ANTHROPIC_RESPONSE_SCHEMA);
+        const formatted = this.formatResponse(data as AnthropicResponse, Date.now() - startTime);
 
         // Restore the prefilled '{' consumed by the assistant turn,
         // but only if the response doesn't already start with one
@@ -497,14 +534,17 @@ export class AnthropicProvider extends BaseProvider {
       }
     };
 
-    // Extract tool calls if present (validated at provider boundary)
+    // Extract tool calls if present. id/name/input are guaranteed non-null
+    // for tool_use blocks by ANTHROPIC_RESPONSE_SCHEMA's discriminated-union
+    // validation — if they were missing, validateSchema would have thrown
+    // SchemaDriftError before we got here.
     const toolUses = data.content.filter(block => block.type === 'tool_use');
     if (toolUses.length > 0) {
       const raw: ToolCall[] = toolUses.map(tool => ({
-        id: tool.id!,
+        id: tool.id as string,
         type: 'function' as const,
         function: {
-          name: tool.name!,
+          name: tool.name as string,
           arguments: JSON.stringify(tool.input)
         }
       }));
