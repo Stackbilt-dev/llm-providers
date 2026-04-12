@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { CerebrasProvider } from '../providers/cerebras';
-import { AuthenticationError } from '../errors';
+import { AuthenticationError, ConfigurationError } from '../errors';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import type { LLMRequest } from '../types';
 
@@ -207,6 +207,24 @@ describe('CerebrasProvider', () => {
         messages: [{ role: 'user', content: 'Hi' }],
         model: 'gpt-4'
       })).rejects.toThrow("Model 'gpt-4' not supported");
+    });
+
+    it('should reject tools for non-tool-capable models', async () => {
+      await expect(provider.generateResponse({
+        messages: [{ role: 'user', content: 'What is the weather?' }],
+        model: 'llama-3.1-8b',
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            description: 'Get current weather',
+            parameters: { type: 'object', properties: { location: { type: 'string' } } }
+          }
+        }],
+        toolChoice: 'auto'
+      })).rejects.toBeInstanceOf(ConfigurationError);
+
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 

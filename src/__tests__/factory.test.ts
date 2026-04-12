@@ -7,6 +7,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LLMProviderFactory, createCostOptimizedFactory } from '../factory';
 import { AuthenticationError } from '../errors';
 import type { LLMRequest, LLMResponse } from '../types';
+import { OpenAIProvider } from '../providers/openai';
+import { CreditLedger } from '../utils/credit-ledger';
 import { defaultCostTracker } from '../utils/cost-tracker';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
@@ -128,7 +130,29 @@ describe('LLMProviderFactory', () => {
     defaultCircuitBreakerManager.resetAll();
     defaultExhaustionRegistry.reset();
     defaultLatencyHistogram.reset();
-    
+
+    mockOpenAIProvider.generateResponse.mockReset().mockResolvedValue({
+      message: 'OpenAI response',
+      usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.001 },
+      model: 'gpt-3.5-turbo',
+      provider: 'openai',
+      responseTime: 1000
+    } as LLMResponse);
+    mockAnthropicProvider.generateResponse.mockReset().mockResolvedValue({
+      message: 'Anthropic response',
+      usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.002 },
+      model: 'claude-3-haiku-20240307',
+      provider: 'anthropic',
+      responseTime: 1200
+    } as LLMResponse);
+    mockCloudflareProvider.generateResponse.mockReset().mockResolvedValue({
+      message: 'Cloudflare response',
+      usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.0001 },
+      model: '@cf/meta/llama-3.1-8b-instruct',
+      provider: 'cloudflare',
+      responseTime: 800
+    } as LLMResponse);
+
     factory = new LLMProviderFactory({
       openai: { apiKey: 'test-openai-key' },
       anthropic: { apiKey: 'test-anthropic-key' },
@@ -278,6 +302,50 @@ describe('LLMProviderFactory', () => {
       // Should prefer Cloudflare for cost optimization
       expect(mockCloudflareProvider.generateResponse).toHaveBeenCalled();
     });
+
+    it('should honor fallbackProvider as the next route when a rule matches', async () => {
+      const ruleFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        anthropic: { apiKey: 'test-anthropic-key' },
+        cloudflare: { ai: {} as Ai },
+        defaultProvider: 'openai',
+        costOptimization: false,
+        fallbackRules: [{ condition: 'error', fallbackProvider: 'anthropic' }]
+      });
+
+      mockOpenAIProvider.generateResponse.mockRejectedValueOnce(new Error('OpenAI down'));
+
+      const response = await ruleFactory.generateResponse(testRequest);
+
+      expect(response.provider).toBe('anthropic');
+      expect(mockAnthropicProvider.generateResponse).toHaveBeenCalled();
+      expect(mockCloudflareProvider.generateResponse).not.toHaveBeenCalled();
+    });
+
+    it('should apply fallbackModel when routing through a fallback rule', async () => {
+      const ruleFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        anthropic: { apiKey: 'test-anthropic-key' },
+        defaultProvider: 'openai',
+        costOptimization: false,
+        fallbackRules: [{
+          condition: 'error',
+          fallbackProvider: 'anthropic',
+          fallbackModel: 'claude-3-haiku-20240307'
+        }]
+      });
+
+      mockOpenAIProvider.generateResponse.mockRejectedValueOnce(new Error('OpenAI down'));
+
+      await ruleFactory.generateResponse({
+        ...testRequest,
+        model: 'gpt-4'
+      });
+
+      expect(mockAnthropicProvider.generateResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'claude-3-haiku-20240307' })
+      );
+    });
   });
 
   describe('Error Handling', () => {
@@ -320,6 +388,66 @@ describe('LLMProviderFactory', () => {
       expect(mockOpenAIProvider.resetMetrics).toHaveBeenCalled();
       expect(mockAnthropicProvider.resetMetrics).toHaveBeenCalled();
       expect(mockCloudflareProvider.resetMetrics).toHaveBeenCalled();
+    });
+
+    it('should pass maxRetries 0 to providers when factory retries are disabled', () => {
+      new LLMProviderFactory({
+        openai: { apiKey: 'test-key' },
+        enableRetries: false
+      });
+
+      expect(OpenAIProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: 'test-key',
+          maxRetries: 0
+        })
+      );
+    });
+
+    it('should preserve explicit provider maxRetries when factory retries are disabled', () => {
+      new LLMProviderFactory({
+        openai: { apiKey: 'test-key', maxRetries: 2 },
+        enableRetries: false
+      });
+
+      expect(OpenAIProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: 'test-key',
+          maxRetries: 2
+        })
+      );
+    });
+  });
+
+  describe('CreditLedger integration', () => {
+    it('should record successful factory calls into the provided ledger even without cost optimization', async () => {
+      const ledger = new CreditLedger({
+        budgets: [{
+          provider: 'cloudflare',
+          monthlyBudget: 1,
+          rateLimits: { rpm: 10, rpd: 100, tpm: 1000, tpd: 10_000 }
+        }]
+      });
+
+      const ledgerFactory = new LLMProviderFactory({
+        cloudflare: { ai: {} as Ai },
+        costOptimization: false,
+        ledger
+      });
+
+      await ledgerFactory.generateResponse(testRequest);
+
+      const accumulator = ledger.getProviderAccumulator('cloudflare');
+      expect(accumulator).toMatchObject({
+        spend: 0.0001,
+        inputTokens: 10,
+        outputTokens: 20,
+        requestCount: 1
+      });
+      expect(accumulator!.rateLimits.rpm!.used).toBe(1);
+      expect(accumulator!.rateLimits.rpd!.used).toBe(1);
+      expect(accumulator!.rateLimits.tpm!.used).toBe(30);
+      expect(accumulator!.rateLimits.tpd!.used).toBe(30);
     });
   });
 });

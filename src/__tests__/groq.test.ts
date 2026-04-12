@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GroqProvider } from '../providers/groq';
-import { AuthenticationError } from '../errors';
+import { AuthenticationError, ConfigurationError } from '../errors';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import type { LLMRequest } from '../types';
 
@@ -365,32 +365,13 @@ describe('GroqProvider', () => {
       expect(toolMsg.content).toBe('{"temp": 15, "condition": "cloudy"}');
     });
 
-    it('should not include tools for non-tool-capable models', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          id: 'chatcmpl-123',
-          object: 'chat.completion',
-          created: 1700000000,
-          model: 'llama-3.1-8b-instant',
-          choices: [{
-            index: 0,
-            message: { role: 'assistant', content: 'I cannot call tools.' },
-            finish_reason: 'stop'
-          }],
-          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
-        }),
-        headers: new Headers({ 'content-type': 'application/json' })
-      });
-
-      await provider.generateResponse({
+    it('should reject tools for non-tool-capable models', async () => {
+      await expect(provider.generateResponse({
         ...toolRequest,
         model: 'llama-3.1-8b-instant'
-      });
+      })).rejects.toBeInstanceOf(ConfigurationError);
 
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.tools).toBeUndefined();
-      expect(body.tool_choice).toBeUndefined();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('should support tool calling on llama-3.3-70b-versatile', async () => {
