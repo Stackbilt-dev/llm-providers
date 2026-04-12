@@ -7,7 +7,8 @@ import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities, ToolCa
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
-  AuthenticationError
+  AuthenticationError,
+  ConfigurationError
 } from '../errors';
 
 interface CerebrasMessage {
@@ -286,8 +287,20 @@ export class CerebrasProvider extends BaseProvider {
   private formatRequest(request: LLMRequest): CerebrasRequest {
     const messages: CerebrasMessage[] = [];
     const model = request.model || 'llama-3.1-8b';
+    const usesTools =
+      (request.tools?.length ?? 0) > 0 ||
+      request.messages.some(message =>
+        (message.toolCalls?.length ?? 0) > 0 || (message.toolResults?.length ?? 0) > 0
+      );
     const jsonMode = request.response_format?.type === 'json_object';
     const jsonInstruction = '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
+
+    if (usesTools && !TOOL_CAPABLE_MODELS.has(model)) {
+      throw new ConfigurationError(
+        this.name,
+        `Model '${model}' does not support tool calling on Cerebras`
+      );
+    }
 
     if (request.systemPrompt) {
       messages.push({
@@ -338,8 +351,8 @@ export class CerebrasProvider extends BaseProvider {
       stream: request.stream
     };
 
-    // Add tools if the model supports them and tools are provided
-    if (request.tools && request.tools.length > 0 && TOOL_CAPABLE_MODELS.has(model)) {
+    // Add tools if provided. Unsupported tool models are rejected above.
+    if (request.tools && request.tools.length > 0) {
       result.tools = request.tools.map(t => ({
         type: 'function',
         function: {

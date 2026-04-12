@@ -79,6 +79,12 @@ export interface ProviderHealthEntry {
   error?: string;
 }
 
+interface FallbackDecision {
+  shouldFallback: boolean;
+  fallbackProvider?: string;
+  fallbackModel?: string;
+}
+
 export class LLMProviderFactory {
   private providers: Map<string, LLMProvider> = new Map();
   private config: ProviderFactoryConfig;
@@ -91,7 +97,9 @@ export class LLMProviderFactory {
     this.config = config;
     this.logger = config.logger ?? noopLogger;
     this.hooks = config.hooks ?? noopHooks;
-    this.costTracker = defaultCostTracker;
+    this.costTracker = config.ledger
+      ? new CostTracker({}, config.ledger, this.logger)
+      : defaultCostTracker;
     this.fallbackRules = config.fallbackRules || this.getDefaultFallbackRules();
 
     this.initializeProviders();
@@ -114,8 +122,13 @@ export class LLMProviderFactory {
       if (!providerConfig) continue;
 
       try {
+        const retryConfig: Partial<ProviderConfig> =
+          this.config.enableRetries === false && providerConfig.maxRetries === undefined
+            ? { maxRetries: 0 }
+            : {};
         const provider = new ProviderClass({
           ...providerConfig,
+          ...retryConfig,
           logger: this.logger,
           hooks: this.hooks,
         });
@@ -138,10 +151,13 @@ export class LLMProviderFactory {
    */
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     const providerChain = this.buildProviderChain(request);
+    const providerModels = new Map<string, string>();
     let lastError: Error | null = null;
     let previousProvider: string | null = null;
 
-    for (const providerName of providerChain) {
+    for (let index = 0; index < providerChain.length; index++) {
+      const providerName = providerChain[index];
+
       try {
         const provider = this.providers.get(providerName);
         if (!provider) continue;
@@ -161,18 +177,8 @@ export class LLMProviderFactory {
           }
         }
 
-        // Check rate limits if ledger is configured
-        if (this.config.ledger) {
-          const rpmCheck = this.config.ledger.checkRateLimit(providerName, 'rpm');
-          if (!rpmCheck.allowed) {
-            this.logger.warn(`[LLMProviderFactory] Rate limit (rpm) exceeded for ${providerName} (${rpmCheck.used}/${rpmCheck.limit}), skipping`);
-            continue;
-          }
-          const rpdCheck = this.config.ledger.checkRateLimit(providerName, 'rpd');
-          if (!rpdCheck.allowed) {
-            this.logger.warn(`[LLMProviderFactory] Rate limit (rpd) exceeded for ${providerName} (${rpdCheck.used}/${rpdCheck.limit}), skipping`);
-            continue;
-          }
+        if (this.config.ledger && this.isLedgerLimited(providerName)) {
+          continue;
         }
 
         // Emit fallback event if this isn't the first provider attempted
@@ -189,7 +195,8 @@ export class LLMProviderFactory {
 
         this.logger.debug(`[LLMProviderFactory] Trying provider: ${providerName}`);
 
-        const model = request.model || provider.models[0] || 'unknown';
+        const providerRequest = this.requestForProvider(request, providerName, providerModels);
+        const model = providerRequest.model || provider.models[0] || 'unknown';
         this.hooks.onRequestStart?.({
           provider: providerName,
           model,
@@ -199,7 +206,7 @@ export class LLMProviderFactory {
         });
 
         const startTime = Date.now();
-        const response = await provider.generateResponse(request);
+        const response = await provider.generateResponse(providerRequest);
         const durationMs = Date.now() - startTime;
 
         this.hooks.onRequestEnd?.({
@@ -213,8 +220,8 @@ export class LLMProviderFactory {
           timestamp: Date.now(),
         });
 
-        // Track cost if enabled
-        if (this.config.costOptimization) {
+        // Track spend whenever analytics or ledger accounting is configured.
+        if (this.config.costOptimization || this.config.ledger) {
           this.costTracker.trackCost(providerName, response);
         }
 
@@ -249,10 +256,18 @@ export class LLMProviderFactory {
           });
         }
 
-        // Check if we should continue trying other providers
-        if (!this.shouldFallback(error as Error)) {
+        const fallbackDecision = this.getFallbackDecision(error as Error);
+        if (!fallbackDecision.shouldFallback) {
           throw error;
         }
+
+        this.applyFallbackDecision(
+          fallbackDecision,
+          providerName,
+          providerChain,
+          index,
+          providerModels
+        );
       }
     }
 
@@ -366,38 +381,49 @@ export class LLMProviderFactory {
    * Check if we should fallback to another provider
    */
   private shouldFallback(error: Error): boolean {
+    return this.getFallbackDecision(error).shouldFallback;
+  }
+
+  /**
+   * Get fallback routing decision for an error.
+   */
+  private getFallbackDecision(error: Error): FallbackDecision {
     // Don't fallback for authentication errors
     if (error instanceof AuthenticationError) {
-      return false;
+      return { shouldFallback: false };
     }
 
     // Don't fallback for configuration errors
     if (error instanceof ConfigurationError) {
-      return false;
+      return { shouldFallback: false };
+    }
+
+    // Custom fallback rules can provide explicit provider/model routing.
+    for (const rule of this.fallbackRules) {
+      if (this.evaluateFallbackRule(rule, error)) {
+        return {
+          shouldFallback: true,
+          fallbackProvider: rule.fallbackProvider,
+          fallbackModel: rule.fallbackModel
+        };
+      }
     }
 
     // Fallback for circuit breaker, rate limits, and server errors
     if (error instanceof CircuitBreakerOpenError ||
         error instanceof RateLimitError) {
-      return true;
+      return { shouldFallback: true };
     }
 
     if (error instanceof LLMProviderError) {
       if (error.code === 'SERVER_ERROR' ||
           error.code === 'NETWORK_ERROR' ||
           error.code === 'TIMEOUT') {
-        return true;
+        return { shouldFallback: true };
       }
     }
 
-    // Check custom fallback rules
-    for (const rule of this.fallbackRules) {
-      if (this.evaluateFallbackRule(rule, error)) {
-        return true;
-      }
-    }
-
-    return false;
+    return { shouldFallback: false };
   }
 
   /**
@@ -565,7 +591,7 @@ export class LLMProviderFactory {
       }
     }
 
-    if (this.config.costOptimization) {
+    if (this.config.costOptimization || this.config.ledger) {
       this.costTracker.reset();
     }
 
@@ -579,15 +605,87 @@ export class LLMProviderFactory {
   updateConfig(config: Partial<ProviderFactoryConfig>): void {
     this.config = { ...this.config, ...config };
 
+    if ('ledger' in config) {
+      this.costTracker = config.ledger
+        ? new CostTracker({}, config.ledger, this.logger)
+        : defaultCostTracker;
+    }
+
     if (config.fallbackRules) {
       this.fallbackRules = config.fallbackRules;
     }
 
     // Re-initialize providers if configs changed
-    if (config.openai || config.anthropic || config.cloudflare || config.cerebras || config.groq) {
+    if (
+      config.openai ||
+      config.anthropic ||
+      config.cloudflare ||
+      config.cerebras ||
+      config.groq ||
+      config.enableRetries !== undefined
+    ) {
       this.providers.clear();
       this.initializeProviders();
     }
+  }
+
+  private isLedgerLimited(providerName: string): boolean {
+    if (!this.config.ledger) return false;
+
+    for (const dimension of ['rpm', 'rpd', 'tpm', 'tpd'] as const) {
+      const check = this.config.ledger.checkRateLimit(providerName, dimension);
+      if (!check.allowed) {
+        this.logger.warn(
+          `[LLMProviderFactory] Rate limit (${dimension}) exceeded for ${providerName} (${check.used}/${check.limit}), skipping`
+        );
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private requestForProvider(
+    request: LLMRequest,
+    providerName: string,
+    providerModels: Map<string, string>
+  ): LLMRequest {
+    const model = providerModels.get(providerName);
+    if (!model) {
+      return request;
+    }
+
+    return { ...request, model };
+  }
+
+  private applyFallbackDecision(
+    decision: FallbackDecision,
+    failedProvider: string,
+    providerChain: string[],
+    currentIndex: number,
+    providerModels: Map<string, string>
+  ): void {
+    const targetProvider = decision.fallbackProvider;
+    if (!targetProvider || targetProvider === failedProvider || !this.providers.has(targetProvider)) {
+      return;
+    }
+
+    if (decision.fallbackModel) {
+      providerModels.set(targetProvider, decision.fallbackModel);
+    }
+
+    const nextIndex = currentIndex + 1;
+    const firstIndex = providerChain.indexOf(targetProvider);
+    if (firstIndex >= 0 && firstIndex <= currentIndex) {
+      return;
+    }
+
+    const existingIndex = providerChain.indexOf(targetProvider, nextIndex);
+    if (existingIndex >= 0) {
+      providerChain.splice(existingIndex, 1);
+    }
+
+    providerChain.splice(nextIndex, 0, targetProvider);
   }
 }
 

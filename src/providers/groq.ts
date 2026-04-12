@@ -7,7 +7,8 @@ import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ToolCall }
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
-  AuthenticationError
+  AuthenticationError,
+  ConfigurationError
 } from '../errors';
 
 interface GroqMessage {
@@ -277,8 +278,20 @@ export class GroqProvider extends BaseProvider {
   private formatRequest(request: LLMRequest): GroqRequest {
     const messages: GroqMessage[] = [];
     const model = request.model || 'llama-3.3-70b-versatile';
+    const usesTools =
+      (request.tools?.length ?? 0) > 0 ||
+      request.messages.some(message =>
+        (message.toolCalls?.length ?? 0) > 0 || (message.toolResults?.length ?? 0) > 0
+      );
     const jsonMode = request.response_format?.type === 'json_object';
     const jsonInstruction = '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
+
+    if (usesTools && !TOOL_CAPABLE_MODELS.has(model)) {
+      throw new ConfigurationError(
+        this.name,
+        `Model '${model}' does not support tool calling on Groq`
+      );
+    }
 
     if (request.systemPrompt) {
       messages.push({
@@ -334,8 +347,8 @@ export class GroqProvider extends BaseProvider {
       groqRequest.response_format = request.response_format;
     }
 
-    // Add tools if the model supports them and tools are provided
-    if (request.tools && request.tools.length > 0 && TOOL_CAPABLE_MODELS.has(model)) {
+    // Add tools if provided. Unsupported tool models are rejected above.
+    if (request.tools && request.tools.length > 0) {
       groqRequest.tools = request.tools.map(t => ({
         type: 'function',
         function: {
