@@ -3,6 +3,21 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-04-16
+
+### Added
+- **Cloudflare Workers AI vision support** — `CloudflareProvider` now accepts `request.images` and routes to vision-capable models. Previously image data was silently dropped on the CF path.
+- **Three new CF vision models**:
+  - `@cf/google/gemma-4-26b-a4b-it` — 256K context, vision + function calling + reasoning
+  - `@cf/meta/llama-4-scout-17b-16e-instruct` — natively multimodal, tool calling
+  - `@cf/meta/llama-3.2-11b-vision-instruct` — image understanding
+- **`CloudflareProvider.supportsVision = true`** — factory's `analyzeImage` now dispatches to CF when configured.
+- **Factory default vision fallback** — `getDefaultVisionModel()` falls back to `@cf/google/gemma-4-26b-a4b-it` when neither Anthropic nor OpenAI is configured, enabling CF-only deployments to use `analyzeImage()`.
+
+### Changed
+- Images are passed to CF using the OpenAI-compatible `image_url` content-part shape (base64 data URIs). HTTP image URLs throw a helpful `ConfigurationError` — fetch the image and pass bytes in `image.data`.
+- Attempting `request.images` on a non-vision CF model throws a `ConfigurationError` naming the vision-capable alternatives.
+
 ## [1.2.0] — 2026-04-01
 
 ### Added

@@ -271,4 +271,97 @@ describe('CloudflareProvider', () => {
       ]);
     });
   });
+
+  describe('vision', () => {
+    it('advertises vision capability on the provider', () => {
+      expect(provider.supportsVision).toBe(true);
+    });
+
+    it('marks Gemma 4, Llama 4 Scout, and Llama 3.2 Vision as vision-capable', () => {
+      const capabilities = provider.exposeModelCapabilities();
+      expect(capabilities['@cf/google/gemma-4-26b-a4b-it'].supportsVision).toBe(true);
+      expect(capabilities['@cf/meta/llama-4-scout-17b-16e-instruct'].supportsVision).toBe(true);
+      expect(capabilities['@cf/meta/llama-3.2-11b-vision-instruct'].supportsVision).toBe(true);
+    });
+
+    it('attaches images to the last user message as OpenAI image_url parts', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        choices: [{ message: { role: 'assistant', content: 'A ripe tomato.' }, finish_reason: 'stop' }]
+      });
+
+      await provider.generateResponse({
+        model: '@cf/google/gemma-4-26b-a4b-it',
+        messages: [{ role: 'user', content: 'What is in this image?' }],
+        images: [{ data: 'QUJD', mimeType: 'image/png' }],
+        maxTokens: 256
+      });
+
+      const [modelArg, body] = mockAiRun.mock.calls[0];
+      expect(modelArg).toBe('@cf/google/gemma-4-26b-a4b-it');
+      expect(body.messages).toHaveLength(1);
+      const userMsg = body.messages[0];
+      expect(userMsg.role).toBe('user');
+      expect(Array.isArray(userMsg.content)).toBe(true);
+      expect(userMsg.content[0]).toEqual({ type: 'text', text: 'What is in this image?' });
+      expect(userMsg.content[1]).toEqual({
+        type: 'image_url',
+        image_url: { url: 'data:image/png;base64,QUJD' }
+      });
+    });
+
+    it('appends multiple images as separate image_url parts', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        choices: [{ message: { content: 'Two tomatoes.' }, finish_reason: 'stop' }]
+      });
+
+      await provider.generateResponse({
+        model: '@cf/meta/llama-4-scout-17b-16e-instruct',
+        messages: [{ role: 'user', content: 'compare' }],
+        images: [
+          { data: 'QQ==', mimeType: 'image/jpeg' },
+          { data: 'Qg==', mimeType: 'image/jpeg' }
+        ]
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      const content = body.messages[body.messages.length - 1].content;
+      expect(content.filter((p: { type: string }) => p.type === 'image_url')).toHaveLength(2);
+    });
+
+    it('accepts pre-formed data: URLs via image.url', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }]
+      });
+
+      await provider.generateResponse({
+        model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        messages: [{ role: 'user', content: 'x' }],
+        images: [{ url: 'data:image/webp;base64,ZEFUQQ==' }]
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      const imagePart = body.messages[0].content[1];
+      expect(imagePart.image_url.url).toBe('data:image/webp;base64,ZEFUQQ==');
+    });
+
+    it('rejects HTTP image URLs (requires base64 bytes)', async () => {
+      await expect(
+        provider.generateResponse({
+          model: '@cf/google/gemma-4-26b-a4b-it',
+          messages: [{ role: 'user', content: 'x' }],
+          images: [{ url: 'https://example.com/img.jpg' }]
+        })
+      ).rejects.toThrow(/HTTP image URLs are not supported/);
+    });
+
+    it('rejects images on non-vision models with a helpful error', async () => {
+      await expect(
+        provider.generateResponse({
+          model: '@cf/meta/llama-3.1-8b-instruct',
+          messages: [{ role: 'user', content: 'x' }],
+          images: [{ data: 'QUJD', mimeType: 'image/png' }]
+        })
+      ).rejects.toThrow(/does not support image input/);
+    });
+  });
 });

@@ -1105,6 +1105,7 @@ export class LLMProviderFactory {
     if (this.config.defaultVisionModel) return this.config.defaultVisionModel;
     if (this.providers.has('anthropic')) return 'claude-haiku-4-5-20251001';
     if (this.providers.has('openai')) return 'gpt-4o-mini';
+    if (this.providers.has('cloudflare')) return '@cf/google/gemma-4-26b-a4b-it';
     return undefined;
   }
 
