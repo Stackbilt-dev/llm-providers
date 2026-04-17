@@ -129,8 +129,7 @@ export class AnthropicProvider extends BaseProvider {
     'claude-3-5-sonnet-20241022',
     'claude-3-5-haiku-20241022',
     'claude-3-opus-20240229',
-    'claude-3-sonnet-20240229',
-    'claude-3-haiku-20240307'
+    'claude-3-sonnet-20240229'
   ];
   supportsStreaming = true;
   supportsTools = true;
@@ -351,15 +350,6 @@ export class AnthropicProvider extends BaseProvider {
         inputTokenCost: 0.003, // $3 per 1M tokens
         outputTokenCost: 0.015, // $15 per 1M tokens
         description: 'Claude 3 Sonnet - Balanced performance'
-      },
-      'claude-3-haiku-20240307': {
-        maxContextLength: 200000,
-        supportsStreaming: true,
-        supportsTools: true,
-        supportsBatching: false,
-        inputTokenCost: 0.00025, // $0.25 per 1M tokens
-        outputTokenCost: 0.00125, // $1.25 per 1M tokens
-        description: 'Claude 3 Haiku - Fast and economical'
       }
     };
   }

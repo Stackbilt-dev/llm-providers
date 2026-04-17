@@ -47,11 +47,11 @@ describe('OpenAI response_format', () => {
   });
 
   it('should pass response_format through to the API body', async () => {
-    mockFetch.mockResolvedValueOnce(openAIChatCompletion('gpt-4o'));
+    mockFetch.mockResolvedValueOnce(openAIChatCompletion('gpt-4o-mini'));
 
     await provider.generateResponse({
       messages: [{ role: 'user', content: 'Give me JSON' }],
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
       response_format: { type: 'json_object' }
     });
 
@@ -60,11 +60,11 @@ describe('OpenAI response_format', () => {
   });
 
   it('should not include response_format when not set', async () => {
-    mockFetch.mockResolvedValueOnce(openAIChatCompletion('gpt-4o'));
+    mockFetch.mockResolvedValueOnce(openAIChatCompletion('gpt-4o-mini'));
 
     await provider.generateResponse({
       messages: [{ role: 'user', content: 'Hello' }],
-      model: 'gpt-4o'
+      model: 'gpt-4o-mini'
     });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
@@ -72,11 +72,11 @@ describe('OpenAI response_format', () => {
   });
 
   it('should pass response_format with type text', async () => {
-    mockFetch.mockResolvedValueOnce(openAIChatCompletion('gpt-4o', 'plain text'));
+    mockFetch.mockResolvedValueOnce(openAIChatCompletion('gpt-4o-mini', 'plain text'));
 
     await provider.generateResponse({
       messages: [{ role: 'user', content: 'Hello' }],
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
       response_format: { type: 'text' }
     });
 

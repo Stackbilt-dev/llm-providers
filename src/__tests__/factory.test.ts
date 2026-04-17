@@ -49,7 +49,7 @@ const mockOpenAIProvider = {
 
 const mockAnthropicProvider = {
   name: 'anthropic',
-  models: ['claude-3-haiku-20240307', 'claude-3-sonnet-20240229'],
+  models: ['claude-haiku-4-5-20251001', 'claude-3-sonnet-20240229'],
   supportsStreaming: true,
   supportsTools: true,
   supportsBatching: false,
@@ -57,14 +57,14 @@ const mockAnthropicProvider = {
   generateResponse: vi.fn().mockResolvedValue({
     message: 'Anthropic response',
     usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.002 },
-    model: 'claude-3-haiku-20240307',
+    model: 'claude-haiku-4-5-20251001',
     provider: 'anthropic',
     responseTime: 1200
   } as LLMResponse),
   streamResponse: vi.fn(),
   getProviderBalance: vi.fn(),
   validateConfig: vi.fn().mockReturnValue(true),
-  getModels: vi.fn().mockReturnValue(['claude-3-haiku-20240307', 'claude-3-sonnet-20240229']),
+  getModels: vi.fn().mockReturnValue(['claude-haiku-4-5-20251001', 'claude-3-sonnet-20240229']),
   estimateCost: vi.fn().mockReturnValue(0.002),
   healthCheck: vi.fn().mockResolvedValue(true),
   getMetrics: vi.fn().mockReturnValue({
@@ -161,7 +161,7 @@ describe('LLMProviderFactory', () => {
     mockAnthropicProvider.generateResponse.mockReset().mockResolvedValue({
       message: 'Anthropic response',
       usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cost: 0.002 },
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
       provider: 'anthropic',
       responseTime: 1200
     } as LLMResponse);
@@ -326,7 +326,7 @@ describe('LLMProviderFactory', () => {
       // Test Claude model request
       const claudeRequest: LLMRequest = {
         ...testRequest,
-        model: 'claude-3-haiku-20240307'
+        model: 'claude-haiku-4-5-20251001'
       };
 
       await factory.generateResponse(claudeRequest);
@@ -373,7 +373,7 @@ describe('LLMProviderFactory', () => {
         fallbackRules: [{
           condition: 'error',
           fallbackProvider: 'anthropic',
-          fallbackModel: 'claude-3-haiku-20240307'
+          fallbackModel: 'claude-haiku-4-5-20251001'
         }]
       });
 
@@ -385,7 +385,7 @@ describe('LLMProviderFactory', () => {
       });
 
       expect(mockAnthropicProvider.generateResponse).toHaveBeenCalledWith(
-        expect.objectContaining({ model: 'claude-3-haiku-20240307' })
+        expect.objectContaining({ model: 'claude-haiku-4-5-20251001' })
       );
     });
   });

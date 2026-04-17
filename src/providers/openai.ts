@@ -81,10 +81,8 @@ interface OpenAIResponse {
 export class OpenAIProvider extends BaseProvider {
   name = 'openai';
   models = [
-    'gpt-4o',
     'gpt-4o-mini',
     'gpt-4-turbo',
-    'gpt-4-turbo-preview',
     'gpt-4',
     'gpt-3.5-turbo',
     'gpt-3.5-turbo-16k'
@@ -176,16 +174,6 @@ export class OpenAIProvider extends BaseProvider {
 
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
     return {
-      'gpt-4o': {
-        maxContextLength: 128000,
-        supportsStreaming: true,
-        supportsTools: true,
-        supportsVision: true,
-        supportsBatching: false,
-        inputTokenCost: 0.005, // $5 per 1M tokens
-        outputTokenCost: 0.015, // $15 per 1M tokens
-        description: 'GPT-4 Omni - Latest multimodal model'
-      },
       'gpt-4o-mini': {
         maxContextLength: 128000,
         supportsStreaming: true,

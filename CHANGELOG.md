@@ -3,6 +3,20 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] — 2026-04-17
+
+### Deprecated
+- **`MODELS.CLAUDE_3_HAIKU`** (`claude-3-haiku-20240307`) — Anthropic retires 2026-04-19. Migrate to `MODELS.CLAUDE_HAIKU_4_5` or `MODELS.CLAUDE_3_5_HAIKU`. Export retained; callers get a compile-time `@deprecated` warning.
+- **`MODELS.GPT_4O`** (`gpt-4o`) — retired by OpenAI on 2026-04-03. Migrate to `MODELS.GPT_4O_MINI` or a current GPT-4 successor. Export retained; callers get a compile-time `@deprecated` warning.
+
+### Removed
+- `claude-3-haiku-20240307` — dropped from `AnthropicProvider.models[]` and its capabilities/pricing table. Calls to this ID will fail at Anthropic's cutoff; keeping it advertised would mislead consumers.
+- `gpt-4o` — dropped from `OpenAIProvider.models[]` and its capabilities/pricing table.
+- `gpt-4-turbo-preview` — dead alias dropped from `OpenAIProvider.models[]` (no corresponding capabilities entry; caught by the new drift test).
+
+### Added
+- **Model drift test** (`src/__tests__/model-drift.test.ts`) — asserts every provider's `models[]` array is symmetrically covered by its capabilities map. Prevents future retirement drift where a model is removed from one list but not the other. Runs across all 5 providers.
+
 ## [1.3.0] — 2026-04-16
 
 ### Added
