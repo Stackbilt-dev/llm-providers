@@ -13,13 +13,13 @@ const mockValidateConfig = vi.fn().mockReturnValue(true);
 vi.mock('../providers/openai', () => ({
   OpenAIProvider: vi.fn().mockImplementation(() => ({
     name: 'openai',
-    models: ['gpt-4o'],
+    models: ['gpt-4o-mini'],
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: true,
     validateConfig: mockValidateConfig,
     generateResponse: vi.fn(),
-    getModels: vi.fn().mockReturnValue(['gpt-4o']),
+    getModels: vi.fn().mockReturnValue(['gpt-4o-mini']),
     estimateCost: vi.fn().mockReturnValue(0),
     healthCheck: vi.fn().mockResolvedValue(true),
     getMetrics: vi.fn().mockReturnValue({
@@ -33,13 +33,13 @@ vi.mock('../providers/openai', () => ({
 vi.mock('../providers/anthropic', () => ({
   AnthropicProvider: vi.fn().mockImplementation(() => ({
     name: 'anthropic',
-    models: ['claude-3-haiku-20240307'],
+    models: ['claude-haiku-4-5-20251001'],
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     validateConfig: mockValidateConfig,
     generateResponse: vi.fn(),
-    getModels: vi.fn().mockReturnValue(['claude-3-haiku-20240307']),
+    getModels: vi.fn().mockReturnValue(['claude-haiku-4-5-20251001']),
     estimateCost: vi.fn().mockReturnValue(0),
     healthCheck: vi.fn().mockResolvedValue(true),
     getMetrics: vi.fn().mockReturnValue({

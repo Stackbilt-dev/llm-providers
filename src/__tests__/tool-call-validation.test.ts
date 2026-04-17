@@ -37,7 +37,7 @@ describe('Tool call validation at provider boundary', () => {
         ok: true,
         json: async () => ({
           id: 'chatcmpl-1',
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           choices: [{
             index: 0,
             message: {
@@ -58,7 +58,7 @@ describe('Tool call validation at provider boundary', () => {
 
       const res = await provider.generateResponse({
         messages: [{ role: 'user', content: 'weather' }],
-        model: 'gpt-4o'
+        model: 'gpt-4o-mini'
       });
 
       expect(res.toolCalls).toHaveLength(1);
@@ -73,7 +73,7 @@ describe('Tool call validation at provider boundary', () => {
         ok: true,
         json: async () => ({
           id: 'chatcmpl-1',
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           choices: [{
             index: 0,
             message: {
@@ -94,7 +94,7 @@ describe('Tool call validation at provider boundary', () => {
 
       const res = await provider.generateResponse({
         messages: [{ role: 'user', content: 'hi' }],
-        model: 'gpt-4o'
+        model: 'gpt-4o-mini'
       });
 
       expect(res.toolCalls).toBeUndefined();
@@ -105,7 +105,7 @@ describe('Tool call validation at provider boundary', () => {
         ok: true,
         json: async () => ({
           id: 'chatcmpl-1',
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           choices: [{
             index: 0,
             message: {
@@ -126,7 +126,7 @@ describe('Tool call validation at provider boundary', () => {
 
       const res = await provider.generateResponse({
         messages: [{ role: 'user', content: 'hi' }],
-        model: 'gpt-4o'
+        model: 'gpt-4o-mini'
       });
 
       expect(res.toolCalls).toBeUndefined();
@@ -137,7 +137,7 @@ describe('Tool call validation at provider boundary', () => {
         ok: true,
         json: async () => ({
           id: 'chatcmpl-1',
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           choices: [{
             index: 0,
             message: {
@@ -158,7 +158,7 @@ describe('Tool call validation at provider boundary', () => {
 
       const res = await provider.generateResponse({
         messages: [{ role: 'user', content: 'hi' }],
-        model: 'gpt-4o'
+        model: 'gpt-4o-mini'
       });
 
       expect(res.toolCalls).toBeUndefined();
@@ -169,7 +169,7 @@ describe('Tool call validation at provider boundary', () => {
         ok: true,
         json: async () => ({
           id: 'chatcmpl-1',
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           choices: [{
             index: 0,
             message: {
@@ -190,7 +190,7 @@ describe('Tool call validation at provider boundary', () => {
 
       const res = await provider.generateResponse({
         messages: [{ role: 'user', content: 'hi' }],
-        model: 'gpt-4o'
+        model: 'gpt-4o-mini'
       });
 
       expect(res.toolCalls).toBeUndefined();
@@ -201,7 +201,7 @@ describe('Tool call validation at provider boundary', () => {
         ok: true,
         json: async () => ({
           id: 'chatcmpl-1',
-          model: 'gpt-4o',
+          model: 'gpt-4o-mini',
           choices: [{
             index: 0,
             message: {
@@ -222,7 +222,7 @@ describe('Tool call validation at provider boundary', () => {
 
       const res = await provider.generateResponse({
         messages: [{ role: 'user', content: 'hi' }],
-        model: 'gpt-4o'
+        model: 'gpt-4o-mini'
       });
 
       expect(res.toolCalls).toHaveLength(2);
@@ -250,7 +250,7 @@ describe('Tool call validation at provider boundary', () => {
             { type: 'tool_use', id: 'toolu_1', name: 'search', input: { q: 'test' } },
             { type: 'tool_use', id: '', name: 'bad', input: {} } // empty id
           ],
-          model: 'claude-3-haiku-20240307',
+          model: 'claude-haiku-4-5-20251001',
           stop_reason: 'tool_use',
           usage: { input_tokens: 10, output_tokens: 5 }
         }),
@@ -259,7 +259,7 @@ describe('Tool call validation at provider boundary', () => {
 
       const res = await provider.generateResponse({
         messages: [{ role: 'user', content: 'search' }],
-        model: 'claude-3-haiku-20240307'
+        model: 'claude-haiku-4-5-20251001'
       });
 
       // Only the valid tool call should survive

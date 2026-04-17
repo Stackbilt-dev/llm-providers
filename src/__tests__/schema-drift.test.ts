@@ -147,7 +147,7 @@ describe('AnthropicProvider response schema validation', () => {
     type: 'message',
     role: 'assistant',
     content: [{ type: 'text', text: 'hello' }],
-    model: 'claude-3-haiku-20240307',
+    model: 'claude-haiku-4-5-20251001',
     stop_reason: 'end_turn',
     usage: { input_tokens: 10, output_tokens: 5 },
   };
@@ -161,7 +161,7 @@ describe('AnthropicProvider response schema validation', () => {
 
     const res = await provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     });
 
     expect(res.content).toBe('hello');
@@ -181,7 +181,7 @@ describe('AnthropicProvider response schema validation', () => {
 
     await expect(provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({
       name: 'LLMProviderError',
       code: 'SCHEMA_DRIFT',
@@ -200,7 +200,7 @@ describe('AnthropicProvider response schema validation', () => {
 
     await expect(provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({ code: 'SCHEMA_DRIFT', path: 'content' });
   });
 
@@ -213,7 +213,7 @@ describe('AnthropicProvider response schema validation', () => {
 
     await expect(provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({
       code: 'SCHEMA_DRIFT',
       path: 'content',
@@ -236,7 +236,7 @@ describe('AnthropicProvider response schema validation', () => {
 
     await expect(retryProvider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({ code: 'SCHEMA_DRIFT' });
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -256,7 +256,7 @@ describe('LLMProviderFactory schema drift fallback', () => {
 
   const validOpenAIResponse = {
     id: 'chatcmpl-1',
-    model: 'gpt-4o',
+    model: 'gpt-4o-mini',
     choices: [{
       index: 0,
       message: { role: 'assistant', content: 'from openai' },
@@ -276,7 +276,7 @@ describe('LLMProviderFactory schema drift fallback', () => {
           type: 'message',
           role: 'assistant',
           // content intentionally missing — drift
-          model: 'claude-3-haiku-20240307',
+          model: 'claude-haiku-4-5-20251001',
           stop_reason: 'end_turn',
           usage: { input_tokens: 10, output_tokens: 5 },
         }),
@@ -317,7 +317,7 @@ describe('LLMProviderFactory schema drift fallback', () => {
           type: 'message',
           role: 'assistant',
           content: [],
-          model: 'claude-3-haiku-20240307',
+          model: 'claude-haiku-4-5-20251001',
           stop_reason: 'end_turn',
           usage: { prompt_tokens: 10 }, // wrong field name — drift on usage.input_tokens
         }),
@@ -371,7 +371,7 @@ describe('LLMProviderFactory schema drift fallback', () => {
       ok: true,
       json: async () => ({
         id: 'msg_1', type: 'message', role: 'assistant',
-        model: 'claude-3-haiku-20240307',
+        model: 'claude-haiku-4-5-20251001',
         stop_reason: 'end_turn',
         usage: { input_tokens: 10, output_tokens: 5 },
         // content intentionally missing — drift
@@ -429,7 +429,7 @@ describe('SchemaDriftError and circuit breaker', () => {
         json: async () => ({
           id: 'msg_1', type: 'message', role: 'assistant',
           content: [],
-          model: 'claude-3-haiku-20240307',
+          model: 'claude-haiku-4-5-20251001',
           stop_reason: 'end_turn',
           usage: { output_tokens: 5 },
         }),
@@ -442,7 +442,7 @@ describe('SchemaDriftError and circuit breaker', () => {
         try {
           await provider.generateResponse({
             messages: [{ role: 'user', content: 'hi' }],
-            model: 'claude-3-haiku-20240307',
+            model: 'claude-haiku-4-5-20251001',
           });
         } catch {
           // Expected - drift or circuit-open
@@ -473,7 +473,7 @@ describe('SchemaDriftError message surface (security)', () => {
       json: async () => ({
         id: SECRET_VALUE, // intentionally put a "secret" where we expect a string
         // content missing — triggers drift on content path instead of id
-        model: 'claude-3-haiku-20240307',
+        model: 'claude-haiku-4-5-20251001',
         stop_reason: 'end_turn',
         usage: { input_tokens: 10, output_tokens: 5 },
       }),
@@ -483,7 +483,7 @@ describe('SchemaDriftError message surface (security)', () => {
     try {
       await provider.generateResponse({
         messages: [{ role: 'user', content: SECRET_VALUE }],
-        model: 'claude-3-haiku-20240307',
+        model: 'claude-haiku-4-5-20251001',
       });
       expect.fail('should have thrown');
     } catch (err) {
@@ -518,7 +518,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
     type: 'message',
     role: 'assistant',
     content,
-    model: 'claude-3-haiku-20240307',
+    model: 'claude-haiku-4-5-20251001',
     stop_reason: 'end_turn',
     usage: { input_tokens: 10, output_tokens: 5 },
   });
@@ -534,7 +534,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
 
     const res = await provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     });
     expect(res.toolCalls).toHaveLength(1);
   });
@@ -550,7 +550,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
 
     await expect(provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({
       code: 'SCHEMA_DRIFT',
       path: 'content[0].id',
@@ -570,7 +570,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
 
     await expect(provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({
       code: 'SCHEMA_DRIFT',
       path: 'content[0].input',
@@ -590,7 +590,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
 
     await expect(provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({
       code: 'SCHEMA_DRIFT',
       path: 'content[0].text',
@@ -606,7 +606,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
 
     await expect(provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({
       code: 'SCHEMA_DRIFT',
       path: 'content[0]',
@@ -626,7 +626,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
 
     await expect(provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     })).rejects.toMatchObject({
       code: 'SCHEMA_DRIFT',
       path: 'content[0].type',
@@ -648,7 +648,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
 
     const res = await provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     });
     // Text content extracted; unknown block silently ignored by filter
     expect(res.content).toBe('hello');
@@ -664,7 +664,7 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
 
     const res = await provider.generateResponse({
       messages: [{ role: 'user', content: 'hi' }],
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
     });
     expect(res.content).toBe('hi');
   });

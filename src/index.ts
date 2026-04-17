@@ -408,6 +408,7 @@ export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebr
  */
 export const MODELS = {
   // OpenAI models
+  /** @deprecated Retired by OpenAI on 2026-04-03. Use GPT_4O_MINI or a current GPT-4 successor. */
   GPT_4O: 'gpt-4o',
   GPT_4O_MINI: 'gpt-4o-mini',
   GPT_4_TURBO: 'gpt-4-turbo',
@@ -425,6 +426,7 @@ export const MODELS = {
   CLAUDE_3_5_HAIKU: 'claude-3-5-haiku-20241022',
   CLAUDE_3_OPUS: 'claude-3-opus-20240229',
   CLAUDE_3_SONNET: 'claude-3-sonnet-20240229',
+  /** @deprecated Retires 2026-04-19. Use CLAUDE_HAIKU_4_5 or CLAUDE_3_5_HAIKU. */
   CLAUDE_3_HAIKU: 'claude-3-haiku-20240307',
 
   // Cloudflare models
