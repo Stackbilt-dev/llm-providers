@@ -6,6 +6,7 @@
 import type {
   LLMRequest,
   LLMResponse,
+  LLMImageInput,
   CloudflareConfig,
   ModelCapabilities,
   TokenUsage,
@@ -17,9 +18,15 @@ import {
   ModelNotFoundError
 } from '../errors';
 
+interface CloudflareContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string };
+}
+
 interface CloudflareMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | null | CloudflareContentPart[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }
@@ -94,11 +101,15 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/qwen/qwen1.5-0.5b-chat',
     '@cf/qwen/qwen1.5-1.8b-chat',
     '@cf/qwen/qwen1.5-14b-chat-awq',
-    '@cf/qwen/qwen1.5-7b-chat-awq'
+    '@cf/qwen/qwen1.5-7b-chat-awq',
+    '@cf/google/gemma-4-26b-a4b-it',
+    '@cf/meta/llama-4-scout-17b-16e-instruct',
+    '@cf/meta/llama-3.2-11b-vision-instruct'
   ];
   supportsStreaming = true;
   supportsTools = true;
   supportsBatching = true;
+  supportsVision = true;
 
   private ai: Ai;
   private accountId?: string;
@@ -307,6 +318,38 @@ export class CloudflareProvider extends BaseProvider {
         inputTokenCost: 0.0000001,
         outputTokenCost: 0.0000001,
         description: 'Qwen 1.5 7B - Optimized performance'
+      },
+      '@cf/google/gemma-4-26b-a4b-it': {
+        maxContextLength: 256000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: true,
+        inputTokenCost: 0.0000001,
+        outputTokenCost: 0.0000003,
+        description: 'Gemma 4 26B — vision + tools + reasoning, 256K context'
+      },
+      '@cf/meta/llama-4-scout-17b-16e-instruct': {
+        maxContextLength: 131000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: true,
+        inputTokenCost: 0.0000003,
+        outputTokenCost: 0.0000009,
+        description: 'Llama 4 Scout 17B — natively multimodal, tool calling'
+      },
+      '@cf/meta/llama-3.2-11b-vision-instruct': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsVision: true,
+        supportsBatching: true,
+        inputTokenCost: 0.0000005,
+        outputTokenCost: 0.0000005,
+        description: 'Llama 3.2 11B Vision — image understanding'
       }
     };
   }
@@ -323,6 +366,14 @@ export class CloudflareProvider extends BaseProvider {
       throw new ConfigurationError(
         this.name,
         `Model '${model}' does not support tool calling on Cloudflare Workers AI`
+      );
+    }
+
+    const hasImages = (request.images?.length ?? 0) > 0;
+    if (hasImages && !capabilities?.supportsVision) {
+      throw new ConfigurationError(
+        this.name,
+        `Model '${model}' does not support image input. Use a vision-capable model like @cf/google/gemma-4-26b-a4b-it, @cf/meta/llama-4-scout-17b-16e-instruct, or @cf/meta/llama-3.2-11b-vision-instruct.`
       );
     }
 
@@ -381,6 +432,10 @@ export class CloudflareProvider extends BaseProvider {
       }
     }
 
+    if (hasImages) {
+      this.attachImagesToLastUserMessage(messages, request.images!, model);
+    }
+
     const cloudflareRequest: CloudflareRequest = {
       messages,
       temperature: request.temperature,
@@ -400,6 +455,51 @@ export class CloudflareProvider extends BaseProvider {
     }
 
     return cloudflareRequest;
+  }
+
+  private attachImagesToLastUserMessage(
+    messages: CloudflareMessage[],
+    images: NonNullable<LLMRequest['images']>,
+    model: string
+  ): void {
+    const lastUserIndex = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'user') return i;
+      }
+      return -1;
+    })();
+
+    if (lastUserIndex === -1) {
+      throw new ConfigurationError(
+        this.name,
+        `Vision request must include at least one user message (model: ${model})`
+      );
+    }
+
+    const existing = messages[lastUserIndex].content;
+    const text = typeof existing === 'string' ? existing : '';
+
+    const parts: CloudflareContentPart[] = [{ type: 'text', text }];
+    for (const image of images) {
+      const url = this.buildImageDataUrl(image, model);
+      parts.push({ type: 'image_url', image_url: { url } });
+    }
+
+    messages[lastUserIndex].content = parts;
+  }
+
+  private buildImageDataUrl(image: LLMImageInput, model: string): string {
+    if (image.data) {
+      const mime = image.mimeType ?? 'image/jpeg';
+      return `data:${mime};base64,${image.data}`;
+    }
+    if (image.url?.startsWith('data:')) {
+      return image.url;
+    }
+    throw new ConfigurationError(
+      this.name,
+      `Cloudflare vision models (${model}) require base64 image data or a data: URL. HTTP image URLs are not supported — fetch the image and pass bytes in image.data.`
+    );
   }
 
   private formatResponse(
