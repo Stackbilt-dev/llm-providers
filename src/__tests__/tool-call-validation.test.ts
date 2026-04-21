@@ -164,7 +164,13 @@ describe('Tool call validation at provider boundary', () => {
       expect(res.toolCalls).toBeUndefined();
     });
 
-    it('should drop tool call with non-string arguments', async () => {
+    it('routes non-string arguments to SchemaDriftError (envelope contract violation)', async () => {
+      // `function.arguments` is a non-string: this is an envelope-shape
+      // violation (OpenAI's contract says stringified JSON), not a within-
+      // envelope semantic issue. Schema validation upstream of
+      // validateToolCalls catches it and routes through drift/fallback,
+      // rather than silently dropping the tool_call. Behavior upgrade from
+      // PR #23 once #39 slice 2 landed.
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -188,12 +194,14 @@ describe('Tool call validation at provider boundary', () => {
         headers: new Headers({ 'content-type': 'application/json' })
       });
 
-      const res = await provider.generateResponse({
+      await expect(provider.generateResponse({
         messages: [{ role: 'user', content: 'hi' }],
         model: 'gpt-4o-mini'
+      })).rejects.toMatchObject({
+        code: 'SCHEMA_DRIFT',
+        provider: 'openai',
+        path: 'choices[0].message.tool_calls[0].function.arguments',
       });
-
-      expect(res.toolCalls).toBeUndefined();
     });
 
     it('should keep valid tool calls and drop invalid ones', async () => {

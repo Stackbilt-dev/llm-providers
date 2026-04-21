@@ -13,6 +13,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { validateSchema, type SchemaField } from '../utils/schema-validator';
 import { SchemaDriftError } from '../errors';
 import { AnthropicProvider } from '../providers/anthropic';
+import { OpenAIProvider } from '../providers/openai';
+import { GroqProvider } from '../providers/groq';
+import { CerebrasProvider } from '../providers/cerebras';
+import type { BaseProvider } from '../providers/base';
 import { LLMProviderFactory } from '../factory';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
@@ -666,6 +670,190 @@ describe('Anthropic nested content-block validation (H-2 / #42)', () => {
       messages: [{ role: 'user', content: 'hi' }],
       model: 'claude-haiku-4-5-20251001',
     });
+    expect(res.content).toBe('hi');
+  });
+});
+
+// ── OpenAI-compat provider schema validation ────────────────────────────
+//
+// OpenAI, Groq, and Cerebras all serve the /chat/completions envelope.
+// Driven through describe.each so drift-parity is enforced by construction —
+// if one provider's schema diverges, its tests break loudly.
+
+interface OpenAICompatCase {
+  name: string;
+  factory: () => BaseProvider;
+  model: string;
+}
+
+const openAiCompatCases: OpenAICompatCase[] = [
+  {
+    name: 'openai',
+    factory: () => new OpenAIProvider({ apiKey: 'test-key', maxRetries: 0 }),
+    model: 'gpt-4o-mini',
+  },
+  {
+    name: 'groq',
+    factory: () => new GroqProvider({ apiKey: 'test-key', maxRetries: 0 }),
+    model: 'llama-3.1-8b-instant',
+  },
+  {
+    name: 'cerebras',
+    factory: () => new CerebrasProvider({ apiKey: 'test-key', maxRetries: 0 }),
+    model: 'llama-3.1-8b',
+  },
+];
+
+describe.each(openAiCompatCases)('$name response schema validation', ({ name, factory, model }) => {
+  let provider: BaseProvider;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    defaultCircuitBreakerManager.resetAll();
+    provider = factory();
+  });
+
+  const validResponse = {
+    id: 'chatcmpl_1',
+    object: 'chat.completion',
+    created: 1700000000,
+    model,
+    choices: [{
+      index: 0,
+      message: { role: 'assistant', content: 'hello' },
+      finish_reason: 'stop',
+    }],
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  };
+
+  it('passes through a well-formed response', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => validResponse,
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    const res = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+
+    expect(res.content).toBe('hello');
+    expect(res.usage.inputTokens).toBe(10);
+  });
+
+  it('throws SchemaDriftError when usage.prompt_tokens is renamed', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ...validResponse,
+        usage: { input_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      provider: name,
+      path: 'usage.prompt_tokens',
+    });
+  });
+
+  it('throws SchemaDriftError when choices field is removed', async () => {
+    const { choices: _choices, ...rest } = validResponse;
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => rest,
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    })).rejects.toMatchObject({ code: 'SCHEMA_DRIFT', path: 'choices' });
+  });
+
+  it('throws SchemaDriftError when choices is empty (routes through drift, not bare throw)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ...validResponse, choices: [] }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      provider: name,
+      path: 'choices[0]',
+    });
+  });
+
+  it('throws SchemaDriftError when tool_call function.arguments is not a string', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ...validResponse,
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'my_tool', arguments: { already: 'parsed' } },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    })).rejects.toMatchObject({
+      code: 'SCHEMA_DRIFT',
+      provider: name,
+      path: 'choices[0].message.tool_calls[0].function.arguments',
+      expected: 'string',
+      actual: 'object',
+    });
+  });
+
+  it('accepts unknown tool_call type (forward-compat on new tool variants)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ...validResponse,
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: 'hi',
+            tool_calls: [{
+              id: 'call_1',
+              type: 'code_interpreter', // hypothetical future tool type
+              function: { name: 'x', arguments: '{}' },
+            }],
+          },
+          finish_reason: 'stop',
+        }],
+      }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    const res = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+    // Envelope accepted; unknown variant skipped by discriminator, no drift thrown.
     expect(res.content).toBe('hi');
   });
 });

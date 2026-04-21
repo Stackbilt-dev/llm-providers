@@ -8,8 +8,48 @@ import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
   AuthenticationError,
-  ConfigurationError
+  ConfigurationError,
+  SchemaDriftError
 } from '../errors';
+import { validateSchema, type SchemaField } from '../utils/schema-validator';
+
+// Cerebras serves the OpenAI /chat/completions contract. See groq.ts for the
+// rationale on keeping each OpenAI-compat provider's schema as its own
+// constant rather than a shared import.
+const CEREBRAS_RESPONSE_SCHEMA: SchemaField[] = [
+  { path: 'id', type: 'string' },
+  { path: 'model', type: 'string' },
+  {
+    path: 'choices',
+    type: 'array',
+    items: {
+      shape: [
+        { path: 'message', type: 'object' },
+        { path: 'message.content', type: 'string-or-null' },
+        { path: 'finish_reason', type: 'string' },
+        {
+          path: 'message.tool_calls',
+          type: 'array',
+          optional: true,
+          items: {
+            discriminator: 'type',
+            variants: {
+              function: [
+                { path: 'id', type: 'string' },
+                { path: 'function.name', type: 'string' },
+                { path: 'function.arguments', type: 'string' },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  },
+  { path: 'usage', type: 'object' },
+  { path: 'usage.prompt_tokens', type: 'number' },
+  { path: 'usage.completion_tokens', type: 'number' },
+  { path: 'usage.total_tokens', type: 'number' },
+];
 
 interface CerebrasMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -110,8 +150,9 @@ export class CerebrasProvider extends BaseProvider {
           throw await LLMErrorFactory.fromFetchResponse('cerebras', httpResponse);
         }
 
-        const data: CerebrasResponse = await httpResponse.json();
-        return this.formatResponse(data, Date.now() - startTime);
+        const data = await httpResponse.json() as unknown;
+        validateSchema('cerebras', data, CEREBRAS_RESPONSE_SCHEMA);
+        return this.formatResponse(data as CerebrasResponse, Date.now() - startTime);
       });
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
@@ -379,7 +420,7 @@ export class CerebrasProvider extends BaseProvider {
   ): LLMResponse {
     const choice = data.choices[0];
     if (!choice) {
-      throw new Error('No choices returned from Cerebras');
+      throw new SchemaDriftError('cerebras', 'choices[0]', 'object', 'undefined');
     }
 
     const content = choice.message.content || '';
