@@ -374,25 +374,6 @@ export class LLMProviders {
     this.factory.updateConfig(config);
   }
 
-  /**
-   * Create LLMProviders by auto-discovering providers from a Cloudflare Workers env object.
-   * Inspects well-known env keys: AI (CF Workers AI binding), GROQ_API_KEY, CEREBRAS_API_KEY.
-   */
-  static fromEnv(env: Record<string, unknown>): LLMProviders {
-    const config: ProviderFactoryConfig = { defaultProvider: 'auto' };
-
-    if (env['AI']) {
-      config.cloudflare = { ai: env['AI'] as Ai };
-    }
-    if (typeof env['GROQ_API_KEY'] === 'string' && env['GROQ_API_KEY']) {
-      config.groq = { apiKey: env['GROQ_API_KEY'] };
-    }
-    if (typeof env['CEREBRAS_API_KEY'] === 'string' && env['CEREBRAS_API_KEY']) {
-      config.cerebras = { apiKey: env['CEREBRAS_API_KEY'] };
-    }
-
-    return new LLMProviders(config);
-  }
 }
 
 /**
