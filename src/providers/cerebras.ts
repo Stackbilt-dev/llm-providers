@@ -435,10 +435,14 @@ export class CerebrasProvider extends BaseProvider {
       )
     };
 
-    // Extract tool calls if present (validated at provider boundary)
+    // Extract tool calls if present (validated at provider boundary).
+    // See groq.ts for the rationale on filtering unknown `type` variants
+    // before dereferencing `tc.function` — keeps forward-compat discriminator
+    // skips from becoming bare TypeErrors.
     let toolCalls: ToolCall[] | undefined;
-    if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-      const raw: ToolCall[] = choice.message.tool_calls.map(tc => ({
+    const functionCalls = choice.message.tool_calls?.filter(tc => tc.type === 'function');
+    if (functionCalls && functionCalls.length > 0) {
+      const raw: ToolCall[] = functionCalls.map(tc => ({
         id: tc.id,
         type: 'function' as const,
         function: { name: tc.function.name, arguments: tc.function.arguments }

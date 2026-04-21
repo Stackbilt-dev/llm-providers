@@ -441,10 +441,17 @@ export class GroqProvider extends BaseProvider {
       )
     };
 
-    // Extract tool calls if present (validated at provider boundary)
+    // Extract tool calls if present (validated at provider boundary).
+    // Filter to function-type variants before dereferencing `tc.function`:
+    // the schema discriminator treats unknown `type` values as forward-compat
+    // (skipped, not drift), so a future `code_interpreter`-shaped variant
+    // may arrive without the `function` field we expect. Dropping at the map
+    // boundary keeps unknown variants invisible rather than surfacing a bare
+    // TypeError that bypasses the drift/fallback machinery.
     let toolCalls: ToolCall[] | undefined;
-    if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-      const raw: ToolCall[] = choice.message.tool_calls.map(tc => ({
+    const functionCalls = choice.message.tool_calls?.filter(tc => tc.type === 'function');
+    if (functionCalls && functionCalls.length > 0) {
+      const raw: ToolCall[] = functionCalls.map(tc => ({
         id: tc.id,
         type: 'function' as const,
         function: { name: tc.function.name, arguments: tc.function.arguments }

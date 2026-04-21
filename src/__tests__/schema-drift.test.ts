@@ -827,7 +827,13 @@ describe.each(openAiCompatCases)('$name response schema validation', ({ name, fa
     });
   });
 
-  it('accepts unknown tool_call type (forward-compat on new tool variants)', async () => {
+  it('accepts unknown tool_call type without surfacing it as a function call (forward-compat)', async () => {
+    // Schema's discriminator skips unknown `type` values (forward-compat for
+    // additive upstream changes). The provider's formatResponse must not
+    // dereference the function-shaped payload on a skipped variant, or an
+    // unknown shape becomes a bare TypeError (bypassing drift/fallback) or
+    // gets mis-surfaced as a normal function call. Mock omits `function`
+    // entirely to exercise the TypeError path specifically.
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -840,7 +846,8 @@ describe.each(openAiCompatCases)('$name response schema validation', ({ name, fa
             tool_calls: [{
               id: 'call_1',
               type: 'code_interpreter', // hypothetical future tool type
-              function: { name: 'x', arguments: '{}' },
+              // intentionally no `function` field — unknown variants may have a
+              // different shape upstream
             }],
           },
           finish_reason: 'stop',
@@ -853,7 +860,9 @@ describe.each(openAiCompatCases)('$name response schema validation', ({ name, fa
       messages: [{ role: 'user', content: 'hi' }],
       model,
     });
-    // Envelope accepted; unknown variant skipped by discriminator, no drift thrown.
     expect(res.content).toBe('hi');
+    // Critical: the unknown variant must be dropped, not mis-surfaced as a
+    // function call and not crashed through.
+    expect(res.toolCalls).toBeUndefined();
   });
 });
