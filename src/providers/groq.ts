@@ -8,8 +8,49 @@ import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
   AuthenticationError,
-  ConfigurationError
+  ConfigurationError,
+  SchemaDriftError
 } from '../errors';
+import { validateSchema, type SchemaField } from '../utils/schema-validator';
+
+// Groq serves the OpenAI /chat/completions contract — same envelope shape as
+// OpenAI. Kept as a separate constant (not imported from openai.ts) because
+// each provider's envelope is an independent API surface; shared drift would
+// be a correlated outage signal, not a single bug.
+const GROQ_RESPONSE_SCHEMA: SchemaField[] = [
+  { path: 'id', type: 'string' },
+  { path: 'model', type: 'string' },
+  {
+    path: 'choices',
+    type: 'array',
+    items: {
+      shape: [
+        { path: 'message', type: 'object' },
+        { path: 'message.content', type: 'string-or-null' },
+        { path: 'finish_reason', type: 'string' },
+        {
+          path: 'message.tool_calls',
+          type: 'array',
+          optional: true,
+          items: {
+            discriminator: 'type',
+            variants: {
+              function: [
+                { path: 'id', type: 'string' },
+                { path: 'function.name', type: 'string' },
+                { path: 'function.arguments', type: 'string' },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  },
+  { path: 'usage', type: 'object' },
+  { path: 'usage.prompt_tokens', type: 'number' },
+  { path: 'usage.completion_tokens', type: 'number' },
+  { path: 'usage.total_tokens', type: 'number' },
+];
 
 interface GroqMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -110,8 +151,9 @@ export class GroqProvider extends BaseProvider {
           throw await LLMErrorFactory.fromFetchResponse('groq', httpResponse);
         }
 
-        const data: GroqResponse = await httpResponse.json();
-        return this.formatResponse(data, Date.now() - startTime);
+        const data = await httpResponse.json() as unknown;
+        validateSchema('groq', data, GROQ_RESPONSE_SCHEMA);
+        return this.formatResponse(data as GroqResponse, Date.now() - startTime);
       });
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
@@ -384,7 +426,7 @@ export class GroqProvider extends BaseProvider {
   ): LLMResponse {
     const choice = data.choices[0];
     if (!choice) {
-      throw new Error('No choices returned from Groq');
+      throw new SchemaDriftError('groq', 'choices[0]', 'object', 'undefined');
     }
 
     const content = choice.message.content || '';
@@ -399,10 +441,17 @@ export class GroqProvider extends BaseProvider {
       )
     };
 
-    // Extract tool calls if present (validated at provider boundary)
+    // Extract tool calls if present (validated at provider boundary).
+    // Filter to function-type variants before dereferencing `tc.function`:
+    // the schema discriminator treats unknown `type` values as forward-compat
+    // (skipped, not drift), so a future `code_interpreter`-shaped variant
+    // may arrive without the `function` field we expect. Dropping at the map
+    // boundary keeps unknown variants invisible rather than surfacing a bare
+    // TypeError that bypasses the drift/fallback machinery.
     let toolCalls: ToolCall[] | undefined;
-    if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
-      const raw: ToolCall[] = choice.message.tool_calls.map(tc => ({
+    const functionCalls = choice.message.tool_calls?.filter(tc => tc.type === 'function');
+    if (functionCalls && functionCalls.length > 0) {
+      const raw: ToolCall[] = functionCalls.map(tc => ({
         id: tc.id,
         type: 'function' as const,
         function: { name: tc.function.name, arguments: tc.function.arguments }

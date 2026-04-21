@@ -9,8 +9,50 @@ import {
   LLMErrorFactory,
   AuthenticationError,
   ModelNotFoundError,
-  RateLimitError
+  RateLimitError,
+  SchemaDriftError
 } from '../errors';
+import { validateSchema, type SchemaField } from '../utils/schema-validator';
+
+// Minimum envelope `formatResponse` reads. `tool_calls` uses a discriminated
+// union (single `function` variant today) so an additive new tool type upstream
+// is forward-compat rather than drift. Empty `choices` is surfaced as drift at
+// the `choices[0]` path rather than a bare throw, so it routes through the
+// fallback/hook machinery like every other envelope failure.
+const OPENAI_RESPONSE_SCHEMA: SchemaField[] = [
+  { path: 'id', type: 'string' },
+  { path: 'model', type: 'string' },
+  {
+    path: 'choices',
+    type: 'array',
+    items: {
+      shape: [
+        { path: 'message', type: 'object' },
+        { path: 'message.content', type: 'string-or-null' },
+        { path: 'finish_reason', type: 'string' },
+        {
+          path: 'message.tool_calls',
+          type: 'array',
+          optional: true,
+          items: {
+            discriminator: 'type',
+            variants: {
+              function: [
+                { path: 'id', type: 'string' },
+                { path: 'function.name', type: 'string' },
+                { path: 'function.arguments', type: 'string' },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  },
+  { path: 'usage', type: 'object' },
+  { path: 'usage.prompt_tokens', type: 'number' },
+  { path: 'usage.completion_tokens', type: 'number' },
+  { path: 'usage.total_tokens', type: 'number' },
+];
 
 interface OpenAIToolCall {
   id: string;
@@ -124,8 +166,9 @@ export class OpenAIProvider extends BaseProvider {
           throw await LLMErrorFactory.fromFetchResponse('openai', httpResponse);
         }
 
-        const data: OpenAIResponse = await httpResponse.json();
-        return this.formatResponse(data, Date.now() - startTime);
+        const data = await httpResponse.json() as unknown;
+        validateSchema('openai', data, OPENAI_RESPONSE_SCHEMA);
+        return this.formatResponse(data as OpenAIResponse, Date.now() - startTime);
       });
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
@@ -357,7 +400,7 @@ export class OpenAIProvider extends BaseProvider {
   ): LLMResponse {
     const choice = data.choices[0];
     if (!choice) {
-      throw new Error('No choices returned from OpenAI');
+      throw new SchemaDriftError('openai', 'choices[0]', 'object', 'undefined');
     }
 
     const content = choice.message.content || '';
