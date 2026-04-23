@@ -3,6 +3,21 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Declarative model catalog** — new `src/model-catalog.ts` introduces a semantic catalog for provider/model metadata, recommendation use cases, lifecycle status, and runtime scoring.
+- **Catalog tests** — added coverage for retired-model exclusion, provider-health-aware ranking, and request-shape use-case inference.
+- **Runtime recommendation API** — `LLMProviders#getRecommendedModel(request, useCase?)` now exposes the same routing logic the factory uses internally.
+
+### Changed
+- **Factory routing** — `LLMProviderFactory` now selects provider/model pairs from the model catalog instead of relying only on hardcoded provider ordering.
+- **Health-aware dispatch** — recommendation and auto-routing now consider circuit-breaker state, including degraded and recovering providers, not just fully open breakers.
+- **Budget-aware dispatch** — when a `CreditLedger` is attached, selection can demote providers under high utilization or near projected depletion.
+- **Provider defaults** — OpenAI, Anthropic, Cloudflare, Cerebras, and Groq now resolve default models through the shared catalog instead of separate hardcoded fallbacks.
+- **Cloudflare model recommendation** — `CloudflareProvider.getRecommendedModel()` now prefers modern active baselines such as Gemma 4 and GPT-OSS instead of legacy TinyLlama/Qwen heuristics.
+- **Public recommendation exports** — `MODEL_RECOMMENDATIONS` and `getRecommendedModel()` now exclude retired recommendation targets such as `gpt-4o`, while preserving deprecated constants for compatibility.
+
 ## [1.4.0] — 2026-04-17
 
 ### Deprecated

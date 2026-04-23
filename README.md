@@ -8,6 +8,7 @@ A multi-provider LLM abstraction layer with automatic failover, graduated circui
 - **Graduated circuit breaker** -- 4-state machine (closed / degraded / recovering / open) with probabilistic traffic routing prevents cascading failures
 - **Exponential backoff retry** -- configurable delays, jitter, and per-error-class behavior
 - **Cost tracking and optimization** -- per-provider cost attribution, budget alerts with CreditLedger, automatic routing to cheaper providers
+- **Declarative model catalog** -- semantic model metadata drives recommendations, provider defaults, and fallback routing
 - **Rate limit enforcement** -- CreditLedger tracks RPM/RPD/TPM/TPD per provider; factory skips providers that exceed limits
 - **Streaming** -- SSE streaming support for all providers
 - **Tool/function calling** -- OpenAI, Anthropic, Cerebras, and Cloudflare tool use with unified response format
@@ -66,11 +67,11 @@ const llm = LLMProviders.fromEnv(env, {
 
 | Provider | Models | Streaming | Tools | Notes |
 |----------|--------|-----------|-------|-------|
-| **OpenAI** | GPT-4o, GPT-4o Mini, GPT-4 Turbo, GPT-4 | Yes | Yes | Default: `gpt-4o-mini` |
-| **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Sonnet 4, Haiku 4.5, 3.7 Sonnet, 3.5 Sonnet/Haiku, 3 Opus/Sonnet/Haiku | Yes | Yes | Default: `claude-haiku-4-5` |
-| **Cloudflare** | LLaMA 3.1 8B/70B, GPT-OSS 120B, Mistral 7B, Qwen 1.5, TinyLlama, and more | Yes | GPT-OSS only | Near-zero cost |
+| **OpenAI** | GPT-4o Mini, GPT-4 Turbo, GPT-4, GPT-3.5 Turbo | Yes | Yes | Default: `gpt-4o-mini` |
+| **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Sonnet 4, Haiku 4.5, 3.7 Sonnet, 3.5 Sonnet/Haiku, 3 Opus/Sonnet | Yes | Yes | Default: `claude-haiku-4-5-20251001` |
+| **Cloudflare** | Gemma 4 26B, Llama 4 Scout, GPT-OSS 120B, LLaMA 3.x, Mistral 7B, Qwen 1.5, TinyLlama, and more | Yes | GPT-OSS, Gemma 4, Llama 4 Scout | Default is request-aware and catalog-driven |
 | **Cerebras** | LLaMA 3.1 8B, LLaMA 3.3 70B, ZAI-GLM 4.7, Qwen 3 235B | Yes | GLM/Qwen only | ~2,200 tok/s |
-| **Groq** | LLaMA 3.3 70B Versatile, LLaMA 3.1 8B Instant | Yes | No | Ultra-fast inference |
+| **Groq** | LLaMA 3.3 70B Versatile, LLaMA 3.1 8B Instant, GPT-OSS 120B | Yes | LLaMA 3.3 70B, GPT-OSS 120B | Ultra-fast inference |
 
 ### Provider Configuration
 
@@ -160,6 +161,49 @@ const llm = new LLMProviders({
 });
 ```
 
+## Model Catalog & Runtime Selection
+
+Model selection is driven by a declarative catalog rather than a hardcoded fallback array. The selector intersects:
+
+- requested use case and capabilities
+- configured providers
+- circuit breaker state (`CLOSED`, `DEGRADED`, `RECOVERING`, `OPEN`)
+- CreditLedger utilization and projected burn/depletion pressure
+
+The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets.
+
+```typescript
+import {
+  MODEL_CATALOG,
+  MODEL_RECOMMENDATIONS,
+  getRecommendedModel,
+  inferUseCaseFromRequest
+} from '@stackbilt/llm-providers';
+
+const useCase = inferUseCaseFromRequest({
+  messages: [{ role: 'user', content: 'Call the weather tool' }],
+  tools: [{
+    type: 'function',
+    function: {
+      name: 'get_weather',
+      description: 'Get weather',
+      parameters: { type: 'object' }
+    }
+  }]
+});
+
+const model = getRecommendedModel('TOOL_CALLING', ['cloudflare', 'openai']);
+```
+
+For runtime-aware recommendations from a configured instance:
+
+```typescript
+const recommended = llm.getRecommendedModel({
+  messages: [{ role: 'user', content: 'Summarize this incident' }],
+  maxTokens: 800
+});
+```
+
 ## Fallback Rules
 
 Customize when and how the factory falls back between providers:
@@ -178,7 +222,7 @@ const llm = new LLMProviders({
 });
 ```
 
-Default fallback priority includes all configured providers: Cloudflare → Cerebras → Groq → Anthropic → OpenAI.
+Default provider precedence remains Cloudflare → Cerebras → Groq → Anthropic → OpenAI, but actual dispatch is catalog-driven and can be reordered at runtime by request fit, circuit-breaker state, and ledger burn-rate pressure.
 
 ## Error Handling
 
@@ -215,11 +259,11 @@ import { MODELS, getRecommendedModel } from '@stackbilt/llm-providers';
 MODELS.CLAUDE_OPUS_4_6;         // 'claude-opus-4-6-20250618'
 MODELS.CLAUDE_SONNET_4_6;       // 'claude-sonnet-4-6-20250618'
 MODELS.CLAUDE_HAIKU_4_5;        // 'claude-haiku-4-5-20251001'
-MODELS.GPT_4O;                  // 'gpt-4o'
+MODELS.GPT_4O;                  // 'gpt-4o' (deprecated / compatibility only)
 MODELS.GPT_4O_MINI;             // 'gpt-4o-mini'
 MODELS.CEREBRAS_ZAI_GLM_4_7;    // 'zai-glm-4.7'
 
-// Get best model for a use case given available providers
+// Get best active model for a use case given available providers
 const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 ```
 
@@ -230,12 +274,12 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 | Class | Description |
 |-------|-------------|
 | `LLMProviders` | High-level facade -- initialize providers, generate responses, check health |
-| `LLMProviderFactory` | Lower-level factory with provider chain building and fallback logic |
+| `LLMProviderFactory` | Lower-level factory with provider chain building, catalog-based routing, and fallback logic |
 | `OpenAIProvider` | OpenAI GPT models (streaming, tools) |
 | `AnthropicProvider` | Anthropic Claude models (streaming, tools) |
-| `CloudflareProvider` | Cloudflare Workers AI (streaming, tools on GPT-OSS, batch) |
+| `CloudflareProvider` | Cloudflare Workers AI (streaming, tools on GPT-OSS/Gemma 4/Llama 4, batch) |
 | `CerebrasProvider` | Cerebras fast inference (streaming, tools on GLM/Qwen) |
-| `GroqProvider` | Groq fast inference (streaming) |
+| `GroqProvider` | Groq fast inference (streaming, tools on GPT-OSS/LLaMA 3.3 70B) |
 | `BaseProvider` | Abstract base with shared resiliency, metrics, and cost calculation |
 
 ### Utilities
@@ -248,6 +292,7 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 | `CostTracker` | Per-provider cost accumulation and budget alerts |
 | `CreditLedger` | Monthly budgets, rate limits, burn rate projection, threshold events |
 | `CostOptimizer` | Static methods for optimal provider selection |
+| `MODEL_CATALOG` | Declarative model metadata for routing and recommendation |
 | `ImageProvider` | Multi-provider image generation (Cloudflare SDXL/FLUX, Google Gemini) |
 
 ### Logger
@@ -268,6 +313,7 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 | `ProviderFactoryConfig` | Factory config: provider configs, fallback rules, ledger, logger |
 | `CostAnalytics` | Cost breakdown, total, and recommendations |
 | `ProviderHealthEntry` | Health status, metrics, circuit breaker state, capabilities |
+| `ModelCatalogEntry` | Declarative model metadata: provider, lifecycle, capabilities, use cases |
 
 ### Factory Functions
 
@@ -276,7 +322,8 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 | `createLLMProviders(config)` | Create an `LLMProviders` instance |
 | `createCostOptimizedLLMProviders(config)` | Create with cost optimization, circuit breakers, and retries enabled |
 | `LLMProviders.fromEnv(env)` | Auto-discover providers from environment variables |
-| `getRecommendedModel(useCase, providers)` | Pick the best model for a use case |
+| `llm.getRecommendedModel(request, useCase?)` | Runtime recommendation using configured providers, health, and ledger state |
+| `getRecommendedModel(useCase, providers, context?)` | Pick the best active model for a use case |
 | `retry(fn, config)` | One-shot retry wrapper for any async function |
 
 ## License
