@@ -3,12 +3,17 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.5.0] — 2026-04-23
+
+Bundles the unreleased 1.4.0 scope (model retirements, drift test) with envelope validation, env auto-discovery, and the declarative catalog into a single minor release. 1.4.0 was tagged in `package.json` but never published to npm; consumers upgrading from 1.3.0 receive all of the following.
 
 ### Added
 - **Declarative model catalog** — new `src/model-catalog.ts` introduces a semantic catalog for provider/model metadata, recommendation use cases, lifecycle status, and runtime scoring.
-- **Catalog tests** — added coverage for retired-model exclusion, provider-health-aware ranking, and request-shape use-case inference.
-- **Runtime recommendation API** — `LLMProviders#getRecommendedModel(request, useCase?)` now exposes the same routing logic the factory uses internally.
+- **Catalog tests** — coverage for retired-model exclusion, provider-health-aware ranking, and request-shape use-case inference.
+- **Runtime recommendation API** — `LLMProviders#getRecommendedModel(request, useCase?)` exposes the same routing logic the factory uses internally.
+- **Schema drift envelope validation** — `OpenAIProvider`, `GroqProvider`, and `CerebrasProvider` now validate `/chat/completions` response envelopes at the provider boundary, throwing `SchemaDriftError` on mismatch to route through the factory fallback chain and fire `onSchemaDrift` instead of corrupting downstream consumers silently. Anthropic envelope validation added in the same scope. Per-provider schema constants (not shared) — correlated drift across providers is a signal worth detecting.
+- **`LLMProviders.fromEnv()` static factory** — auto-discovers providers from Cloudflare Workers `env` bindings (`AI`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) without manual wiring.
+- **Model drift test** (`src/__tests__/model-drift.test.ts`) — asserts every provider's `models[]` array is symmetrically covered by its capabilities map. Prevents future retirement drift where a model is removed from one list but not the other. Runs across all 5 providers.
 
 ### Changed
 - **Factory routing** — `LLMProviderFactory` now selects provider/model pairs from the model catalog instead of relying only on hardcoded provider ordering.
@@ -18,19 +23,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 - **Cloudflare model recommendation** — `CloudflareProvider.getRecommendedModel()` now prefers modern active baselines such as Gemma 4 and GPT-OSS instead of legacy TinyLlama/Qwen heuristics.
 - **Public recommendation exports** — `MODEL_RECOMMENDATIONS` and `getRecommendedModel()` now exclude retired recommendation targets such as `gpt-4o`, while preserving deprecated constants for compatibility.
 
-## [1.4.0] — 2026-04-17
-
 ### Deprecated
-- **`MODELS.CLAUDE_3_HAIKU`** (`claude-3-haiku-20240307`) — Anthropic retires 2026-04-19. Migrate to `MODELS.CLAUDE_HAIKU_4_5` or `MODELS.CLAUDE_3_5_HAIKU`. Export retained; callers get a compile-time `@deprecated` warning.
+- **`MODELS.CLAUDE_3_HAIKU`** (`claude-3-haiku-20240307`) — Anthropic retired 2026-04-19. Migrate to `MODELS.CLAUDE_HAIKU_4_5` or `MODELS.CLAUDE_3_5_HAIKU`. Export retained; callers get a compile-time `@deprecated` warning.
 - **`MODELS.GPT_4O`** (`gpt-4o`) — retired by OpenAI on 2026-04-03. Migrate to `MODELS.GPT_4O_MINI` or a current GPT-4 successor. Export retained; callers get a compile-time `@deprecated` warning.
 
 ### Removed
-- `claude-3-haiku-20240307` — dropped from `AnthropicProvider.models[]` and its capabilities/pricing table. Calls to this ID will fail at Anthropic's cutoff; keeping it advertised would mislead consumers.
+- `claude-3-haiku-20240307` — dropped from `AnthropicProvider.models[]` and its capabilities/pricing table. Calls to this ID will fail at Anthropic's cutoff; keeping it advertised would mislead consumers. Arbitrary-string passthrough on request inputs is unchanged.
 - `gpt-4o` — dropped from `OpenAIProvider.models[]` and its capabilities/pricing table.
 - `gpt-4-turbo-preview` — dead alias dropped from `OpenAIProvider.models[]` (no corresponding capabilities entry; caught by the new drift test).
-
-### Added
-- **Model drift test** (`src/__tests__/model-drift.test.ts`) — asserts every provider's `models[]` array is symmetrically covered by its capabilities map. Prevents future retirement drift where a model is removed from one list but not the other. Runs across all 5 providers.
 
 ## [1.3.0] — 2026-04-16
 
