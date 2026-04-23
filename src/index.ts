@@ -66,6 +66,24 @@ export {
   createCostOptimizedFactory
 } from './factory';
 export type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from './factory';
+export {
+  MODEL_CATALOG,
+  MODEL_RECOMMENDATIONS,
+  PROVIDER_FALLBACK_ORDER,
+  getCatalogEntry,
+  getProviderDefaultModel,
+  getProviderForCatalogModel,
+  getRecommendedModel,
+  inferUseCaseFromRequest,
+  rankModels,
+} from './model-catalog';
+export type {
+  ModelCatalogEntry,
+  ModelLifecycle,
+  ModelRecommendationUseCase,
+  ModelSelectionContext,
+  ProviderName,
+} from './model-catalog';
 
 // Local imports for use within this file
 import { LLMProviderFactory } from './factory';
@@ -81,7 +99,7 @@ import type {
   ToolExecutor,
   ToolLoopOptions
 } from './types';
-import { createCostOptimizedFactory } from './factory';
+import type { ModelRecommendationUseCase } from './model-catalog';
 import { ConfigurationError } from './errors';
 
 // Error classes
@@ -318,6 +336,13 @@ export class LLMProviders {
     return this.factory.getProviderBalance(provider);
   }
 
+  getRecommendedModel(
+    request: LLMRequest,
+    useCase?: ModelRecommendationUseCase
+  ): string {
+    return this.factory.getRecommendedModel(request, useCase);
+  }
+
   /**
    * Get specific provider instance
    */
@@ -382,8 +407,18 @@ export class LLMProviders {
 export function createCostOptimizedLLMProviders(
   config: ProviderFactoryConfig
 ): LLMProviders {
-  const factory = createCostOptimizedFactory(config);
-  return new LLMProviders(config);
+  return new LLMProviders({
+    ...config,
+    defaultProvider: 'auto',
+    costOptimization: true,
+    enableCircuitBreaker: true,
+    enableRetries: true,
+    fallbackRules: config.fallbackRules ?? [
+      { condition: 'cost', threshold: 5, fallbackProvider: 'cloudflare' },
+      { condition: 'rate_limit', fallbackProvider: 'cloudflare' },
+      { condition: 'error', fallbackProvider: 'anthropic' }
+    ]
+  });
 }
 
 /**
@@ -449,95 +484,3 @@ export const MODELS = {
   GROQ_GPT_OSS_120B: 'openai/gpt-oss-120b'
 } as const;
 
-/**
- * Model recommendations by use case
- */
-export const MODEL_RECOMMENDATIONS = {
-  // Cost-optimized models
-  COST_EFFECTIVE: [
-    MODELS.CEREBRAS_LLAMA_3_1_8B,
-    MODELS.TINY_LLAMA,
-    MODELS.CLAUDE_HAIKU_4_5,
-    MODELS.GPT_4O_MINI
-  ],
-
-  // High-performance models
-  HIGH_PERFORMANCE: [
-    MODELS.CLAUDE_OPUS_4_6,
-    MODELS.CLAUDE_SONNET_4_6,
-    MODELS.CEREBRAS_ZAI_GLM_4_7,
-    MODELS.GPT_4O,
-    MODELS.CEREBRAS_QWEN_3_235B,
-    MODELS.LLAMA_3_1_70B
-  ],
-
-  // Balanced models
-  BALANCED: [
-    MODELS.CLAUDE_SONNET_4,
-    MODELS.CLAUDE_HAIKU_4_5,
-    MODELS.GPT_4O_MINI,
-    MODELS.LLAMA_3_1_8B
-  ],
-
-  // Tool/function calling
-  TOOL_CALLING: [
-    MODELS.CLAUDE_SONNET_4_6,
-    MODELS.GPT_4O,
-    MODELS.CLAUDE_SONNET_4,
-    MODELS.CEREBRAS_ZAI_GLM_4_7,
-    MODELS.CEREBRAS_QWEN_3_235B,
-    MODELS.GROQ_GPT_OSS_120B,
-    MODELS.GROQ_LLAMA_3_3_70B_VERSATILE
-  ],
-
-  // Long context tasks
-  LONG_CONTEXT: [
-    MODELS.CLAUDE_OPUS_4_6,
-    MODELS.CLAUDE_SONNET_4_6,
-    MODELS.CLAUDE_3_7_SONNET,
-    MODELS.GPT_4_TURBO
-  ]
-} as const;
-
-/**
- * Utility function to get recommended model for a use case
- */
-export function getRecommendedModel(
-  useCase: keyof typeof MODEL_RECOMMENDATIONS,
-  availableProviders: string[]
-): string {
-  const recommendations = MODEL_RECOMMENDATIONS[useCase];
-  
-  for (const model of recommendations) {
-    // Check if we have the provider for this model
-    if (model.startsWith('gpt-') && availableProviders.includes('openai')) {
-      return model;
-    }
-    if (model.includes('claude') && availableProviders.includes('anthropic')) {
-      return model;
-    }
-    if (model.startsWith('@cf/') && availableProviders.includes('cloudflare')) {
-      return model;
-    }
-    if ((model.startsWith('llama-3.1-8b') || model.startsWith('llama-3.3-70b')
-        || model.startsWith('zai-glm') || model.startsWith('qwen-3-235b')) && availableProviders.includes('cerebras')) {
-      return model;
-    }
-    if ((model.includes('-versatile') || model.includes('-instant') || model === 'openai/gpt-oss-120b') && availableProviders.includes('groq')) {
-      return model;
-    }
-  }
-
-  // Fallback to first available provider's default model
-  if (availableProviders.includes('cloudflare')) {
-    return MODELS.LLAMA_3_1_8B;
-  }
-  if (availableProviders.includes('anthropic')) {
-    return MODELS.CLAUDE_HAIKU_4_5;
-  }
-  if (availableProviders.includes('openai')) {
-    return MODELS.GPT_4O_MINI;
-  }
-
-  throw new Error('No available providers configured');
-}

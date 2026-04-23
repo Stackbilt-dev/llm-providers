@@ -17,6 +17,7 @@ import {
   ConfigurationError,
   ModelNotFoundError
 } from '../errors';
+import { getProviderDefaultModel } from '../model-catalog';
 
 interface CloudflareContentPart {
   type: 'text' | 'image_url';
@@ -132,7 +133,7 @@ export class CloudflareProvider extends BaseProvider {
 
     try {
       const response = await this.executeWithResiliency(async () => {
-        const model = request.model || '@cf/meta/llama-3.1-8b-instruct';
+        const model = request.model || this.getRecommendedModel(request);
         const cloudflareRequest = this.formatRequest(request, model);
 
         // Validate model is supported
@@ -170,7 +171,7 @@ export class CloudflareProvider extends BaseProvider {
   estimateCost(request: LLMRequest): number {
     // Cloudflare AI is essentially "free" as it's included in Workers compute
     // But we can estimate the computational cost
-    const model = request.model || '@cf/meta/llama-3.1-8b-instruct';
+    const model = request.model || this.getRecommendedModel(request);
     const capabilities = this.getModelCapabilities()[model];
 
     if (!capabilities) return 0;
@@ -192,7 +193,10 @@ export class CloudflareProvider extends BaseProvider {
       };
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
-      await (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run('@cf/meta/llama-3.1-8b-instruct', testRequest);
+      await (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(
+        this.getRecommendedModel({ messages: [{ role: 'user', content: 'Hi' }], maxTokens: 1 }),
+        testRequest
+      );
       return true;
     } catch {
       return false;
@@ -713,7 +717,7 @@ export class CloudflareProvider extends BaseProvider {
   async streamResponse(request: LLMRequest): Promise<ReadableStream<string>> {
     this.validateRequest(request);
 
-    const model = request.model || '@cf/meta/llama-3.1-8b-instruct';
+    const model = request.model || this.getRecommendedModel(request);
     const cloudflareRequest = { ...this.formatRequest(request, model), stream: true };
 
     return new ReadableStream({
@@ -776,7 +780,7 @@ export class CloudflareProvider extends BaseProvider {
           return {
             message: '',
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 },
-            model: request.model || '@cf/meta/llama-3.1-8b-instruct',
+            model: request.model || this.getRecommendedModel(request),
             provider: this.name,
             responseTime: 0,
             metadata: { error: (error as Error).message }
@@ -795,21 +799,7 @@ export class CloudflareProvider extends BaseProvider {
    * Get recommended model for cost optimization
    */
   getRecommendedModel(request: LLMRequest): string {
-    const messageLength = request.messages.reduce((sum, msg) => sum + msg.content.length, 0);
-    const maxTokens = request.maxTokens || 1000;
-
-    // For short responses, use the fastest/cheapest model
-    if (messageLength < 500 && maxTokens < 500) {
-      return '@cf/tinyllama/tinyllama-1.1b-chat-v1.0';
-    }
-
-    // For medium complexity tasks
-    if (messageLength < 2000 && maxTokens < 2000) {
-      return '@cf/qwen/qwen1.5-7b-chat-awq';
-    }
-
-    // For complex tasks, use the best model
-    return '@cf/meta/llama-3.1-8b-instruct';
+    return getProviderDefaultModel('cloudflare', request);
   }
 
   /**

@@ -19,6 +19,7 @@ import {
   ModelNotFoundError,
   RateLimitError
 } from '../errors';
+import { getProviderDefaultModel } from '../model-catalog';
 import { validateSchema, type SchemaField } from '../utils/schema-validator';
 
 /**
@@ -203,7 +204,7 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   estimateCost(request: LLMRequest): number {
-    const model = request.model || 'claude-haiku-4-5-20251001';
+    const model = request.model || this.getDefaultModel(request);
     const capabilities = this.getModelCapabilities()[model];
 
     if (!capabilities) return 0;
@@ -420,7 +421,7 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     const anthropicRequest: AnthropicRequest = {
-      model: request.model || 'claude-haiku-4-5-20251001',
+      model: request.model || this.getDefaultModel(request),
       messages,
       max_tokens: request.maxTokens || 1000,
       temperature: request.temperature,
@@ -628,5 +629,9 @@ export class AnthropicProvider extends BaseProvider {
     request: LLMRequest & { tools: Tool[] }
   ): Promise<LLMResponse> {
     return this.generateResponse(request);
+  }
+
+  private getDefaultModel(request: LLMRequest): string {
+    return getProviderDefaultModel('anthropic', request);
   }
 }

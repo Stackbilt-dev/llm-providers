@@ -12,6 +12,7 @@ import {
   RateLimitError,
   SchemaDriftError
 } from '../errors';
+import { getProviderDefaultModel } from '../model-catalog';
 import { validateSchema, type SchemaField } from '../utils/schema-validator';
 
 // Minimum envelope `formatResponse` reads. `tool_calls` uses a discriminated
@@ -192,7 +193,7 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   estimateCost(request: LLMRequest): number {
-    const model = request.model || 'gpt-4o-mini';
+    const model = request.model || this.getDefaultModel(request);
     const capabilities = this.getModelCapabilities()[model];
 
     if (!capabilities) return 0;
@@ -347,7 +348,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     const openaiRequest: OpenAIRequest = {
-      model: request.model || 'gpt-4o-mini',
+      model: request.model || this.getDefaultModel(request),
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
@@ -525,7 +526,7 @@ export class OpenAIProvider extends BaseProvider {
         responses.push({
           message: '',
           usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 },
-          model: request.model || 'gpt-4o-mini',
+          model: request.model || this.getDefaultModel(request),
           provider: this.name,
           responseTime: 0,
           metadata: { error: (error as Error).message }
@@ -534,5 +535,9 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     return responses;
+  }
+
+  private getDefaultModel(request: LLMRequest): string {
+    return getProviderDefaultModel('openai', request);
   }
 }

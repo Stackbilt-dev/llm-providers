@@ -82,6 +82,26 @@ describe('CloudflareProvider', () => {
       expect(() => new CloudflareProvider({})).toThrow(ConfigurationError);
       expect(() => new CloudflareProvider({})).toThrow('Cloudflare AI binding is required');
     });
+
+    it('should recommend modern active models instead of legacy tiny defaults', () => {
+      expect(provider.getRecommendedModel({
+        messages: [{ role: 'user', content: 'Hello' }],
+        maxTokens: 200
+      })).toBe('@cf/google/gemma-4-26b-a4b-it');
+
+      expect(provider.getRecommendedModel({
+        messages: [{ role: 'user', content: 'Use the weather tool' }],
+        maxTokens: 400,
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            description: 'Get weather',
+            parameters: { type: 'object' }
+          }
+        }]
+      })).toBe('@cf/openai/gpt-oss-120b');
+    });
   });
 
   describe('generateResponse', () => {

@@ -11,6 +11,7 @@ import {
   ConfigurationError,
   SchemaDriftError
 } from '../errors';
+import { getProviderDefaultModel } from '../model-catalog';
 import { validateSchema, type SchemaField } from '../utils/schema-validator';
 
 // Groq serves the OpenAI /chat/completions contract — same envelope shape as
@@ -177,7 +178,7 @@ export class GroqProvider extends BaseProvider {
   }
 
   estimateCost(request: LLMRequest): number {
-    const model = request.model || 'llama-3.3-70b-versatile';
+    const model = request.model || this.getDefaultModel(request);
     const capabilities = this.getModelCapabilities()[model];
 
     if (!capabilities) return 0;
@@ -331,7 +332,7 @@ export class GroqProvider extends BaseProvider {
 
   private formatRequest(request: LLMRequest): GroqRequest {
     const messages: GroqMessage[] = [];
-    const model = request.model || 'llama-3.3-70b-versatile';
+    const model = request.model || this.getDefaultModel(request);
     const usesTools =
       (request.tools?.length ?? 0) > 0 ||
       request.messages.some(message =>
@@ -474,5 +475,9 @@ export class GroqProvider extends BaseProvider {
         created: data.created
       }
     };
+  }
+
+  private getDefaultModel(request: LLMRequest): string {
+    return getProviderDefaultModel('groq', request);
   }
 }

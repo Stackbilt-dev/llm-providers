@@ -45,6 +45,14 @@ import { defaultCircuitBreakerManager } from './utils/circuit-breaker';
 import { defaultExhaustionRegistry } from './utils/exhaustion';
 import { defaultLatencyHistogram } from './utils/latency-histogram';
 import {
+  PROVIDER_FALLBACK_ORDER,
+  getProviderDefaultModel,
+  getProviderForCatalogModel,
+  inferUseCaseFromRequest,
+  rankModels,
+  type ModelRecommendationUseCase,
+} from './model-catalog';
+import {
   LLMProviderError,
   ConfigurationError,
   CircuitBreakerOpenError,
@@ -62,6 +70,7 @@ export interface ProviderFactoryConfig {
   cloudflare?: CloudflareConfig;
   cerebras?: CerebrasConfig;
   groq?: GroqConfig;
+  preferredProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'auto';
   defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'auto';
   fallbackRules?: FallbackRule[];
   costOptimization?: boolean;
@@ -99,6 +108,12 @@ interface FallbackDecision {
   shouldFallback: boolean;
   fallbackProvider?: string;
   fallbackModel?: string;
+}
+
+interface ProviderSelectionPlan {
+  chain: string[];
+  providerModels: Map<string, string>;
+  useCase: ModelRecommendationUseCase;
 }
 
 export class LLMProviderFactory {
@@ -166,8 +181,9 @@ export class LLMProviderFactory {
    * Generate response with intelligent provider selection and fallback
    */
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
-    const providerChain = this.buildProviderChain(request);
-    const providerModels = new Map<string, string>();
+    const selectionPlan = this.buildProviderPlan(request);
+    const providerChain = selectionPlan.chain;
+    const providerModels = selectionPlan.providerModels;
     let lastError: Error | null = null;
     let previousProvider: string | null = null;
 
@@ -314,8 +330,9 @@ export class LLMProviderFactory {
   }
 
   async generateResponseStream(request: LLMRequest): Promise<ReadableStream<string>> {
-    const providerChain = this.buildProviderChain({ ...request, stream: true });
-    const providerModels = new Map<string, string>();
+    const selectionPlan = this.buildProviderPlan({ ...request, stream: true });
+    const providerChain = selectionPlan.chain;
+    const providerModels = selectionPlan.providerModels;
     let lastError: Error | null = null;
     let previousProvider: string | null = null;
 
@@ -587,76 +604,96 @@ export class LLMProviderFactory {
   }
 
   /**
-   * Build provider chain based on request and configuration
+   * Recommend a model dynamically from the declarative catalog.
    */
-  private buildProviderChain(request: LLMRequest): string[] {
+  getRecommendedModel(
+    request: LLMRequest,
+    useCase: ModelRecommendationUseCase = this.resolveUseCase(request)
+  ): string {
+    const ranked = rankModels(useCase, Array.from(this.providers.keys()), {
+      request,
+      providerHealth: this.getSelectionHealth(),
+      ledger: this.config.ledger,
+    });
+
+    if (ranked.length > 0) {
+      return ranked[0].model;
+    }
+
+    const fallbackProvider = PROVIDER_FALLBACK_ORDER.find(provider => this.providers.has(provider));
+    if (!fallbackProvider) {
+      throw new ConfigurationError('factory', 'No available providers configured');
+    }
+
+    return getProviderDefaultModel(fallbackProvider, request);
+  }
+
+  /**
+   * Build provider chain and provider-specific default models from the catalog.
+   */
+  private buildProviderPlan(request: LLMRequest): ProviderSelectionPlan {
     const chain: string[] = [];
+    const providerModels = new Map<string, string>();
+    const selectionHealth = this.getSelectionHealth();
+    const useCase = this.resolveUseCase(request);
 
     // If specific provider requested, try it first
     if (request.model) {
       const providerForModel = this.getProviderForModel(request.model);
       if (providerForModel && this.providers.has(providerForModel)) {
         chain.push(providerForModel);
+        providerModels.set(providerForModel, request.model);
       }
     }
 
     // Add default provider if different from model provider
-    const defaultProvider = this.config.defaultProvider || 'auto';
+    const defaultProvider = this.config.preferredProvider ?? this.config.defaultProvider ?? 'auto';
     if (defaultProvider !== 'auto' && !chain.includes(defaultProvider)) {
       if (this.providers.has(defaultProvider)) {
         chain.push(defaultProvider);
+        if (!request.model) {
+          providerModels.set(defaultProvider, getProviderDefaultModel(defaultProvider, request));
+        }
       }
     }
 
-    // For 'auto' mode or as fallbacks, add providers by priority
-    const prioritizedProviders = this.getPrioritizedProviders(request);
-    for (const provider of prioritizedProviders) {
-      if (!chain.includes(provider) && this.providers.has(provider)) {
-        chain.push(provider);
-      }
-    }
-
-    return chain;
-  }
-
-  /**
-   * Get prioritized list of providers based on cost optimization and capabilities
-   */
-  private getPrioritizedProviders(request: LLMRequest): string[] {
-    const visionOnly = (request.images?.length ?? 0) > 0;
-    if (!this.config.costOptimization) {
-      // Default priority: all configured providers, cheapest first
-      return ['cloudflare', 'cerebras', 'groq', 'anthropic', 'openai']
-        .filter(p => this.providers.has(p))
-        .filter(p => !visionOnly || this.providerSupportsVision(p));
-    }
-
-    // Cost-optimized routing
-    const providers = Array.from(this.providers.keys())
-      .filter(p => !visionOnly || this.providerSupportsVision(p));
-    const sortedProviders = [...providers].sort((a, b) => {
-      const providerA = this.providers.get(a)!;
-      const providerB = this.providers.get(b)!;
-      const estimatedCostA = providerA.estimateCost(request);
-      const estimatedCostB = providerB.estimateCost(request);
-
-      if (estimatedCostA !== estimatedCostB) {
-        return estimatedCostA - estimatedCostB;
-      }
-
-      // If estimates tie, prefer the provider with less accumulated spend.
-      const trackedCostA = this.costTracker.getProviderCost(a);
-      const trackedCostB = this.costTracker.getProviderCost(b);
-      return trackedCostA - trackedCostB;
+    const rankedModels = rankModels(useCase, Array.from(this.providers.keys()), {
+      request,
+      providerHealth: selectionHealth,
+      ledger: this.config.ledger,
     });
 
-    return sortedProviders;
+    for (const candidate of rankedModels) {
+      if (!providerModels.has(candidate.provider)) {
+        providerModels.set(candidate.provider, candidate.model);
+      }
+      if (!chain.includes(candidate.provider) && this.providers.has(candidate.provider)) {
+        chain.push(candidate.provider);
+      }
+    }
+
+    for (const provider of PROVIDER_FALLBACK_ORDER) {
+      if (!this.providers.has(provider)) continue;
+      if (!chain.includes(provider)) {
+        chain.push(provider);
+      }
+      if (!providerModels.has(provider)) {
+        providerModels.set(provider, getProviderDefaultModel(provider, request));
+      }
+    }
+
+    return { chain, providerModels, useCase };
   }
 
   /**
    * Get appropriate provider for a specific model
    */
   private getProviderForModel(model: string): string | null {
+    const catalogProvider = getProviderForCatalogModel(model);
+    if (catalogProvider) {
+      return catalogProvider;
+    }
+
     // OpenAI models
     if (model.startsWith('gpt-')) {
       return 'openai';
@@ -1103,14 +1140,68 @@ export class LLMProviderFactory {
 
   private getDefaultVisionModel(): string | undefined {
     if (this.config.defaultVisionModel) return this.config.defaultVisionModel;
-    if (this.providers.has('anthropic')) return 'claude-haiku-4-5-20251001';
-    if (this.providers.has('openai')) return 'gpt-4o-mini';
-    if (this.providers.has('cloudflare')) return '@cf/google/gemma-4-26b-a4b-it';
+    const visionRequest: LLMRequest = {
+      messages: [{ role: 'user', content: 'Describe this image.' }],
+      images: [{}],
+      maxTokens: 1
+    };
+    if (this.providers.has('anthropic')) {
+      return getProviderDefaultModel('anthropic', visionRequest);
+    }
+    if (this.providers.has('openai')) {
+      return getProviderDefaultModel('openai', visionRequest);
+    }
+    if (this.providers.has('cloudflare')) {
+      return getProviderDefaultModel('cloudflare', visionRequest);
+    }
     return undefined;
   }
 
   private providerSupportsVision(providerName: string): boolean {
     return this.providers.get(providerName)?.supportsVision === true;
+  }
+
+  private getSelectionHealth(): Partial<Record<'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq', ProviderHealthEntry>> {
+    const health: Partial<Record<'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq', ProviderHealthEntry>> = {};
+
+    for (const providerName of this.providers.keys()) {
+      const metrics = this.providers.get(providerName)?.getMetrics();
+      const circuitBreaker = this.config.enableCircuitBreaker
+        ? defaultCircuitBreakerManager.getBreaker(providerName).getState()
+        : null;
+
+      health[providerName as 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq'] = {
+        healthy: circuitBreaker?.state !== 'OPEN',
+        metrics,
+        circuitBreaker,
+      };
+    }
+
+    return health;
+  }
+
+  private resolveUseCase(request: LLMRequest): ModelRecommendationUseCase {
+    const metadataUseCase = request.metadata?.useCase;
+    if (typeof metadataUseCase === 'string') {
+      const normalized = metadataUseCase.toUpperCase();
+      if (
+        normalized === 'COST_EFFECTIVE' ||
+        normalized === 'HIGH_PERFORMANCE' ||
+        normalized === 'BALANCED' ||
+        normalized === 'TOOL_CALLING' ||
+        normalized === 'LONG_CONTEXT' ||
+        normalized === 'VISION'
+      ) {
+        return normalized;
+      }
+    }
+
+    const inferredUseCase = inferUseCaseFromRequest(request);
+    if (this.config.costOptimization && inferredUseCase === 'BALANCED') {
+      return 'COST_EFFECTIVE';
+    }
+
+    return inferredUseCase;
   }
 
   private async getSingleProviderBalance(providerName: string): Promise<ProviderBalance> {

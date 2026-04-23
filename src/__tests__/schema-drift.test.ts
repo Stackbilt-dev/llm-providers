@@ -295,7 +295,7 @@ describe('LLMProviderFactory schema drift fallback', () => {
     const factory = new LLMProviderFactory({
       anthropic: { apiKey: 'test-anthropic', maxRetries: 0 },
       openai: { apiKey: 'test-openai', maxRetries: 0 },
-      preferredProvider: 'anthropic',
+      defaultProvider: 'anthropic',
     });
 
     const response = await factory.generateResponse({
@@ -336,7 +336,7 @@ describe('LLMProviderFactory schema drift fallback', () => {
     const factory = new LLMProviderFactory({
       anthropic: { apiKey: 'test-anthropic', maxRetries: 0 },
       openai: { apiKey: 'test-openai', maxRetries: 0 },
-      preferredProvider: 'anthropic',
+      defaultProvider: 'anthropic',
       hooks,
     });
 
@@ -385,7 +385,7 @@ describe('LLMProviderFactory schema drift fallback', () => {
 
     const factory = new LLMProviderFactory({
       anthropic: { apiKey: 'test-anthropic', maxRetries: 0 },
-      preferredProvider: 'anthropic',
+      defaultProvider: 'anthropic',
       hooks,
     });
 

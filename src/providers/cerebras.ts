@@ -11,6 +11,7 @@ import {
   ConfigurationError,
   SchemaDriftError
 } from '../errors';
+import { getProviderDefaultModel } from '../model-catalog';
 import { validateSchema, type SchemaField } from '../utils/schema-validator';
 
 // Cerebras serves the OpenAI /chat/completions contract. See groq.ts for the
@@ -176,7 +177,7 @@ export class CerebrasProvider extends BaseProvider {
   }
 
   estimateCost(request: LLMRequest): number {
-    const model = request.model || 'llama-3.1-8b';
+    const model = request.model || this.getDefaultModel(request);
     const capabilities = this.getModelCapabilities()[model];
 
     if (!capabilities) return 0;
@@ -330,7 +331,7 @@ export class CerebrasProvider extends BaseProvider {
 
   private formatRequest(request: LLMRequest): CerebrasRequest {
     const messages: CerebrasMessage[] = [];
-    const model = request.model || 'llama-3.1-8b';
+    const model = request.model || this.getDefaultModel(request);
     const usesTools =
       (request.tools?.length ?? 0) > 0 ||
       request.messages.some(message =>
@@ -465,5 +466,9 @@ export class CerebrasProvider extends BaseProvider {
         created: data.created
       }
     };
+  }
+
+  private getDefaultModel(request: LLMRequest): string {
+    return getProviderDefaultModel('cerebras', request);
   }
 }

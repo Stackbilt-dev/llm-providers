@@ -345,6 +345,33 @@ describe('LLMProviderFactory', () => {
       expect(mockCloudflareProvider.generateResponse).toHaveBeenCalled();
     });
 
+    it('should demote degraded providers with critical burn rate when recommending a model', async () => {
+      const ledger = new CreditLedger({
+        budgets: [
+          { provider: 'cloudflare', monthlyBudget: 1 },
+          { provider: 'openai', monthlyBudget: 10 }
+        ]
+      });
+      ledger.record('cloudflare', '@cf/google/gemma-4-26b-a4b-it', 0.95, 10_000, 4_000);
+
+      const dynamicFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        anthropic: { apiKey: 'test-anthropic-key' },
+        cloudflare: { ai: {} as Ai },
+        defaultProvider: 'auto',
+        costOptimization: true,
+        enableCircuitBreaker: true,
+        ledger
+      });
+
+      const breaker = defaultCircuitBreakerManager.getBreaker('cloudflare');
+      await expect(breaker.execute(async () => {
+        throw new Error('degraded');
+      })).rejects.toThrow('degraded');
+
+      expect(dynamicFactory.getRecommendedModel(testRequest)).toBe('gpt-4o-mini');
+    });
+
     it('should honor fallbackProvider as the next route when a rule matches', async () => {
       const ruleFactory = new LLMProviderFactory({
         openai: { apiKey: 'test-openai-key' },
@@ -437,7 +464,7 @@ describe('LLMProviderFactory', () => {
       expect(quotaHook.check).toHaveBeenCalledWith(expect.objectContaining({
         tenantId: 'tenant-1',
         provider: 'openai',
-        model: 'gpt-4'
+        model: 'gpt-4o-mini'
       }));
       expect(quotaHook.record).toHaveBeenCalledWith(expect.objectContaining({
         tenantId: 'tenant-1',
