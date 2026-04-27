@@ -23,9 +23,29 @@ export interface LLMImageInput {
 
 export interface GatewayMetadata {
   requestId?: string;
+  /** cf-aig-cache-key: Cloudflare AI Gateway *response* cache key (distinct from provider prompt caching). */
   cacheKey?: string;
+  /** cf-aig-cache-ttl: Cloudflare AI Gateway response cache TTL in seconds. */
   cacheTtl?: number;
   customMetadata?: Record<string, string>;
+}
+
+/**
+ * Provider prompt/prefix cache hints. Distinct from GatewayMetadata.cacheKey/cacheTtl,
+ * which control Cloudflare AI Gateway *response* caching. These hints control
+ * provider-side prefix/prompt caching (Anthropic cache_control, Groq/Cerebras automatic, etc.).
+ */
+export interface CacheHints {
+  /** 'off' disables any provider cache opt-in. Default: let provider decide. */
+  strategy?: 'off' | 'provider-prefix' | 'response' | 'both';
+  /** Provider-specific cache key hint (e.g. OpenAI prompt_cache_key). */
+  key?: string;
+  /** Desired TTL. Clamped to provider-supported values at translation time. */
+  ttl?: '5m' | '1h' | '24h' | number;
+  /** Cloudflare Workers AI: x-session-affinity value for prefix caching. */
+  sessionId?: string;
+  /** Which prefix to mark cacheable when explicit breakpoints are required (Anthropic). */
+  cacheablePrefix?: 'auto' | 'system' | 'tools' | 'messages';
 }
 
 export interface ToolCall {
@@ -56,6 +76,13 @@ export interface LLMRequest {
   response_format?: { type: 'json_object' | 'text' };
   seed?: number;
   gatewayMetadata?: GatewayMetadata;
+  cache?: CacheHints;
+  /**
+   * Cloudflare Workers AI only: LoRA adapter name or UUID to apply at inference.
+   * Ignored by all other providers. The package does not validate the identifier;
+   * it is forwarded as-is to the Workers AI binding.
+   */
+  lora?: string;
   tenantId?: string;
   requestId?: string;
   metadata?: Record<string, unknown>;
@@ -92,6 +119,12 @@ export interface TokenUsage {
   outputTokens: number;
   totalTokens: number;
   cost: number; // Cost in USD
+  /** Tokens served from provider-side prefix/prompt cache (Groq, Cerebras, OpenAI automatic). */
+  cachedInputTokens?: number;
+  /** Anthropic: tokens read from a cache_control breakpoint (cache hit). */
+  cacheReadInputTokens?: number;
+  /** Anthropic: tokens written to a new cache_control breakpoint (cache miss/create). */
+  cacheCreationInputTokens?: number;
 }
 
 export interface LLMProvider {
@@ -236,6 +269,8 @@ export interface ModelCapabilities {
   inputTokenCost: number;
   outputTokenCost: number;
   description: string;
+  /** Provider-side prompt/prefix caching supported for this model. */
+  supportsPromptCache?: boolean;
 }
 
 export interface ProviderCapabilities {

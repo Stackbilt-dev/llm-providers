@@ -10,14 +10,16 @@ import type {
   ModelCapabilities,
   ProviderBalance,
   Tool,
-  ToolCall
+  ToolCall,
+  TokenUsage
 } from '../types';
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
   AuthenticationError,
   ModelNotFoundError,
-  RateLimitError
+  RateLimitError,
+  SchemaDriftError
 } from '../errors';
 import { getProviderDefaultModel } from '../model-catalog';
 import { validateSchema, type SchemaField } from '../utils/schema-validator';
@@ -51,7 +53,7 @@ const ANTHROPIC_RESPONSE_SCHEMA: SchemaField[] = [
   },
   { path: 'model', type: 'string' },
   { path: 'stop_reason', type: 'string' },
-  { path: 'stop_sequence', type: 'string', optional: true },
+  { path: 'stop_sequence', type: 'string-or-null', optional: true },
   { path: 'usage', type: 'object' },
   { path: 'usage.input_tokens', type: 'number' },
   { path: 'usage.output_tokens', type: 'number' },
@@ -77,10 +79,21 @@ interface AnthropicMessage {
   content: string | AnthropicContentBlock[];
 }
 
+interface AnthropicCacheControl {
+  type: 'ephemeral';
+}
+
+interface AnthropicSystemBlock {
+  type: 'text';
+  text: string;
+  cache_control?: AnthropicCacheControl;
+}
+
 interface AnthropicTool {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
+  cache_control?: AnthropicCacheControl;
 }
 
 type AnthropicToolChoice = 'auto' | 'none' | { type: 'function'; function: { name: string } };
@@ -88,7 +101,7 @@ type AnthropicToolChoice = 'auto' | 'none' | { type: 'function'; function: { nam
 interface AnthropicRequest {
   model: string;
   messages: AnthropicMessage[];
-  system?: string;
+  system?: string | AnthropicSystemBlock[];
   max_tokens: number;
   temperature?: number;
   stream?: boolean;
@@ -111,10 +124,14 @@ interface AnthropicResponse {
   content: AnthropicResponseContentBlock[];
   model: string;
   stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use';
-  stop_sequence?: string;
+  stop_sequence?: string | null;
   usage: {
     input_tokens: number;
     output_tokens: number;
+    /** Tokens read from an existing cache_control breakpoint (cache hit). */
+    cache_read_input_tokens?: number;
+    /** Tokens written to a new cache_control breakpoint (cache miss/create). */
+    cache_creation_input_tokens?: number;
   };
 }
 
@@ -230,32 +247,12 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   async getProviderBalance(): Promise<ProviderBalance> {
-    try {
-      const response = await this.makeAnthropicRequest('/v1/organizations/cost_report', null, 'GET');
-      if (!response.ok) {
-        return {
-          provider: this.name,
-          status: 'unavailable',
-          source: 'provider_api',
-          message: `Anthropic usage API returned HTTP ${response.status}`
-        };
-      }
-
-      const raw = await response.json();
-      return {
-        provider: this.name,
-        status: 'available',
-        source: 'provider_api',
-        raw
-      };
-    } catch (error) {
-      return {
-        provider: this.name,
-        status: 'error',
-        source: 'provider_api',
-        message: (error as Error).message
-      };
-    }
+    return {
+      provider: this.name,
+      status: 'unavailable',
+      source: 'not_supported',
+      message: 'Anthropic credit-balance reporting requires the Admin API (admin.anthropic.com) with a separate admin key — not available through standard inference keys. Use CreditLedger for local quota state.'
+    };
   }
 
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
@@ -266,6 +263,7 @@ export class AnthropicProvider extends BaseProvider {
         supportsTools: true,
         supportsVision: true,
         supportsBatching: false,
+        supportsPromptCache: true,
         inputTokenCost: 0.015, // $15 per 1M tokens
         outputTokenCost: 0.075, // $75 per 1M tokens
         description: 'Claude Opus 4.6 - Latest, highest intelligence and capability'
@@ -276,6 +274,7 @@ export class AnthropicProvider extends BaseProvider {
         supportsTools: true,
         supportsVision: true,
         supportsBatching: false,
+        supportsPromptCache: true,
         inputTokenCost: 0.003, // $3 per 1M tokens
         outputTokenCost: 0.015, // $15 per 1M tokens
         description: 'Claude Sonnet 4.6 - Latest balanced performance model'
@@ -303,6 +302,7 @@ export class AnthropicProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
+        supportsPromptCache: true,
         inputTokenCost: 0.001, // $1 per 1M tokens
         outputTokenCost: 0.005, // $5 per 1M tokens
         description: 'Claude Haiku 4.5 - Fast and cost-effective'
@@ -330,6 +330,7 @@ export class AnthropicProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
+        supportsPromptCache: true,
         inputTokenCost: 0.00025, // $0.25 per 1M tokens
         outputTokenCost: 0.00125, // $1.25 per 1M tokens
         description: 'Claude 3.5 Haiku - Fast and cost-effective'
@@ -457,6 +458,29 @@ export class AnthropicProvider extends BaseProvider {
       }
     }
 
+    // Apply cache_control breakpoints when caller opts into provider-prefix caching.
+    // Anthropic supports up to 4 breakpoints per request; we mark the system prompt
+    // and (optionally) the last tool definition so the stable prefix is cached.
+    const cacheStrategy = request.cache?.strategy;
+    if (cacheStrategy === 'provider-prefix' || cacheStrategy === 'both') {
+      const hint = request.cache?.cacheablePrefix ?? 'auto';
+
+      // Wrap system as a content-block array so we can attach cache_control
+      if (anthropicRequest.system && (hint === 'auto' || hint === 'system')) {
+        const systemText = typeof anthropicRequest.system === 'string'
+          ? anthropicRequest.system
+          : anthropicRequest.system.map(b => b.text).join('');
+        anthropicRequest.system = [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }];
+      }
+
+      // Mark the last tool definition as a breakpoint so the tools block is cached
+      if (anthropicRequest.tools && anthropicRequest.tools.length > 0 && (hint === 'auto' || hint === 'tools')) {
+        const tools = [...anthropicRequest.tools];
+        tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: { type: 'ephemeral' } };
+        anthropicRequest.tools = tools;
+      }
+    }
+
     return anthropicRequest;
   }
 
@@ -500,7 +524,7 @@ export class AnthropicProvider extends BaseProvider {
       .map(block => block.text)
       .join('');
 
-    const usage = {
+    const usage: TokenUsage = {
       inputTokens: data.usage.input_tokens,
       outputTokens: data.usage.output_tokens,
       totalTokens: data.usage.input_tokens + data.usage.output_tokens,
@@ -510,6 +534,12 @@ export class AnthropicProvider extends BaseProvider {
         data.model
       )
     };
+    if (typeof data.usage.cache_read_input_tokens === 'number') {
+      usage.cacheReadInputTokens = data.usage.cache_read_input_tokens;
+    }
+    if (typeof data.usage.cache_creation_input_tokens === 'number') {
+      usage.cacheCreationInputTokens = data.usage.cache_creation_input_tokens;
+    }
 
     const response: LLMResponse = {
       id: data.id,
@@ -521,7 +551,7 @@ export class AnthropicProvider extends BaseProvider {
       responseTime,
       finishReason: this.mapStopReason(data.stop_reason),
       metadata: {
-        stopSequence: data.stop_sequence
+        stopSequence: data.stop_sequence ?? undefined
       }
     };
 
@@ -559,12 +589,23 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   /**
-   * Stream response support
+   * Stream response support with SSE chunk schema validation.
+   *
+   * Each non-DONE data frame is validated against the expected Anthropic SSE
+   * shape. Malformed JSON or a drifted content_block_delta envelope errors the
+   * stream with SchemaDriftError (triggering factory fallback) rather than
+   * silently producing truncated output.
+   *
+   * Unknown event types (additive upstream changes) are skipped for
+   * forward-compatibility. Only the event types the parser actively reads
+   * are validated.
    */
   async streamResponse(request: LLMRequest): Promise<ReadableStream<string>> {
     this.validateRequest(request);
 
     const anthropicRequest = { ...this.formatRequest(request), stream: true };
+    const hooks = this.config.hooks;
+    const providerName = this.name;
 
     return new ReadableStream({
       start: async (controller) => {
@@ -583,6 +624,18 @@ export class AnthropicProvider extends BaseProvider {
           const decoder = new TextDecoder();
           let buffer = '';
 
+          const emitDrift = (path: string, expected: string, actual: string): void => {
+            hooks?.onSchemaDrift?.({
+              provider: providerName,
+              model: request.model,
+              requestId: request.requestId,
+              path,
+              expected,
+              actual,
+              timestamp: Date.now(),
+            });
+          };
+
           while (true) {
             const { done, value } = await reader.read();
 
@@ -593,24 +646,51 @@ export class AnthropicProvider extends BaseProvider {
             buffer = lines.pop() || '';
 
             for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const data = line.slice(6);
+              if (!line.startsWith('data: ')) continue;
 
-                if (data === '[DONE]') {
-                  controller.close();
-                  return;
-                }
+              const data = line.slice(6).trim();
+              if (data === '[DONE]' || data === '') continue;
 
-                try {
-                  const parsed = JSON.parse(data);
-
-                  if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-                    controller.enqueue(parsed.delta.text);
-                  }
-                } catch {
-                  // Malformed SSE chunk — skip silently
-                }
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(data);
+              } catch {
+                const err = new SchemaDriftError('anthropic', 'sse.chunk', 'valid-json', 'malformed-json');
+                emitDrift('sse.chunk', 'valid-json', 'malformed-json');
+                controller.error(err);
+                reader.cancel().catch(() => {});
+                return;
               }
+
+              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+              const event = parsed as Record<string, unknown>;
+
+              if (event['type'] !== 'content_block_delta') continue;
+
+              const delta = event['delta'];
+              if (!delta || typeof delta !== 'object' || Array.isArray(delta)) {
+                const actual = delta === null ? 'null' : Array.isArray(delta) ? 'array' : String(typeof delta);
+                emitDrift('content_block_delta.delta', 'object', actual);
+                controller.error(new SchemaDriftError('anthropic', 'content_block_delta.delta', 'object', actual));
+                reader.cancel().catch(() => {});
+                return;
+              }
+
+              const deltaObj = delta as Record<string, unknown>;
+              // text_delta: the only delta type that produces content text.
+              // input_json_delta (tool use) and other future delta types are skipped.
+              if (deltaObj['type'] !== 'text_delta') continue;
+
+              const text = deltaObj['text'];
+              if (typeof text !== 'string') {
+                const actual = text === null ? 'null' : String(typeof text);
+                emitDrift('content_block_delta.delta.text', 'string', actual);
+                controller.error(new SchemaDriftError('anthropic', 'content_block_delta.delta.text', 'string', actual));
+                reader.cancel().catch(() => {});
+                return;
+              }
+
+              controller.enqueue(text);
             }
           }
 

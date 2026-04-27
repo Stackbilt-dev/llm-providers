@@ -537,6 +537,115 @@ describe('LLMProviderFactory', () => {
       );
     });
 
+    // ── generateResponseWithTools edge cases (#28) ───────────────────────
+
+    function makeLoopFactory() {
+      return new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'openai',
+        costOptimization: false
+      });
+    }
+
+    const toolCallResponse = (id = 'call-1'): LLMResponse => ({
+      message: '',
+      usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10, cost: 0.5 },
+      model: 'gpt-4',
+      provider: 'openai',
+      responseTime: 10,
+      finishReason: 'tool_calls',
+      toolCalls: [{ id, type: 'function', function: { name: 'noop', arguments: '{}' } }]
+    });
+
+    const finalResponse: LLMResponse = {
+      message: 'done',
+      usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10, cost: 0.001 },
+      model: 'gpt-4',
+      provider: 'openai',
+      responseTime: 10
+    };
+
+    it('throws ToolLoopLimitError when maxIterations is exceeded', async () => {
+      const { ToolLoopLimitError } = await import('../errors');
+      // Keep returning tool calls — never resolves naturally
+      mockOpenAIProvider.generateResponse.mockResolvedValue(toolCallResponse());
+
+      await expect(
+        makeLoopFactory().generateResponseWithTools(
+          testRequest,
+          { execute: vi.fn().mockResolvedValue('ok') },
+          { maxIterations: 2 }
+        )
+      ).rejects.toThrow(ToolLoopLimitError);
+    });
+
+    it('throws ToolLoopLimitError when cumulative cost exceeds maxCostUSD', async () => {
+      const { ToolLoopLimitError } = await import('../errors');
+      // Each tool-call response costs $0.50; cap at $0.60 → second iteration should abort
+      mockOpenAIProvider.generateResponse
+        .mockResolvedValueOnce(toolCallResponse('call-1'))
+        .mockResolvedValueOnce(toolCallResponse('call-2'))
+        .mockResolvedValue(finalResponse);
+
+      await expect(
+        makeLoopFactory().generateResponseWithTools(
+          testRequest,
+          { execute: vi.fn().mockResolvedValue('ok') },
+          { maxCostUSD: 0.60 }
+        )
+      ).rejects.toThrow(ToolLoopLimitError);
+    });
+
+    it('aborts immediately when abortSignal is already aborted', async () => {
+      const { ToolLoopAbortedError } = await import('../errors');
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        makeLoopFactory().generateResponseWithTools(
+          testRequest,
+          { execute: vi.fn() },
+          { abortSignal: controller.signal }
+        )
+      ).rejects.toThrow(ToolLoopAbortedError);
+
+      expect(mockOpenAIProvider.generateResponse).not.toHaveBeenCalled();
+    });
+
+    it('records tool execution failure as a tool-result error without crashing the loop', async () => {
+      mockOpenAIProvider.generateResponse
+        .mockResolvedValueOnce(toolCallResponse())
+        .mockResolvedValueOnce(finalResponse);
+
+      const failingExecutor = { execute: vi.fn().mockRejectedValue(new Error('external service down')) };
+
+      const response = await makeLoopFactory().generateResponseWithTools(testRequest, failingExecutor);
+
+      expect(response.message).toBe('done');
+      // The second generateResponse call should have received the tool error as a result
+      const secondCallMessages = (mockOpenAIProvider.generateResponse.mock.calls[1][0] as LLMRequest).messages;
+      const toolResultMsg = secondCallMessages.find(m => m.toolResults && m.toolResults.length > 0);
+      expect(toolResultMsg?.toolResults?.[0]).toMatchObject({
+        id: 'call-1',
+        error: 'external service down'
+      });
+    });
+
+    it('invokes onIteration callback with correct state on each iteration', async () => {
+      mockOpenAIProvider.generateResponse
+        .mockResolvedValueOnce(toolCallResponse())
+        .mockResolvedValueOnce(finalResponse);
+
+      const iterations: number[] = [];
+      await makeLoopFactory().generateResponseWithTools(
+        testRequest,
+        { execute: vi.fn().mockResolvedValue('result') },
+        { onIteration: (iter) => { iterations.push(iter); } }
+      );
+
+      expect(iterations).toEqual([1]);
+    });
+
     it('should classify JSON responses and expose confidence', async () => {
       mockOpenAIProvider.generateResponse.mockResolvedValueOnce({
         message: '{"label":"recipe","confidence":0.92}',

@@ -9,6 +9,7 @@ export type {
   LLMProvider,
   LLMImageInput,
   GatewayMetadata,
+  CacheHints,
   LLMRequest,
   LLMResponse,
   LLMMessage,
@@ -126,6 +127,10 @@ export {
 // Schema validator (for custom provider authors)
 export { validateSchema } from './utils/schema-validator';
 export type { SchemaField, SchemaFieldType } from './utils/schema-validator';
+
+// Schema drift canary (for integration test suites and cron canaries)
+export { extractShape, compareShapes, runCanaryCheck } from './utils/schema-canary';
+export type { ShapeMap, CanaryDiff, CanaryReport } from './utils/schema-canary';
 
 // Image generation
 export { ImageProvider, normalizeAiResponse } from './image/index';

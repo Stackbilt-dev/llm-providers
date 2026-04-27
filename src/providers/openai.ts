@@ -3,7 +3,7 @@
  * Implementation for OpenAI GPT models with streaming and tools support
  */
 
-import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool } from '../types';
+import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool, TokenUsage } from '../types';
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
@@ -117,6 +117,10 @@ interface OpenAIResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    /** Automatic prompt cache hit tokens (GPT-4o and later). */
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+    };
   };
   system_fingerprint?: string;
 }
@@ -405,7 +409,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     const content = choice.message.content || '';
-    const usage = {
+    const usage: TokenUsage = {
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
       totalTokens: data.usage.total_tokens,
@@ -415,6 +419,10 @@ export class OpenAIProvider extends BaseProvider {
         data.model
       )
     };
+    const cachedTokens = data.usage.prompt_tokens_details?.cached_tokens;
+    if (typeof cachedTokens === 'number') {
+      usage.cachedInputTokens = cachedTokens;
+    }
 
     const response: LLMResponse = {
       id: data.id,
@@ -451,6 +459,8 @@ export class OpenAIProvider extends BaseProvider {
     this.validateRequest(request);
 
     const openaiRequest = { ...this.formatRequest(request), stream: true };
+    const hooks = this.config.hooks;
+    const providerName = this.name;
 
     return new ReadableStream({
       start: async (controller) => {
@@ -469,6 +479,18 @@ export class OpenAIProvider extends BaseProvider {
           const decoder = new TextDecoder();
           let buffer = '';
 
+          const emitDrift = (path: string, expected: string, actual: string): void => {
+            hooks?.onSchemaDrift?.({
+              provider: providerName,
+              model: request.model,
+              requestId: request.requestId,
+              path,
+              expected,
+              actual,
+              timestamp: Date.now(),
+            });
+          };
+
           while (true) {
             const { done, value } = await reader.read();
 
@@ -479,25 +501,43 @@ export class OpenAIProvider extends BaseProvider {
             buffer = lines.pop() || '';
 
             for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const data = line.slice(6);
+              if (!line.startsWith('data: ')) continue;
 
-                if (data === '[DONE]') {
-                  controller.close();
-                  return;
-                }
-
-                try {
-                  const parsed = JSON.parse(data);
-                  const sseContent = parsed.choices?.[0]?.delta?.content;
-
-                  if (sseContent) {
-                    controller.enqueue(sseContent);
-                  }
-                } catch {
-                  // Malformed SSE chunk — skip silently
-                }
+              const data = line.slice(6).trim();
+              if (data === '[DONE]' || data === '') {
+                if (data === '[DONE]') { controller.close(); return; }
+                continue;
               }
+
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(data);
+              } catch {
+                const err = new SchemaDriftError('openai', 'sse.chunk', 'valid-json', 'malformed-json');
+                emitDrift('sse.chunk', 'valid-json', 'malformed-json');
+                controller.error(err);
+                reader.cancel().catch(() => {});
+                return;
+              }
+
+              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+              const chunk = parsed as Record<string, unknown>;
+              const choices = chunk['choices'];
+              if (!Array.isArray(choices) || choices.length === 0) continue;
+              const delta = (choices[0] as Record<string, unknown>)['delta'];
+              if (!delta || typeof delta !== 'object' || Array.isArray(delta)) continue;
+              const sseContent = (delta as Record<string, unknown>)['content'];
+
+              if (sseContent === undefined || sseContent === null) continue;
+              if (typeof sseContent !== 'string') {
+                const actual = String(typeof sseContent);
+                emitDrift('sse.choices[0].delta.content', 'string', actual);
+                controller.error(new SchemaDriftError('openai', 'sse.choices[0].delta.content', 'string', actual));
+                reader.cancel().catch(() => {});
+                return;
+              }
+
+              if (sseContent) controller.enqueue(sseContent);
             }
           }
 

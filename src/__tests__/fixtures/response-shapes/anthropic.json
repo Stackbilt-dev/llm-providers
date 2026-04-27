@@ -1,0 +1,15 @@
+{
+  "id": "string",
+  "type": "string",
+  "role": "string",
+  "content": "array",
+  "content[0]": "object",
+  "content[0].type": "string",
+  "content[0].text": "string",
+  "model": "string",
+  "stop_reason": "string",
+  "stop_sequence": "null",
+  "usage": "object",
+  "usage.input_tokens": "number",
+  "usage.output_tokens": "number"
+}

@@ -3,7 +3,7 @@
  * Implementation for Cerebras fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities, ToolCall } from '../types';
+import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities, ToolCall, TokenUsage } from '../types';
 import { BaseProvider } from './base';
 import {
   LLMErrorFactory,
@@ -101,6 +101,10 @@ interface CerebrasResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    /** Automatic prompt cache hit tokens (128-token blocks, 5m–1h TTL). */
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+    };
   };
   system_fingerprint?: string;
 }
@@ -247,6 +251,8 @@ export class CerebrasProvider extends BaseProvider {
     this.validateRequest(request);
 
     const cerebrasRequest = { ...this.formatRequest(request), stream: true };
+    const hooks = this.config.hooks;
+    const providerName = this.name;
 
     return new ReadableStream({
       start: async (controller) => {
@@ -265,6 +271,18 @@ export class CerebrasProvider extends BaseProvider {
           const decoder = new TextDecoder();
           let buffer = '';
 
+          const emitDrift = (path: string, expected: string, actual: string): void => {
+            hooks?.onSchemaDrift?.({
+              provider: providerName,
+              model: request.model,
+              requestId: request.requestId,
+              path,
+              expected,
+              actual,
+              timestamp: Date.now(),
+            });
+          };
+
           while (true) {
             const { done, value } = await reader.read();
 
@@ -275,25 +293,43 @@ export class CerebrasProvider extends BaseProvider {
             buffer = lines.pop() || '';
 
             for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const data = line.slice(6);
+              if (!line.startsWith('data: ')) continue;
 
-                if (data === '[DONE]') {
-                  controller.close();
-                  return;
-                }
-
-                try {
-                  const parsed = JSON.parse(data);
-                  const content = parsed.choices?.[0]?.delta?.content;
-
-                  if (content) {
-                    controller.enqueue(content);
-                  }
-                } catch {
-                  // Malformed SSE chunk — skip silently
-                }
+              const data = line.slice(6).trim();
+              if (data === '[DONE]' || data === '') {
+                if (data === '[DONE]') { controller.close(); return; }
+                continue;
               }
+
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(data);
+              } catch {
+                const err = new SchemaDriftError('cerebras', 'sse.chunk', 'valid-json', 'malformed-json');
+                emitDrift('sse.chunk', 'valid-json', 'malformed-json');
+                controller.error(err);
+                reader.cancel().catch(() => {});
+                return;
+              }
+
+              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+              const chunk = parsed as Record<string, unknown>;
+              const choices = chunk['choices'];
+              if (!Array.isArray(choices) || choices.length === 0) continue;
+              const delta = (choices[0] as Record<string, unknown>)['delta'];
+              if (!delta || typeof delta !== 'object' || Array.isArray(delta)) continue;
+              const content = (delta as Record<string, unknown>)['content'];
+
+              if (content === undefined || content === null) continue;
+              if (typeof content !== 'string') {
+                const actual = String(typeof content);
+                emitDrift('sse.choices[0].delta.content', 'string', actual);
+                controller.error(new SchemaDriftError('cerebras', 'sse.choices[0].delta.content', 'string', actual));
+                reader.cancel().catch(() => {});
+                return;
+              }
+
+              if (content) controller.enqueue(content);
             }
           }
 
@@ -425,7 +461,7 @@ export class CerebrasProvider extends BaseProvider {
     }
 
     const content = choice.message.content || '';
-    const usage = {
+    const usage: TokenUsage = {
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
       totalTokens: data.usage.total_tokens,
@@ -435,6 +471,10 @@ export class CerebrasProvider extends BaseProvider {
         data.model
       )
     };
+    const cachedTokens = data.usage.prompt_tokens_details?.cached_tokens;
+    if (typeof cachedTokens === 'number') {
+      usage.cachedInputTokens = cachedTokens;
+    }
 
     // Extract tool calls if present (validated at provider boundary).
     // See groq.ts for the rationale on filtering unknown `type` variants

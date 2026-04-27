@@ -18,6 +18,34 @@ import {
   ModelNotFoundError
 } from '../errors';
 import { getProviderDefaultModel } from '../model-catalog';
+import { validateSchema, type SchemaField } from '../utils/schema-validator';
+
+/**
+ * Minimum structural fields the Cloudflare Workers AI parser reads.
+ * All fields are optional because Workers AI returns different shapes
+ * depending on the model and endpoint (chat/completion/vision).
+ * Validates type correctness when a field IS present, without requiring
+ * any particular shape.
+ */
+const CLOUDFLARE_RESPONSE_SCHEMA: SchemaField[] = [
+  { path: 'response', type: 'string', optional: true },
+  { path: 'id', type: 'string', optional: true },
+  { path: 'model', type: 'string', optional: true },
+  { path: 'output_text', type: 'string', optional: true },
+  {
+    path: 'choices',
+    type: 'array',
+    optional: true,
+    items: {
+      shape: [
+        { path: 'message', type: 'object' },
+        { path: 'message.content', type: 'string-or-null', optional: true },
+      ]
+    }
+  },
+  { path: 'output', type: 'array', optional: true },
+  { path: 'usage', type: 'object', optional: true },
+];
 
 interface CloudflareContentPart {
   type: 'text' | 'image_url';
@@ -39,6 +67,8 @@ interface CloudflareRequest {
   stream?: boolean;
   tools?: LLMRequest['tools'];
   tool_choice?: LLMRequest['toolChoice'];
+  /** LoRA adapter name or UUID (Workers AI fine-tune). Forwarded as-is to ai.run(). */
+  lora?: string;
 }
 
 /** Workers AI returns various response shapes depending on the model. */
@@ -509,6 +539,10 @@ export class CloudflareProvider extends BaseProvider {
       stream: request.stream
     };
 
+    if (request.lora !== undefined) {
+      cloudflareRequest.lora = request.lora;
+    }
+
     if (request.tools && request.tools.length > 0) {
       cloudflareRequest.tools = request.tools.map(tool => ({
         type: tool.type,
@@ -575,6 +609,11 @@ export class CloudflareProvider extends BaseProvider {
     responseTime: number
   ): LLMResponse {
     const payload = this.unwrapResult(result);
+    // Only validate when the payload is an object — some models return a raw
+    // string which is handled by extractText as a valid response shape.
+    if (payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
+      validateSchema('cloudflare', payload, CLOUDFLARE_RESPONSE_SCHEMA);
+    }
     const content = this.extractText(result);
     const toolCalls = this.extractToolCalls(result);
     const usage = this.extractUsage(result, model, request, content);

@@ -481,4 +481,102 @@ describe('CloudflareProvider', () => {
       ).rejects.toThrow(/does not support image input/);
     });
   });
+
+  describe('LoRA (fine-tune) support', () => {
+    it('forwards lora field to ai.run() when present', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Fine-tuned output.' });
+
+      await provider.generateResponse({
+        model: '@cf/qwen/qwen1.5-7b-chat-awq',
+        messages: [{ role: 'user', content: 'Hello' }],
+        lora: '6d028a43-759e-417f-83fb-fa9b681d81f4',
+        maxTokens: 50
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.lora).toBe('6d028a43-759e-417f-83fb-fa9b681d81f4');
+    });
+
+    it('does not include lora key when lora is absent', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Normal output.' });
+
+      await provider.generateResponse({
+        model: '@cf/qwen/qwen1.5-7b-chat-awq',
+        messages: [{ role: 'user', content: 'Hello' }],
+        maxTokens: 50
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(Object.prototype.hasOwnProperty.call(body, 'lora')).toBe(false);
+    });
+
+    it('accepts lora as a model name string (not just UUID)', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Named adapter output.' });
+
+      await provider.generateResponse({
+        model: '@cf/qwen/qwen1.5-7b-chat-awq',
+        messages: [{ role: 'user', content: 'Hi' }],
+        lora: 'my-custom-adapter',
+        maxTokens: 20
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.lora).toBe('my-custom-adapter');
+    });
+  });
+
+  describe('response envelope schema validation', () => {
+    it('accepts a valid choices-based response', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        id: 'res-1',
+        choices: [{ message: { content: 'Hello!' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 }
+      });
+
+      const result = await provider.generateResponse({
+        model: '@cf/openai/gpt-oss-120b',
+        messages: [{ role: 'user', content: 'Hi' }]
+      });
+
+      expect(result.message).toBe('Hello!');
+    });
+
+    it('accepts a valid simple response shape', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Simple.' });
+
+      const result = await provider.generateResponse({
+        model: '@cf/meta/llama-3.1-8b-instruct',
+        messages: [{ role: 'user', content: 'Hi' }]
+      });
+
+      expect(result.message).toBe('Simple.');
+    });
+
+    it('throws SchemaDriftError when choices is not an array', async () => {
+      // Simulate API drift where choices becomes an object instead of array
+      mockAiRun.mockResolvedValueOnce({ choices: 'bad', id: 'x' });
+
+      const { SchemaDriftError } = await import('../errors');
+      await expect(
+        provider.generateResponse({
+          model: '@cf/openai/gpt-oss-120b',
+          messages: [{ role: 'user', content: 'Hi' }]
+        })
+      ).rejects.toThrow(SchemaDriftError);
+    });
+
+    it('throws SchemaDriftError when choices[0].message is not an object', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        choices: [{ message: 'not-an-object', finish_reason: 'stop' }]
+      });
+
+      const { SchemaDriftError } = await import('../errors');
+      await expect(
+        provider.generateResponse({
+          model: '@cf/openai/gpt-oss-120b',
+          messages: [{ role: 'user', content: 'Hi' }]
+        })
+      ).rejects.toThrow(SchemaDriftError);
+    });
+  });
 });

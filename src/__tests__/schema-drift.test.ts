@@ -153,6 +153,7 @@ describe('AnthropicProvider response schema validation', () => {
     content: [{ type: 'text', text: 'hello' }],
     model: 'claude-haiku-4-5-20251001',
     stop_reason: 'end_turn',
+    stop_sequence: null, // real API always includes this field; null when no stop sequence triggered
     usage: { input_tokens: 10, output_tokens: 5 },
   };
 
@@ -864,5 +865,397 @@ describe.each(openAiCompatCases)('$name response schema validation', ({ name, fa
     // Critical: the unknown variant must be dropped, not mis-surfaced as a
     // function call and not crashed through.
     expect(res.toolCalls).toBeUndefined();
+  });
+});
+
+// ── AI Gateway metadata forwarding — non-Gateway negative test (#29) ────
+
+describe('AI Gateway metadata — header isolation', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('does not attach cf-aig-* headers to non-Gateway base URLs', async () => {
+    const validAnthropicResponse = {
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'hello' }],
+      model: 'claude-haiku-4-5-20251001',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 5, output_tokens: 3 },
+    };
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => validAnthropicResponse,
+      headers: new Headers({ 'content-type': 'application/json' }),
+    });
+
+    const provider = new AnthropicProvider({
+      apiKey: 'test-key',
+      maxRetries: 0,
+      baseUrl: 'https://api.anthropic.com'
+    });
+
+    await provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+      gatewayMetadata: { cacheKey: 'tenant-abc', cacheTtl: 300 }
+    });
+
+    // headers is passed as a plain Record<string,string> from makeAnthropicRequest
+    const calledOptions = mockFetch.mock.calls[0][1] as RequestInit;
+    const calledHeaders = calledOptions.headers as Record<string, string>;
+    expect(calledHeaders['cf-aig-cache-key']).toBeUndefined();
+    expect(calledHeaders['cf-aig-cache-ttl']).toBeUndefined();
+    // Verify fetch was actually called (confirms the mock worked)
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+});
+
+// ── Anthropic streaming SSE schema validation (#41) ──────────────────────
+
+function sseBody(events: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const lines = events.map(e => `data: ${e}\n\n`).join('');
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(lines));
+      controller.close();
+    }
+  });
+}
+
+function validTextDelta(text: string): string {
+  return JSON.stringify({
+    type: 'content_block_delta',
+    index: 0,
+    delta: { type: 'text_delta', text }
+  });
+}
+
+async function drainStream(stream: ReadableStream<string>): Promise<string> {
+  const reader = stream.getReader();
+  let result = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    result += value;
+  }
+  return result;
+}
+
+async function streamError(stream: ReadableStream<string>): Promise<Error> {
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+    throw new Error('Expected stream to error but it closed cleanly');
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('Expected stream to error')) throw err;
+    return err as Error;
+  }
+}
+
+// ── OpenAI-compatible SSE streaming validation (#41) ────────────────────────
+
+interface OpenAICompatStreamCase {
+  name: string;
+  factory: () => BaseProvider;
+  model: string;
+  providerKey: string;
+}
+
+const openAiCompatStreamCases: OpenAICompatStreamCase[] = [
+  {
+    name: 'OpenAIProvider',
+    factory: () => new OpenAIProvider({ apiKey: 'test-key', maxRetries: 0 }),
+    model: 'gpt-4o-mini',
+    providerKey: 'openai',
+  },
+  {
+    name: 'GroqProvider',
+    factory: () => new GroqProvider({ apiKey: 'test-key', maxRetries: 0 }),
+    model: 'llama-3.1-8b-instant',
+    providerKey: 'groq',
+  },
+  {
+    name: 'CerebrasProvider',
+    factory: () => new CerebrasProvider({ apiKey: 'test-key', maxRetries: 0 }),
+    model: 'llama-3.1-8b',
+    providerKey: 'cerebras',
+  },
+];
+
+function openAiSseDelta(content: string): string {
+  return JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] });
+}
+
+describe.each(openAiCompatStreamCases)('$name streaming SSE schema validation (#41)', ({ factory, model, providerKey }) => {
+  let provider: BaseProvider;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    provider = factory();
+  });
+
+  it('yields text chunks from valid SSE frames', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        openAiSseDelta('Hello'),
+        openAiSseDelta(', world!'),
+        '[DONE]',
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+    expect(await drainStream(stream)).toBe('Hello, world!');
+  });
+
+  it('closes cleanly on [DONE] without error', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody(['[DONE]']),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+    expect(await drainStream(stream)).toBe('');
+  });
+
+  it('skips empty data frames (SSE keepalives)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody(['', openAiSseDelta('ok'), '']),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+    expect(await drainStream(stream)).toBe('ok');
+  });
+
+  it('errors the stream on malformed JSON in a data frame', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([openAiSseDelta('before'), 'NOT_JSON{{{']),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+    const err = await streamError(stream);
+    expect(err).toMatchObject({ code: 'SCHEMA_DRIFT', provider: providerKey, path: 'sse.chunk' });
+  });
+
+  it('errors the stream when delta.content is a non-string non-null value', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        JSON.stringify({ choices: [{ delta: { content: 42 }, finish_reason: null }] }),
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+    const err = await streamError(stream);
+    expect(err).toMatchObject({ code: 'SCHEMA_DRIFT', provider: providerKey, path: 'sse.choices[0].delta.content' });
+  });
+
+  it('fires onSchemaDrift hook before erroring the stream', async () => {
+    const driftEvents: unknown[] = [];
+    const hooksProvider = factory();
+    // Inject hooks via config — access internal config through the provider
+    (hooksProvider as unknown as { config: { hooks: ObservabilityHooks } }).config.hooks = {
+      onSchemaDrift: (e) => driftEvents.push(e),
+    };
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody(['INVALID{{{JSON']),
+    });
+
+    const stream = await hooksProvider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+    await streamError(stream);
+
+    expect(driftEvents).toHaveLength(1);
+    expect(driftEvents[0]).toMatchObject({
+      provider: providerKey,
+      path: 'sse.chunk',
+      expected: 'valid-json',
+    });
+  });
+});
+
+describe('AnthropicProvider streaming SSE schema validation (#41)', () => {
+  let provider: AnthropicProvider;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    provider = new AnthropicProvider({ apiKey: 'test-key', maxRetries: 0 });
+  });
+
+  it('yields text chunks from valid text_delta events', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        JSON.stringify({ type: 'message_start', message: { id: 'msg_1', usage: { input_tokens: 5, output_tokens: 0 } } }),
+        validTextDelta('Hello'),
+        validTextDelta(', world!'),
+        JSON.stringify({ type: 'message_stop' }),
+        '[DONE]',
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    expect(await drainStream(stream)).toBe('Hello, world!');
+  });
+
+  it('skips non-content-block-delta events (forward-compat)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        JSON.stringify({ type: 'message_start', message: { id: 'x', usage: {} } }),
+        JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+        validTextDelta('hi'),
+        JSON.stringify({ type: 'content_block_stop', index: 0 }),
+        JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' } }),
+        JSON.stringify({ type: 'message_stop' }),
+        JSON.stringify({ type: 'unknown_future_type', data: { foo: 'bar' } }),
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+    expect(await drainStream(stream)).toBe('hi');
+  });
+
+  it('skips input_json_delta (tool-use streaming) — not text content', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"k":' } }),
+        JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"v"}' } }),
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+    expect(await drainStream(stream)).toBe('');
+  });
+
+  it('errors the stream on malformed JSON in a data frame', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        validTextDelta('before'),
+        'NOT_VALID_JSON {{{',
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    const err = await streamError(stream);
+    expect(err).toMatchObject({ code: 'SCHEMA_DRIFT', provider: 'anthropic', path: 'sse.chunk' });
+  });
+
+  it('errors the stream when content_block_delta.delta is not an object', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        JSON.stringify({ type: 'content_block_delta', index: 0, delta: 'string-delta' }),
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    const err = await streamError(stream);
+    expect(err).toMatchObject({ code: 'SCHEMA_DRIFT', path: 'content_block_delta.delta' });
+  });
+
+  it('errors the stream when text_delta.text is not a string', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 42 } }),
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    const err = await streamError(stream);
+    expect(err).toMatchObject({ code: 'SCHEMA_DRIFT', path: 'content_block_delta.delta.text' });
+  });
+
+  it('fires onSchemaDrift hook before erroring the stream', async () => {
+    const driftEvents: unknown[] = [];
+    const hooksProvider = new AnthropicProvider({
+      apiKey: 'test-key',
+      maxRetries: 0,
+      hooks: { onSchemaDrift: (e) => driftEvents.push(e) }
+    });
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody(['INVALID{{{JSON']),
+    });
+
+    const stream = await hooksProvider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+    await streamError(stream);
+
+    expect(driftEvents).toHaveLength(1);
+    expect(driftEvents[0]).toMatchObject({
+      provider: 'anthropic',
+      path: 'sse.chunk',
+      expected: 'valid-json',
+    });
+  });
+
+  it('skips empty data frames (SSE keepalives)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody(['', validTextDelta('ok'), '']),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+    expect(await drainStream(stream)).toBe('ok');
   });
 });
