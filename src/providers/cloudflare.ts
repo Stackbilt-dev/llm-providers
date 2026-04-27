@@ -87,9 +87,10 @@ interface WorkersAIResult {
   result?: WorkersAIResult; // wrapped responses
 }
 
-// Workers AI binding for this model requires a raw { image, prompt } input rather
-// than the OpenAI-compatible messages/image_url format. The chat path returns
-// choices[0].message.content === null via the binding, silently producing "".
+// Models that require the raw { image, prompt } binding format rather than chat/image_url.
+// Add any new CF vision models here if they exhibit the same null-content symptom via the binding.
+// (The chat path returns choices[0].message.content === null through the Workers AI binding,
+// silently producing "".)
 const LLAMA_VISION_RAW_MODELS = new Set([
   '@cf/meta/llama-3.2-11b-vision-instruct'
 ]);
@@ -372,6 +373,13 @@ export class CloudflareProvider extends BaseProvider {
   }
 
   private async runLlamaVisionRaw(request: LLMRequest, model: string): Promise<WorkersAIResult> {
+    if (request.images!.length > 1) {
+      throw new ConfigurationError(
+        this.name,
+        `${model} supports exactly one image via the raw binding format — ${request.images!.length} were provided.`
+      );
+    }
+
     const image = request.images![0];
 
     let imageBytes: number[];
@@ -391,7 +399,15 @@ export class CloudflareProvider extends BaseProvider {
     let lastUserText = '';
     for (let i = request.messages.length - 1; i >= 0; i--) {
       if (request.messages[i].role === 'user') {
-        lastUserText = typeof request.messages[i].content === 'string' ? request.messages[i].content : '';
+        const raw = request.messages[i].content;
+        lastUserText = typeof raw === 'string'
+          ? raw
+          : Array.isArray(raw)
+            ? (raw as Array<{ type?: string; text?: string }>)
+                .filter(p => p.type === 'text')
+                .map(p => p.text ?? '')
+                .join(' ')
+            : '';
         break;
       }
     }
@@ -400,7 +416,7 @@ export class CloudflareProvider extends BaseProvider {
     return (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(model, {
       image: imageBytes,
       prompt: `${systemPrefix}${lastUserText}`,
-      max_tokens: request.maxTokens
+      max_tokens: request.maxTokens ?? 512
     }) as Promise<WorkersAIResult>;
   }
 

@@ -383,6 +383,51 @@ describe('CloudflareProvider', () => {
       expect(body.prompt).toBe('You are a food critic.\n\nWhat is this?');
     });
 
+    it('rejects multiple images on llama-3.2 raw binding with a clear error', async () => {
+      await expect(
+        provider.generateResponse({
+          model: '@cf/meta/llama-3.2-11b-vision-instruct',
+          messages: [{ role: 'user', content: 'compare' }],
+          images: [
+            { data: 'QUJD', mimeType: 'image/jpeg' },
+            { data: 'REVG', mimeType: 'image/jpeg' }
+          ]
+        })
+      ).rejects.toThrow(/supports exactly one image/);
+    });
+
+    it('extracts text from array-content user message for llama-3.2 raw binding', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Spaghetti.' });
+
+      await provider.generateResponse({
+        model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What food is this?' },
+            { type: 'text', text: 'Be brief.' }
+          ] as unknown as string
+        }],
+        images: [{ data: 'QUJD', mimeType: 'image/jpeg' }]
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.prompt).toBe('What food is this? Be brief.');
+    });
+
+    it('defaults max_tokens to 512 when not specified for llama-3.2 raw binding', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'ok' });
+
+      await provider.generateResponse({
+        model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        messages: [{ role: 'user', content: 'x' }],
+        images: [{ data: 'QUJD', mimeType: 'image/jpeg' }]
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.max_tokens).toBe(512);
+    });
+
     it('accepts pre-formed data: URL for llama-3.2 raw binding', async () => {
       mockAiRun.mockResolvedValueOnce({ response: 'ok' });
 
