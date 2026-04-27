@@ -3,6 +3,37 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] — 2026-04-27
+
+### Added
+- **SSE streaming schema validation (#41)** — all four providers (`AnthropicProvider`, `OpenAIProvider`, `GroqProvider`, `CerebrasProvider`) now surface malformed SSE frames as `SchemaDriftError` and fire `onSchemaDrift` instead of swallowing silently. Anthropic additionally validates `content_block_delta` event shape and `delta.text` type; future tool-streaming delta types are skipped via forward-compat discriminator. 26 new streaming tests via `describe.each`.
+- **Schema drift canary (#39 Part 2)** — `src/utils/schema-canary.ts` ships three exported utilities:
+  - `extractShape(obj)` — walks a raw response and returns a flat `path → JSON-type` map
+  - `compareShapes(golden, live)` — diffs two shape maps into `{ added, removed, changed }`
+  - `runCanaryCheck(provider, golden, liveResponse)` — one-shot canary returning a `CanaryReport`
+  - Golden fixtures committed under `src/__tests__/fixtures/response-shapes/` for all five providers
+  - All exports available at package root
+- **Cache-aware routing (#52)** — provider-agnostic cache hints on `LLMRequest`:
+  - New `CacheHints` type with `strategy`, `key`, `ttl`, `sessionId`, `cacheablePrefix` fields
+  - `LLMRequest.cache?: CacheHints` — no-op for callers that don't set it
+  - Anthropic: `strategy: 'provider-prefix' | 'both'` wraps the system prompt as a content-block array with `cache_control: { type: 'ephemeral' }` and marks the last tool definition as a breakpoint when `cacheablePrefix` is `'auto'` or `'tools'`
+  - OpenAI, Groq, Cerebras: automatic caching with no request-side translation needed
+  - Cloudflare: platform-level prefix caching via Workers AI binding
+- **Cached token usage reporting (#52)** — all providers now extract provider-specific cached token counts into normalized `TokenUsage` fields:
+  - `cachedInputTokens` — Groq, Cerebras, OpenAI automatic cache hits (`prompt_tokens_details.cached_tokens`)
+  - `cacheReadInputTokens` — Anthropic `cache_read_input_tokens`
+  - `cacheCreationInputTokens` — Anthropic `cache_creation_input_tokens`
+  - `supportsPromptCache` flag added to `ModelCapabilities` and populated for all Anthropic models
+- **Cloudflare LoRA / fine-tune forwarding (#51)** — `LLMRequest.lora?: string` is forwarded to the Workers AI binding, enabling adapter-based fine-tunes without wrapper code.
+- **Factory-level streaming with fallback (#26)** — `LLMProviderFactory.generateResponseStream()` and `LLMProviders.generateResponseStream()` use the same provider-selection, circuit-breaker, and exhaustion-registry path as `generateResponse()`. Pre-stream HTTP errors fall over to the next provider before emitting the first chunk.
+- **Tool-use loop helper (#28)** — `generateResponseWithTools(request, executor, opts?)` owns the `generateResponse → parse → execute → append → repeat` loop. Ships with `ToolLoopLimitError` (max iterations / cost cap) and `ToolLoopAbortedError` (AbortSignal). `ToolLoopOptions` supports `maxIterations`, `maxCostUSD`, `onIteration`, `abortSignal`.
+- **Cloudflare AI Gateway metadata forwarding (#29)** — `GatewayMetadata` on `LLMRequest` (via `BaseProvider.getAIGatewayHeaders`) forwards `cf-aig-cache-key`, `cf-aig-cache-ttl`, and `cf-aig-metadata` headers only when `baseUrl` matches the Cloudflare AI Gateway pattern. Non-Gateway base URLs are unaffected.
+
+### Fixed
+- **`stop_sequence` schema drift false positive** — the Anthropic response schema declared `stop_sequence` as `type: 'string'` but the real API always returns `null` when no stop sequence triggers, causing `SchemaDriftError` on every normal response. Changed to `type: 'string-or-null'`. The `AnthropicResponse` internal interface and `formatResponse` null guard updated to match.
+- **`AnthropicProvider.getProviderBalance()` invalid endpoint** — was calling `GET /v1/organizations/cost_report`, which is not a valid Anthropic API endpoint, returning HTTP errors in production. Now returns `status: 'unavailable', source: 'not_supported'` with a message directing users to the Admin API (like `GroqProvider` already did). (#25)
+- **Inline `import('../types').TokenUsage` annotations** — cleaned up in `groq.ts`, `cerebras.ts`, `anthropic.ts`, and `openai.ts`; `TokenUsage` now lives in the existing `import type` block in each file.
+
 ## [1.5.1] — 2026-04-27
 
 ### Fixed

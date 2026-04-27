@@ -10,8 +10,12 @@ A multi-provider LLM abstraction layer with automatic failover, graduated circui
 - **Cost tracking and optimization** -- per-provider cost attribution, budget alerts with CreditLedger, automatic routing to cheaper providers
 - **Declarative model catalog** -- semantic model metadata drives recommendations, provider defaults, and fallback routing
 - **Rate limit enforcement** -- CreditLedger tracks RPM/RPD/TPM/TPD per provider; factory skips providers that exceed limits
-- **Streaming** -- SSE streaming support for all providers
+- **Streaming with fallback** -- SSE streaming on all providers; factory-level streaming routes through the same circuit-breaker and fallback chain as non-streaming requests
 - **Tool/function calling** -- OpenAI, Anthropic, Cerebras, and Cloudflare tool use with unified response format
+- **Tool-use loop helper** -- `generateResponseWithTools` owns the request → parse → execute → repeat cycle with iteration caps, cost limits, and abort signal support
+- **Provider-agnostic cache hints** -- `LLMRequest.cache` translates to provider-native caching (Anthropic `cache_control` breakpoints; automatic on OpenAI/Groq/Cerebras); cached token counts normalized into `TokenUsage`
+- **Schema drift detection** -- envelope validation on every provider response; streaming frames validated per-chunk; `SchemaDriftError` routes through fallback chain and fires `onSchemaDrift` hook
+- **Schema canary** -- `runCanaryCheck` / `extractShape` / `compareShapes` for comparing live response shapes against committed golden fixtures
 - **Image generation** -- Cloudflare Workers AI (SDXL, FLUX) and Google Gemini
 - **Health monitoring** -- per-provider health checks, metrics, and circuit breaker state
 - **Structured logging** -- injectable `Logger` interface; silent by default, opt-in to console or custom loggers
@@ -267,6 +271,118 @@ MODELS.CEREBRAS_ZAI_GLM_4_7;    // 'zai-glm-4.7'
 const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 ```
 
+## Factory-Level Streaming
+
+`generateResponseStream` uses the same provider-selection, circuit-breaker, and exhaustion-registry path as `generateResponse`. Pre-stream HTTP errors (401, 429, 503, circuit open) fall over to the next provider before emitting the first chunk.
+
+```typescript
+const stream = await llm.generateResponseStream({
+  messages: [{ role: 'user', content: 'Tell me a story.' }],
+  model: 'claude-haiku-4-5-20251001',
+});
+
+const reader = stream.getReader();
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  process.stdout.write(value); // string chunk
+}
+```
+
+## Tool-Use Loop
+
+`generateResponseWithTools` owns the `generateResponse → parse → execute → append → repeat` cycle. It enforces iteration caps, cumulative cost limits, and abort-signal cancellation — no boilerplate needed on the caller side.
+
+```typescript
+import { LLMProviders, ToolLoopLimitError } from '@stackbilt/llm-providers';
+
+const result = await llm.generateResponseWithTools(
+  {
+    messages: [{ role: 'user', content: 'What is 2 + 2 * 3?' }],
+    tools: [{
+      type: 'function',
+      function: {
+        name: 'calculate',
+        description: 'Evaluate a math expression',
+        parameters: { type: 'object', properties: { expr: { type: 'string' } }, required: ['expr'] }
+      }
+    }],
+  },
+  {
+    execute: async (name, args) => {
+      if (name === 'calculate') return eval((args as { expr: string }).expr);
+      throw new Error(`Unknown tool: ${name}`);
+    }
+  },
+  { maxIterations: 5, maxCostUSD: 0.10 }
+);
+
+console.log(result.message); // final assistant response after tool execution
+```
+
+## Prompt Cache Hints
+
+Pass a provider-agnostic `cache` hint on any request. The library translates it to the appropriate provider-native mechanism.
+
+```typescript
+const response = await llm.generateResponse({
+  messages: [{ role: 'user', content: 'Summarize the context.' }],
+  systemPrompt: 'You are an expert at analyzing long documents. [... 10KB of stable context ...]',
+  model: 'claude-haiku-4-5-20251001',
+  cache: {
+    strategy: 'provider-prefix',   // mark the stable prefix for caching
+    cacheablePrefix: 'auto',       // cache system prompt + tools (default)
+  },
+});
+
+// Cached token counts are normalized in TokenUsage
+console.log(response.usage.cacheReadInputTokens);    // Anthropic cache hit tokens
+console.log(response.usage.cachedInputTokens);       // OpenAI / Groq / Cerebras cache hit tokens
+```
+
+| Strategy | Behavior |
+|----------|----------|
+| `'off'` | No caching hints sent |
+| `'provider-prefix'` | Mark stable prefix for provider-side caching |
+| `'response'` | Enable AI Gateway response caching (via `GatewayMetadata`) |
+| `'both'` | Both prefix and response caching |
+
+## Schema Drift Canary
+
+Use the canary utilities to compare a live provider response against a committed golden fixture and detect API shape drift before it reaches production.
+
+```typescript
+import {
+  extractShape, compareShapes, runCanaryCheck
+} from '@stackbilt/llm-providers';
+
+// 1. Load your committed golden fixture (flat path → type map)
+import goldenShape from './fixtures/openai.json';
+
+// 2. Fetch a raw response from the provider (your responsibility)
+const liveResponse = await fetch('https://api.openai.com/v1/chat/completions', ...).then(r => r.json());
+
+// 3. Check for drift
+const report = runCanaryCheck('openai', goldenShape, liveResponse);
+
+if (report.status === 'drift') {
+  console.error('OpenAI response shape changed!', report.diff);
+  // diff.added   — new fields (additive, usually safe)
+  // diff.removed — missing fields (breaking, alert immediately)
+  // diff.changed — type-changed fields (breaking, alert immediately)
+}
+```
+
+Generate your initial golden fixture from a known-good response:
+
+```typescript
+import { extractShape } from '@stackbilt/llm-providers';
+import fs from 'fs';
+
+const shape = extractShape(knownGoodResponse);
+fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
+```
+
 ## API Reference
 
 ### Core Classes
@@ -284,8 +400,8 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 
 ### Utilities
 
-| Class | Description |
-|-------|-------------|
+| Class / Export | Description |
+|----------------|-------------|
 | `CircuitBreaker` | Graduated 4-state circuit breaker with probabilistic degradation |
 | `CircuitBreakerManager` | Manages circuit breakers across multiple providers |
 | `RetryManager` | Exponential backoff retry with jitter |
@@ -294,6 +410,10 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 | `CostOptimizer` | Static methods for optimal provider selection |
 | `MODEL_CATALOG` | Declarative model metadata for routing and recommendation |
 | `ImageProvider` | Multi-provider image generation (Cloudflare SDXL/FLUX, Google Gemini) |
+| `extractShape` | Walk a raw API response into a flat `path → type` shape map |
+| `compareShapes` | Diff two shape maps into `{ added, removed, changed }` |
+| `runCanaryCheck` | One-shot canary: extract live shape, compare against golden, return `CanaryReport` |
+| `validateSchema` | Low-level envelope validator (for custom provider authors) |
 
 ### Logger
 
@@ -307,9 +427,14 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 
 | Type | Description |
 |------|-------------|
-| `LLMRequest` | Unified request: messages, model, temperature, tools, response_format |
+| `LLMRequest` | Unified request: messages, model, temperature, tools, response_format, cache, lora |
 | `LLMResponse` | Unified response: message, usage (with cost), provider, tool calls |
-| `TokenUsage` | Token counts and cost (inputTokens, outputTokens, totalTokens, cost) |
+| `TokenUsage` | Token counts, cost, and cached token fields (cachedInputTokens, cacheReadInputTokens, cacheCreationInputTokens) |
+| `CacheHints` | Cache strategy, key, ttl, sessionId, cacheablePrefix for provider-agnostic prompt caching |
+| `ToolExecutor` | Interface for `generateResponseWithTools`: `execute(name, args) => Promise<unknown>` |
+| `ToolLoopOptions` | Loop config: maxIterations, maxCostUSD, onIteration, abortSignal |
+| `CanaryReport` | Schema canary result: provider, status ('ok'|'drift'), diff |
+| `ShapeMap` | Flat `path → JSON-type` map produced by `extractShape` |
 | `ProviderFactoryConfig` | Factory config: provider configs, fallback rules, ledger, logger |
 | `CostAnalytics` | Cost breakdown, total, and recommendations |
 | `ProviderHealthEntry` | Health status, metrics, circuit breaker state, capabilities |
@@ -322,8 +447,13 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 | `createLLMProviders(config)` | Create an `LLMProviders` instance |
 | `createCostOptimizedLLMProviders(config)` | Create with cost optimization, circuit breakers, and retries enabled |
 | `LLMProviders.fromEnv(env)` | Auto-discover providers from environment variables |
+| `llm.generateResponse(request)` | Generate a response with provider selection and fallback |
+| `llm.generateResponseStream(request)` | Streaming generation; fallback chain active before first chunk |
+| `llm.generateResponseWithTools(request, executor, opts?)` | Managed tool-use loop with caps and abort-signal support |
 | `llm.getRecommendedModel(request, useCase?)` | Runtime recommendation using configured providers, health, and ledger state |
 | `getRecommendedModel(useCase, providers, context?)` | Pick the best active model for a use case |
+| `runCanaryCheck(provider, golden, liveResponse)` | Compare live response shape against golden fixture |
+| `extractShape(obj)` | Extract flat path → type map from any object |
 | `retry(fn, config)` | One-shot retry wrapper for any async function |
 
 ## License
