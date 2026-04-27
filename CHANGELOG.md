@@ -3,6 +3,11 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] — 2026-04-27
+
+### Fixed
+- **`analyzeImage()` silent empty response on Cloudflare** — `@cf/meta/llama-3.2-11b-vision-instruct` via the Workers AI binding requires a raw `{ image: number[], prompt, max_tokens }` input shape, not the OpenAI-compatible `messages/image_url` format. The chat path returns `choices[0].message.content === null` via the binding, causing `extractText()` to silently return `""`. The provider now detects this model and dispatches to the raw binding format, mapping the result's `{ response: string }` back through the existing normalisation path. Other vision models (`@cf/google/gemma-4-26b-a4b-it`, `@cf/meta/llama-4-scout-17b-16e-instruct`) continue using the chat format unchanged. Fixes #53.
+
 ## [1.5.0] — 2026-04-23
 
 Bundles the unreleased 1.4.0 scope (model retirements, drift test) with envelope validation, env auto-discovery, and the declarative catalog into a single minor release. 1.4.0 was tagged in `package.json` but never published to npm; consumers upgrading from 1.3.0 receive all of the following.
