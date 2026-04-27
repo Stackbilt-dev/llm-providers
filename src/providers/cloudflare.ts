@@ -87,6 +87,14 @@ interface WorkersAIResult {
   result?: WorkersAIResult; // wrapped responses
 }
 
+// Models that require the raw { image, prompt } binding format rather than chat/image_url.
+// Add any new CF vision models here if they exhibit the same null-content symptom via the binding.
+// (The chat path returns choices[0].message.content === null through the Workers AI binding,
+// silently producing "".)
+const LLAMA_VISION_RAW_MODELS = new Set([
+  '@cf/meta/llama-3.2-11b-vision-instruct'
+]);
+
 export class CloudflareProvider extends BaseProvider {
   name = 'cloudflare';
   models = [
@@ -134,13 +142,19 @@ export class CloudflareProvider extends BaseProvider {
     try {
       const response = await this.executeWithResiliency(async () => {
         const model = request.model || this.getRecommendedModel(request);
-        const cloudflareRequest = this.formatRequest(request, model);
 
-        // Validate model is supported
         if (!this.models.includes(model)) {
           throw new ModelNotFoundError('cloudflare', model);
         }
 
+        // llama-3.2-11b vision requires the raw Workers AI binding format.
+        // The chat/image_url path returns null content via the binding.
+        if (LLAMA_VISION_RAW_MODELS.has(model) && (request.images?.length ?? 0) > 0) {
+          const result = await this.runLlamaVisionRaw(request, model);
+          return this.formatResponse(result as WorkersAIResult, model, request, Date.now() - startTime);
+        }
+
+        const cloudflareRequest = this.formatRequest(request, model);
         // Workers AI binding uses branded model names; cast at API boundary
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
         const result = await (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(model, cloudflareRequest);
@@ -356,6 +370,54 @@ export class CloudflareProvider extends BaseProvider {
         description: 'Llama 3.2 11B Vision — image understanding'
       }
     };
+  }
+
+  private async runLlamaVisionRaw(request: LLMRequest, model: string): Promise<WorkersAIResult> {
+    if (request.images!.length > 1) {
+      throw new ConfigurationError(
+        this.name,
+        `${model} supports exactly one image via the raw binding format — ${request.images!.length} were provided.`
+      );
+    }
+
+    const image = request.images![0];
+
+    let imageBytes: number[];
+    if (image.data) {
+      imageBytes = Array.from(Uint8Array.from(atob(image.data), c => c.charCodeAt(0)));
+    } else if (image.url?.startsWith('data:')) {
+      const b64 = image.url.split(',')[1] ?? '';
+      imageBytes = Array.from(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+    } else {
+      throw new ConfigurationError(
+        this.name,
+        `${model} requires base64 image data or a data: URL — HTTP URLs are not supported.`
+      );
+    }
+
+    const systemPrefix = request.systemPrompt ? `${request.systemPrompt}\n\n` : '';
+    let lastUserText = '';
+    for (let i = request.messages.length - 1; i >= 0; i--) {
+      if (request.messages[i].role === 'user') {
+        const raw = request.messages[i].content;
+        lastUserText = typeof raw === 'string'
+          ? raw
+          : Array.isArray(raw)
+            ? (raw as Array<{ type?: string; text?: string }>)
+                .filter(p => p.type === 'text')
+                .map(p => p.text ?? '')
+                .join(' ')
+            : '';
+        break;
+      }
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
+    return (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(model, {
+      image: imageBytes,
+      prompt: `${systemPrefix}${lastUserText}`,
+      max_tokens: request.maxTokens ?? 512
+    }) as Promise<WorkersAIResult>;
   }
 
   private formatRequest(request: LLMRequest, model: string): CloudflareRequest {

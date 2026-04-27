@@ -348,10 +348,88 @@ describe('CloudflareProvider', () => {
       expect(content.filter((p: { type: string }) => p.type === 'image_url')).toHaveLength(2);
     });
 
-    it('accepts pre-formed data: URLs via image.url', async () => {
-      mockAiRun.mockResolvedValueOnce({
-        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }]
+    it('uses raw binding format for llama-3.2-11b-vision-instruct (fixes silent empty response)', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'A delicious pasta dish.' });
+
+      const result = await provider.generateResponse({
+        model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        messages: [{ role: 'user', content: 'Describe this food image.' }],
+        images: [{ data: 'QUJD', mimeType: 'image/jpeg' }],
+        maxTokens: 512
       });
+
+      const [modelArg, body] = mockAiRun.mock.calls[0];
+      expect(modelArg).toBe('@cf/meta/llama-3.2-11b-vision-instruct');
+      expect(Array.isArray(body.image)).toBe(true);
+      expect(body.image).toHaveLength(3); // QUJD = 3 bytes: [65, 66, 67]
+      expect(body.prompt).toBe('Describe this food image.');
+      expect(body.max_tokens).toBe(512);
+      expect(body.messages).toBeUndefined();
+      expect(result.content).toBe('A delicious pasta dish.');
+      expect(result.message).toBe('A delicious pasta dish.');
+    });
+
+    it('prepends system prompt to raw binding prompt for llama-3.2', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Pasta.' });
+
+      await provider.generateResponse({
+        model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        messages: [{ role: 'user', content: 'What is this?' }],
+        images: [{ data: 'QUJD', mimeType: 'image/jpeg' }],
+        systemPrompt: 'You are a food critic.',
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.prompt).toBe('You are a food critic.\n\nWhat is this?');
+    });
+
+    it('rejects multiple images on llama-3.2 raw binding with a clear error', async () => {
+      await expect(
+        provider.generateResponse({
+          model: '@cf/meta/llama-3.2-11b-vision-instruct',
+          messages: [{ role: 'user', content: 'compare' }],
+          images: [
+            { data: 'QUJD', mimeType: 'image/jpeg' },
+            { data: 'REVG', mimeType: 'image/jpeg' }
+          ]
+        })
+      ).rejects.toThrow(/supports exactly one image/);
+    });
+
+    it('extracts text from array-content user message for llama-3.2 raw binding', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Spaghetti.' });
+
+      await provider.generateResponse({
+        model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What food is this?' },
+            { type: 'text', text: 'Be brief.' }
+          ] as unknown as string
+        }],
+        images: [{ data: 'QUJD', mimeType: 'image/jpeg' }]
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.prompt).toBe('What food is this? Be brief.');
+    });
+
+    it('defaults max_tokens to 512 when not specified for llama-3.2 raw binding', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'ok' });
+
+      await provider.generateResponse({
+        model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        messages: [{ role: 'user', content: 'x' }],
+        images: [{ data: 'QUJD', mimeType: 'image/jpeg' }]
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.max_tokens).toBe(512);
+    });
+
+    it('accepts pre-formed data: URL for llama-3.2 raw binding', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'ok' });
 
       await provider.generateResponse({
         model: '@cf/meta/llama-3.2-11b-vision-instruct',
@@ -360,8 +438,27 @@ describe('CloudflareProvider', () => {
       });
 
       const [, body] = mockAiRun.mock.calls[0];
-      const imagePart = body.messages[0].content[1];
-      expect(imagePart.image_url.url).toBe('data:image/webp;base64,ZEFUQQ==');
+      expect(Array.isArray(body.image)).toBe(true);
+      expect(body.messages).toBeUndefined();
+    });
+
+    it('other vision models (gemma-4, llama-4-scout) still use chat/image_url format', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        choices: [{ message: { content: 'A tomato.' }, finish_reason: 'stop' }]
+      });
+
+      await provider.generateResponse({
+        model: '@cf/google/gemma-4-26b-a4b-it',
+        messages: [{ role: 'user', content: 'What is in this image?' }],
+        images: [{ data: 'QUJD', mimeType: 'image/png' }],
+        maxTokens: 256
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.messages).toBeDefined();
+      expect(body.image).toBeUndefined();
+      const imagePart = body.messages[body.messages.length - 1].content[1];
+      expect(imagePart.image_url.url).toBe('data:image/png;base64,QUJD');
     });
 
     it('rejects HTTP image URLs (requires base64 bytes)', async () => {
