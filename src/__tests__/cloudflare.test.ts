@@ -83,11 +83,13 @@ describe('CloudflareProvider', () => {
       expect(() => new CloudflareProvider({})).toThrow('Cloudflare AI binding is required');
     });
 
-    it('should recommend modern active models instead of legacy tiny defaults', () => {
+    it('should recommend a BALANCED catalog model over tiny legacy defaults', () => {
+      // Gemma is no longer in the BALANCED use-case list (issue #57), so the top
+      // cloudflare-only BALANCED pick is mistral-7b (has BALANCED + higher score).
       expect(provider.getRecommendedModel({
         messages: [{ role: 'user', content: 'Hello' }],
         maxTokens: 200
-      })).toBe('@cf/google/gemma-4-26b-a4b-it');
+      })).toBe('@cf/mistral/mistral-7b-instruct-v0.1');
 
       expect(provider.getRecommendedModel({
         messages: [{ role: 'user', content: 'Use the weather tool' }],

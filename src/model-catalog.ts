@@ -331,7 +331,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.0000001,
     description: 'Workers AI Qwen 1.5 7B'
   }, { speed: 4, quality: 2, cost: 4 }),
-  entry('cloudflare', '@cf/google/gemma-4-26b-a4b-it', 'active', ['BALANCED', 'COST_EFFECTIVE', 'VISION', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+  entry('cloudflare', '@cf/google/gemma-4-26b-a4b-it', 'active', ['COST_EFFECTIVE', 'VISION', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 256000,
     supportsStreaming: true,
     supportsTools: true,

@@ -10,6 +10,7 @@ export type {
   LLMImageInput,
   GatewayMetadata,
   CacheHints,
+  ResponseCacheAdapter,
   LLMRequest,
   LLMResponse,
   LLMMessage,

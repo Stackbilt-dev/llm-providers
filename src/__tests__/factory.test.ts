@@ -865,6 +865,95 @@ describe('Cost Optimized Factory', () => {
   });
 });
 
+describe('Response Cache Adapter', () => {
+  const cacheRequest: LLMRequest = {
+    messages: [{ role: 'user', content: 'What is 2+2?' }],
+    maxTokens: 50,
+    temperature: 0,
+  };
+
+  it('returns a cached response without calling the provider', async () => {
+    const cachedResponse = {
+      message: 'cached answer',
+      usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10, cost: 0 },
+      model: 'gpt-3.5-turbo',
+      provider: 'openai',
+      responseTime: 1,
+    };
+
+    const cache = {
+      get: vi.fn().mockResolvedValue(JSON.stringify(cachedResponse)),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const cachedFactory = new LLMProviderFactory({
+      openai: { apiKey: 'test-key' },
+      responseCache: cache,
+    });
+
+    const response = await cachedFactory.generateResponse(cacheRequest);
+    expect(response.message).toBe('cached answer');
+    expect(mockOpenAIProvider.generateResponse).not.toHaveBeenCalled();
+  });
+
+  it('calls the provider on cache miss and writes the response', async () => {
+    const cache = {
+      get: vi.fn().mockResolvedValue(null),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const cachedFactory = new LLMProviderFactory({
+      openai: { apiKey: 'test-key' },
+      responseCache: cache,
+      responseCacheDefaultTtl: 3600,
+    });
+
+    mockOpenAIProvider.generateResponse.mockReset().mockResolvedValue({
+      message: 'fresh answer',
+      usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10, cost: 0.001 },
+      model: 'gpt-3.5-turbo',
+      provider: 'openai',
+      responseTime: 100,
+    } as LLMResponse);
+
+    const response = await cachedFactory.generateResponse(cacheRequest);
+    expect(response.message).toBe('fresh answer');
+    expect(cache.get).toHaveBeenCalledOnce();
+    // put is called async (fire-and-forget), so wait a tick
+    await new Promise(r => setTimeout(r, 0));
+    expect(cache.put).toHaveBeenCalledOnce();
+    expect(cache.put).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('fresh answer'),
+      3600,
+    );
+  });
+
+  it('proceeds normally when cache.get throws', async () => {
+    const cache = {
+      get: vi.fn().mockRejectedValue(new Error('KV unavailable')),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const cachedFactory = new LLMProviderFactory({
+      openai: { apiKey: 'test-key' },
+      responseCache: cache,
+    });
+
+    mockOpenAIProvider.generateResponse.mockReset().mockResolvedValue({
+      message: 'fallback answer',
+      usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10, cost: 0.001 },
+      model: 'gpt-3.5-turbo',
+      provider: 'openai',
+      responseTime: 100,
+    } as LLMResponse);
+
+    const response = await cachedFactory.generateResponse(cacheRequest);
+    expect(response.message).toBe('fallback answer');
+    expect(mockOpenAIProvider.generateResponse).toHaveBeenCalled();
+  });
+});
+
 // Custom matcher for vitest
 expect.extend({
   toBeOneOf(received: any, expected: any[]) {

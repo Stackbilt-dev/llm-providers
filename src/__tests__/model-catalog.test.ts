@@ -62,6 +62,16 @@ describe('model catalog', () => {
     expect(recommended).toBe('gpt-4o-mini');
   });
 
+  it('does not select Workers AI Gemma for BALANCED when Cerebras is configured', () => {
+    const withCerebras = getRecommendedModel('BALANCED', ['cerebras', 'cloudflare']);
+    expect(withCerebras).not.toBe('@cf/google/gemma-4-26b-a4b-it');
+  });
+
+  it('does not select Workers AI Gemma for BALANCED when Groq is configured', () => {
+    const withGroq = getRecommendedModel('BALANCED', ['groq', 'cloudflare']);
+    expect(withGroq).not.toBe('@cf/google/gemma-4-26b-a4b-it');
+  });
+
   it('uses provider health and burn-rate pressure when selecting a model', () => {
     const ledger = new CreditLedger({
       budgets: [

@@ -26,7 +26,8 @@ import type {
   QuotaRecordInput,
   ToolExecutor,
   ToolLoopOptions,
-  ToolLoopState
+  ToolLoopState,
+  ResponseCacheAdapter
 } from './types';
 
 import type { Logger } from './utils/logger';
@@ -82,6 +83,8 @@ export interface ProviderFactoryConfig {
   defaultVisionModel?: string;
   logger?: Logger;
   hooks?: ObservabilityHooks;
+  responseCache?: ResponseCacheAdapter;
+  responseCacheDefaultTtl?: number;
 }
 
 export interface CostAnalytics {
@@ -114,6 +117,15 @@ interface ProviderSelectionPlan {
   chain: string[];
   providerModels: Map<string, string>;
   useCase: ModelRecommendationUseCase;
+}
+
+function deriveResponseCacheKey(request: LLMRequest): string {
+  return JSON.stringify({
+    model: request.model ?? '',
+    messages: request.messages,
+    temperature: request.temperature ?? 1,
+    maxTokens: request.maxTokens ?? null,
+  });
 }
 
 export class LLMProviderFactory {
@@ -181,6 +193,18 @@ export class LLMProviderFactory {
    * Generate response with intelligent provider selection and fallback
    */
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+    if (this.config.responseCache) {
+      const cacheKey = deriveResponseCacheKey(request);
+      try {
+        const cached = await this.config.responseCache.get(cacheKey);
+        if (cached !== null) {
+          return JSON.parse(cached) as LLMResponse;
+        }
+      } catch (err) {
+        this.logger.warn('[LLMProviderFactory] Response cache get failed, proceeding without cache:', (err as Error).message);
+      }
+    }
+
     const selectionPlan = this.buildProviderPlan(request);
     const providerChain = selectionPlan.chain;
     const providerModels = selectionPlan.providerModels;
@@ -261,6 +285,18 @@ export class LLMProviderFactory {
         this.recordQuota(providerName, response, providerRequest);
 
         this.logger.debug(`[LLMProviderFactory] Successfully used provider: ${providerName}`);
+
+        if (this.config.responseCache) {
+          const cacheKey = deriveResponseCacheKey(request);
+          this.config.responseCache.put(
+            cacheKey,
+            JSON.stringify(response),
+            this.config.responseCacheDefaultTtl
+          ).catch((err: unknown) => {
+            this.logger.warn('[LLMProviderFactory] Response cache put failed:', (err as Error).message);
+          });
+        }
+
         return response;
 
       } catch (error) {

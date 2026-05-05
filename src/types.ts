@@ -35,6 +35,19 @@ export interface GatewayMetadata {
  * which control Cloudflare AI Gateway *response* caching. These hints control
  * provider-side prefix/prompt caching (Anthropic cache_control, Groq/Cerebras automatic, etc.).
  */
+/**
+ * Provider-agnostic response cache adapter for factory-level response deduplication.
+ * Distinct from CacheHints, which controls provider-side prefix/prompt caching.
+ * Works with any backing store (Cloudflare KV, Redis, in-memory map).
+ *
+ * Keys are derived from (model, messages, temperature, maxTokens). For KV stores
+ * with a 512-byte key limit, wrap this adapter to hash the key before forwarding.
+ */
+export interface ResponseCacheAdapter {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string, ttlSeconds?: number): Promise<void>;
+}
+
 export interface CacheHints {
   /** 'off' disables any provider cache opt-in. Default: let provider decide. */
   strategy?: 'off' | 'provider-prefix' | 'response' | 'both';
