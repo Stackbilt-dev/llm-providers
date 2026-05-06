@@ -400,6 +400,15 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.0012,
     description: 'Cerebras Qwen 3 235B MoE'
   }, { speed: 4, quality: 4, cost: 3 }),
+  entry('cerebras', 'openai/gpt-oss-120b', 'active', ['TOOL_CALLING', 'BALANCED', 'HIGH_PERFORMANCE'], {
+    maxContextLength: 128000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0.00015,
+    outputTokenCost: 0.0006,
+    description: 'Cerebras GPT-OSS 120B'
+  }, { speed: 5, quality: 4, cost: 4 }),
 
   entry('groq', 'llama-3.3-70b-versatile', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'BALANCED'], {
     maxContextLength: 128000,

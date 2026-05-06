@@ -113,6 +113,7 @@ interface CerebrasResponse {
 const TOOL_CAPABLE_MODELS = new Set([
   'zai-glm-4.7',
   'qwen-3-235b-a22b-instruct-2507',
+  'openai/gpt-oss-120b',
 ]);
 
 export class CerebrasProvider extends BaseProvider {
@@ -122,6 +123,7 @@ export class CerebrasProvider extends BaseProvider {
     'llama-3.3-70b',
     'zai-glm-4.7',
     'qwen-3-235b-a22b-instruct-2507',
+    'openai/gpt-oss-120b',
   ];
   supportsStreaming = true;
   supportsTools = true;

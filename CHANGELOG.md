@@ -3,6 +3,11 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] — 2026-05-06
+
+### Added
+- **Cerebras `openai/gpt-oss-120b`** — added to `CerebrasProvider.models`, `TOOL_CAPABLE_MODELS`, and the model catalog with `HIGH_PERFORMANCE | TOOL_CALLING | BALANCED` tiers, 128k context, and tool support
+
 ## [1.6.0] — 2026-04-27
 
 ### Added
