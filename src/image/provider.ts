@@ -7,11 +7,19 @@
  *   - Google Gemini (Flash Image, Flash Image Preview)
  *
  * Extracted from img-forge production codebase. Battle-tested.
+ *
+ * @deprecated Use the img-forge service or the img-forge MCP tools instead.
+ * ImageProvider is a frozen snapshot of img-forge's internals and will not
+ * track new models or providers. For image generation from within a Worker,
+ * call the img-forge gateway via fetch or the GATEWAY service binding.
  */
 
 import type { ImageRequest, ImageResponse, ImageModelConfig } from './types.js';
 import { IMAGE_MODELS, getImageModel } from './types.js';
 
+/**
+ * @deprecated Use img-forge instead. See ImageProvider deprecation notice.
+ */
 export interface ImageProviderConfig {
   /** Cloudflare Workers AI binding (env.AI) */
   cloudflareAi?: unknown;
@@ -23,6 +31,12 @@ export interface ImageProviderConfig {
   models?: Record<string, ImageModelConfig>;
 }
 
+/**
+ * @deprecated Use the img-forge service or the img-forge MCP tools instead.
+ * ImageProvider is a frozen snapshot of img-forge's internals and will not
+ * track new models or providers. For image generation from within a Worker,
+ * call the img-forge gateway via fetch or the GATEWAY service binding.
+ */
 export class ImageProvider {
   private cloudflareAi: unknown;
   private geminiApiKey: string | null;

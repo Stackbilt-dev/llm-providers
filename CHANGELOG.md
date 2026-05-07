@@ -3,6 +3,11 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.6.2] — 2026-05-07
+
+### Deprecated
+- **`ImageProvider`, `ImageProviderConfig`, `IMAGE_MODELS`** — marked `@deprecated`. img-forge is the org's canonical image generation service; `ImageProvider` is a frozen snapshot of img-forge internals and will not track new models or providers. Use the img-forge API or MCP tools for image generation. Exports are retained for backward compatibility and will be removed in the next major version. `normalizeAiResponse` is not yet deprecated (under audit).
+
 ## [1.6.1] — 2026-05-06
 
 ### Added
