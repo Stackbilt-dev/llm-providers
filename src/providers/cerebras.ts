@@ -113,6 +113,7 @@ interface CerebrasResponse {
 const TOOL_CAPABLE_MODELS = new Set([
   'zai-glm-4.7',
   'qwen-3-235b-a22b-instruct-2507',
+  'openai/gpt-oss-120b',
 ]);
 
 export class CerebrasProvider extends BaseProvider {
@@ -122,6 +123,7 @@ export class CerebrasProvider extends BaseProvider {
     'llama-3.3-70b',
     'zai-glm-4.7',
     'qwen-3-235b-a22b-instruct-2507',
+    'openai/gpt-oss-120b',
   ];
   supportsStreaming = true;
   supportsTools = true;
@@ -240,6 +242,15 @@ export class CerebrasProvider extends BaseProvider {
         inputTokenCost: 0.0006, // $0.60 per 1M tokens
         outputTokenCost: 0.0012, // $1.20 per 1M tokens
         description: 'Qwen 3 235B MoE (22B active) - Tool calling, structured outputs (Preview)'
+      },
+      'openai/gpt-oss-120b': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.00015, // $0.15 per 1M tokens (placeholder — update once Cerebras publishes official pricing)
+        outputTokenCost: 0.0006, // $0.60 per 1M tokens (placeholder — mirrored from Groq)
+        description: 'GPT-OSS 120B on Cerebras'
       }
     };
   }

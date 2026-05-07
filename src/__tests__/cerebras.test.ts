@@ -71,7 +71,7 @@ describe('CerebrasProvider', () => {
   describe('getModels', () => {
     it('should return available models', () => {
       const models = provider.getModels();
-      expect(models).toEqual(['llama-3.1-8b', 'llama-3.3-70b', 'zai-glm-4.7', 'qwen-3-235b-a22b-instruct-2507']);
+      expect(models).toEqual(['llama-3.1-8b', 'llama-3.3-70b', 'zai-glm-4.7', 'qwen-3-235b-a22b-instruct-2507', 'openai/gpt-oss-120b']);
     });
 
     it('should return a copy of the models array', () => {
