@@ -44,6 +44,8 @@ export interface ImageResponse {
 /**
  * Built-in image model registry.
  * Quality tiers map to specific provider + model combinations.
+ *
+ * @deprecated Use img-forge instead. See ImageProvider deprecation notice.
  */
 export const IMAGE_MODELS: Record<string, ImageModelConfig> = {
   // Cloudflare Workers AI — fast, included in free tier

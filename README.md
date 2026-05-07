@@ -16,10 +16,16 @@ A multi-provider LLM abstraction layer with automatic failover, graduated circui
 - **Provider-agnostic cache hints** -- `LLMRequest.cache` translates to provider-native caching (Anthropic `cache_control` breakpoints; automatic on OpenAI/Groq/Cerebras); cached token counts normalized into `TokenUsage`
 - **Schema drift detection** -- envelope validation on every provider response; streaming frames validated per-chunk; `SchemaDriftError` routes through fallback chain and fires `onSchemaDrift` hook
 - **Schema canary** -- `runCanaryCheck` / `extractShape` / `compareShapes` for comparing live response shapes against committed golden fixtures
-- **Image generation** -- Cloudflare Workers AI (SDXL, FLUX) and Google Gemini
+- **Image generation** -- `ImageProvider` is deprecated; use [img-forge](https://github.com/Stackbilt-dev/img-forge) instead
 - **Health monitoring** -- per-provider health checks, metrics, and circuit breaker state
 - **Structured logging** -- injectable `Logger` interface; silent by default, opt-in to console or custom loggers
 - **Zero runtime dependencies** -- no transitive dependency tree to audit
+
+## Deprecated APIs
+
+**`ImageProvider` is deprecated.** It was extracted from img-forge during an earlier phase when llm-providers and img-forge were more tightly coupled. img-forge is now the dedicated imagegen service with a full quality-tier registry, async orchestration, and quota metering. Use the [img-forge API](https://github.com/Stackbilt-dev/img-forge) or MCP tools for image generation. llm-providers handles text inference and vision understanding only.
+
+`ImageProvider`, `ImageProviderConfig`, and `IMAGE_MODELS` will be removed in the next major version. The `normalizeAiResponse` utility is under audit and may be retained as a standalone export.
 
 ## Installation
 
@@ -409,7 +415,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `CreditLedger` | Monthly budgets, rate limits, burn rate projection, threshold events |
 | `CostOptimizer` | Static methods for optimal provider selection |
 | `MODEL_CATALOG` | Declarative model metadata for routing and recommendation |
-| `ImageProvider` | Multi-provider image generation (Cloudflare SDXL/FLUX, Google Gemini) |
+| `ImageProvider` | **[Deprecated]** Multi-provider image generation — use [img-forge](https://github.com/Stackbilt-dev/img-forge) instead |
 | `extractShape` | Walk a raw API response into a flat `path → type` shape map |
 | `compareShapes` | Diff two shape maps into `{ added, removed, changed }` |
 | `runCanaryCheck` | One-shot canary: extract live shape, compare against golden, return `CanaryReport` |
