@@ -318,8 +318,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0.0000008,
-        outputTokenCost: 0.0000008,
+        inputTokenCost: 0.00035,  // $0.35/MTok — matches workers-ai-chat.ts GPT_OSS_RATES
+        outputTokenCost: 0.00075, // $0.75/MTok
         description: 'GPT-OSS 120B - OpenAI-format tool calling on Workers AI'
       },
       '@cf/tinyllama/tinyllama-1.1b-chat-v1.0': {
