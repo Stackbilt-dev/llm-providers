@@ -69,6 +69,8 @@ interface CloudflareRequest {
   tool_choice?: LLMRequest['toolChoice'];
   /** LoRA adapter name or UUID (Workers AI fine-tune). Forwarded as-is to ai.run(). */
   lora?: string;
+  top_p?: number;
+  frequency_penalty?: number;
 }
 
 /** Workers AI returns various response shapes depending on the model. */
@@ -541,6 +543,14 @@ export class CloudflareProvider extends BaseProvider {
 
     if (request.lora !== undefined) {
       cloudflareRequest.lora = request.lora;
+    }
+
+    if (request.topP !== undefined) {
+      cloudflareRequest.top_p = request.topP;
+    }
+
+    if (request.frequencyPenalty !== undefined) {
+      cloudflareRequest.frequency_penalty = request.frequencyPenalty;
     }
 
     if (request.tools && request.tools.length > 0) {

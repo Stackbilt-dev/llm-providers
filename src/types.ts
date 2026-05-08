@@ -96,6 +96,10 @@ export interface LLMRequest {
    * it is forwarded as-is to the Workers AI binding.
    */
   lora?: string;
+  /** Nucleus sampling cutoff. Forwarded by the Cloudflare provider; ignored by others. */
+  topP?: number;
+  /** Penalizes repeated tokens. Forwarded by the Cloudflare provider; ignored by others. */
+  frequencyPenalty?: number;
   tenantId?: string;
   requestId?: string;
   metadata?: Record<string, unknown>;
