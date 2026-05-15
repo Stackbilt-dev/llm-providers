@@ -3,10 +3,10 @@
  * Routes traffic away from failing providers with confidence-weighted degradation.
  */
 
-import type { CircuitBreakerConfig, CircuitBreakerState } from '../types';
-import type { Logger } from './logger';
-import { noopLogger } from './logger';
-import { CircuitBreakerOpenError } from '../errors';
+import type { CircuitBreakerConfig, CircuitBreakerState } from '../types.js';
+import type { Logger } from './logger.js';
+import { noopLogger } from './logger.js';
+import { CircuitBreakerOpenError } from '../errors.js';
 
 const DEFAULT_DEGRADATION_CURVE = [1.0, 0.9, 0.7, 0.4, 0.1];
 

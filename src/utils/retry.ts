@@ -3,10 +3,10 @@
  * Exponential backoff retry logic for LLM provider requests
  */
 
-import type { RetryConfig } from '../types';
-import type { Logger } from './logger';
-import { noopLogger } from './logger';
-import { LLMErrorFactory, LLMProviderError } from '../errors';
+import type { RetryConfig } from '../types.js';
+import type { Logger } from './logger.js';
+import { noopLogger } from './logger.js';
+import { LLMErrorFactory, LLMProviderError } from '../errors.js';
 
 export class RetryManager {
   private config: RetryConfig;

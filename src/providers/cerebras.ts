@@ -3,16 +3,16 @@
  * Implementation for Cerebras fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities, ToolCall, TokenUsage } from '../types';
-import { BaseProvider } from './base';
+import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities, ToolCall, TokenUsage } from '../types.js';
+import { BaseProvider } from './base.js';
 import {
   LLMErrorFactory,
   AuthenticationError,
   ConfigurationError,
   SchemaDriftError
-} from '../errors';
-import { getProviderDefaultModel } from '../model-catalog';
-import { validateSchema, type SchemaField } from '../utils/schema-validator';
+} from '../errors.js';
+import { getProviderDefaultModel } from '../model-catalog.js';
+import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 
 // Cerebras serves the OpenAI /chat/completions contract. See groq.ts for the
 // rationale on keeping each OpenAI-compat provider's schema as its own

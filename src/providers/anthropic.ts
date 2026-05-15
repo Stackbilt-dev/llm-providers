@@ -12,17 +12,17 @@ import type {
   Tool,
   ToolCall,
   TokenUsage
-} from '../types';
-import { BaseProvider } from './base';
+} from '../types.js';
+import { BaseProvider } from './base.js';
 import {
   LLMErrorFactory,
   AuthenticationError,
   ModelNotFoundError,
   RateLimitError,
   SchemaDriftError
-} from '../errors';
-import { getProviderDefaultModel } from '../model-catalog';
-import { validateSchema, type SchemaField } from '../utils/schema-validator';
+} from '../errors.js';
+import { getProviderDefaultModel } from '../model-catalog.js';
+import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 
 /**
  * Minimum envelope fields the Anthropic response parser reads. Changing this

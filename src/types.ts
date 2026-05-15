@@ -3,8 +3,8 @@
  * Unified types for all LLM providers with v2 architecture support
  */
 
-import type { Logger } from './utils/logger';
-import type { ObservabilityHooks } from './utils/hooks';
+import type { Logger } from './utils/logger.js';
+import type { ObservabilityHooks } from './utils/hooks.js';
 export type { Logger, ObservabilityHooks };
 
 export interface LLMMessage {

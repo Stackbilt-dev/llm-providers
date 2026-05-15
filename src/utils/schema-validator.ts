@@ -24,7 +24,7 @@
  * another provider.
  */
 
-import { SchemaDriftError } from '../errors';
+import { SchemaDriftError } from '../errors.js';
 
 export type SchemaFieldType =
   | 'string'

@@ -3,16 +3,16 @@
  * Implementation for Groq fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage } from '../types';
-import { BaseProvider } from './base';
+import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage } from '../types.js';
+import { BaseProvider } from './base.js';
 import {
   LLMErrorFactory,
   AuthenticationError,
   ConfigurationError,
   SchemaDriftError
-} from '../errors';
-import { getProviderDefaultModel } from '../model-catalog';
-import { validateSchema, type SchemaField } from '../utils/schema-validator';
+} from '../errors.js';
+import { getProviderDefaultModel } from '../model-catalog.js';
+import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 
 // Groq serves the OpenAI /chat/completions contract — same envelope shape as
 // OpenAI. Kept as a separate constant (not imported from openai.ts) because

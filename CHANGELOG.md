@@ -3,6 +3,14 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.6.5] — 2026-05-15
+
+### Fixed
+- **Published package ESM import resolution** — runtime source imports now use explicit `.js` relative specifiers so Node ESM consumers can resolve package internals after install. This fixes `ERR_MODULE_NOT_FOUND` failures when importing `@stackbilt/llm-providers` from installed tarballs.
+
+### Added
+- **Tarball consumer smoke test in CI and publish gates** — new `npm run test:package` packs the module, installs it into a clean temp project, and verifies both `require('@stackbilt/llm-providers')` and `import` entrypoints. This prevents regressions where tests pass in-repo but the published artifact is not installable.
+
 ## [1.6.2] — 2026-05-07
 
 ### Deprecated

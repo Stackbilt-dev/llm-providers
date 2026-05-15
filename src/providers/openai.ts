@@ -3,17 +3,17 @@
  * Implementation for OpenAI GPT models with streaming and tools support
  */
 
-import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool, TokenUsage } from '../types';
-import { BaseProvider } from './base';
+import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool, TokenUsage } from '../types.js';
+import { BaseProvider } from './base.js';
 import {
   LLMErrorFactory,
   AuthenticationError,
   ModelNotFoundError,
   RateLimitError,
   SchemaDriftError
-} from '../errors';
-import { getProviderDefaultModel } from '../model-catalog';
-import { validateSchema, type SchemaField } from '../utils/schema-validator';
+} from '../errors.js';
+import { getProviderDefaultModel } from '../model-catalog.js';
+import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 
 // Minimum envelope `formatResponse` reads. `tool_calls` uses a discriminated
 // union (single `function` variant today) so an additive new tool type upstream

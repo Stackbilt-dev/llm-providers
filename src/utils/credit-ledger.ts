@@ -6,8 +6,8 @@
  * via snapshot()/restore() for any storage backend (D1, KV, R2, etc.).
  */
 
-import type { Logger } from './logger';
-import { noopLogger } from './logger';
+import type { Logger } from './logger.js';
+import { noopLogger } from './logger.js';
 
 // ─── Types ──────────────────────────────────────────────────
 

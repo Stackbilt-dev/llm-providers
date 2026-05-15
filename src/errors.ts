@@ -3,7 +3,7 @@
  * Structured error handling for all LLM providers
  */
 
-import type { LLMError } from './types';
+import type { LLMError } from './types.js';
 
 export class LLMProviderError extends Error implements LLMError {
   code: string;

@@ -12,14 +12,14 @@ import type {
   ModelCapabilities,
   ProviderMetrics,
   ToolCall
-} from '../types';
-import type { Logger } from '../utils/logger';
-import { noopLogger } from '../utils/logger';
-import { RetryManager } from '../utils/retry';
-import { CircuitBreaker, defaultCircuitBreakerManager } from '../utils/circuit-breaker';
-import { CostTracker } from '../utils/cost-tracker';
-import { defaultLatencyHistogram } from '../utils/latency-histogram';
-import { ConfigurationError, TimeoutError, InvalidRequestError } from '../errors';
+} from '../types.js';
+import type { Logger } from '../utils/logger.js';
+import { noopLogger } from '../utils/logger.js';
+import { RetryManager } from '../utils/retry.js';
+import { CircuitBreaker, defaultCircuitBreakerManager } from '../utils/circuit-breaker.js';
+import { CostTracker } from '../utils/cost-tracker.js';
+import { defaultLatencyHistogram } from '../utils/latency-histogram.js';
+import { ConfigurationError, TimeoutError, InvalidRequestError } from '../errors.js';
 
 export abstract class BaseProvider implements LLMProvider {
   abstract name: string;

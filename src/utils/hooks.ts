@@ -16,7 +16,7 @@ import type {
   QuotaCheckInput,
   QuotaCheckResult,
   TokenUsage
-} from '../types';
+} from '../types.js';
 
 // ── Event types ──────────────────────────────────────────────────────────
 

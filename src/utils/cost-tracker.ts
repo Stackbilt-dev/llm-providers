@@ -3,10 +3,10 @@
  * Tracks and optimizes LLM usage costs across providers
  */
 
-import type { LLMRequest, LLMResponse, CostConfig, ModelCapabilities } from '../types';
-import type { Logger } from './logger';
-import { noopLogger } from './logger';
-import type { CreditLedger } from './credit-ledger';
+import type { LLMRequest, LLMResponse, CostConfig, ModelCapabilities } from '../types.js';
+import type { Logger } from './logger.js';
+import { noopLogger } from './logger.js';
+import type { CreditLedger } from './credit-ledger.js';
 
 export interface ProviderCostEntry {
   totalCost: number;

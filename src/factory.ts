@@ -28,23 +28,23 @@ import type {
   ToolLoopOptions,
   ToolLoopState,
   ResponseCacheAdapter
-} from './types';
+} from './types.js';
 
-import type { Logger } from './utils/logger';
-import { noopLogger } from './utils/logger';
-import type { ObservabilityHooks } from './utils/hooks';
-import { noopHooks } from './utils/hooks';
-import { OpenAIProvider } from './providers/openai';
-import { AnthropicProvider } from './providers/anthropic';
-import { CloudflareProvider } from './providers/cloudflare';
-import { CerebrasProvider } from './providers/cerebras';
-import { GroqProvider } from './providers/groq';
-import { CostTracker, defaultCostTracker } from './utils/cost-tracker';
-import type { ProviderCostBreakdownEntry } from './utils/cost-tracker';
-import type { CreditLedger } from './utils/credit-ledger';
-import { defaultCircuitBreakerManager } from './utils/circuit-breaker';
-import { defaultExhaustionRegistry } from './utils/exhaustion';
-import { defaultLatencyHistogram } from './utils/latency-histogram';
+import type { Logger } from './utils/logger.js';
+import { noopLogger } from './utils/logger.js';
+import type { ObservabilityHooks } from './utils/hooks.js';
+import { noopHooks } from './utils/hooks.js';
+import { OpenAIProvider } from './providers/openai.js';
+import { AnthropicProvider } from './providers/anthropic.js';
+import { CloudflareProvider } from './providers/cloudflare.js';
+import { CerebrasProvider } from './providers/cerebras.js';
+import { GroqProvider } from './providers/groq.js';
+import { CostTracker, defaultCostTracker } from './utils/cost-tracker.js';
+import type { ProviderCostBreakdownEntry } from './utils/cost-tracker.js';
+import type { CreditLedger } from './utils/credit-ledger.js';
+import { defaultCircuitBreakerManager } from './utils/circuit-breaker.js';
+import { defaultExhaustionRegistry } from './utils/exhaustion.js';
+import { defaultLatencyHistogram } from './utils/latency-histogram.js';
 import {
   PROVIDER_FALLBACK_ORDER,
   getProviderDefaultModel,
@@ -52,7 +52,7 @@ import {
   inferUseCaseFromRequest,
   rankModels,
   type ModelRecommendationUseCase,
-} from './model-catalog';
+} from './model-catalog.js';
 import {
   LLMProviderError,
   ConfigurationError,
@@ -63,7 +63,7 @@ import {
   SchemaDriftError,
   ToolLoopAbortedError,
   ToolLoopLimitError,
-} from './errors';
+} from './errors.js';
 
 export interface ProviderFactoryConfig {
   openai?: OpenAIConfig;

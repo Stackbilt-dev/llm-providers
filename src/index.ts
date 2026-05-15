@@ -51,23 +51,23 @@ export type {
   BatchRequest,
   BatchResponse,
   BatchJob
-} from './types';
+} from './types.js';
 
 // Provider implementations
-export { BaseProvider } from './providers/base';
-export { OpenAIProvider } from './providers/openai';
-export { AnthropicProvider } from './providers/anthropic';
-export { CloudflareProvider } from './providers/cloudflare';
-export { CerebrasProvider } from './providers/cerebras';
-export { GroqProvider } from './providers/groq';
+export { BaseProvider } from './providers/base.js';
+export { OpenAIProvider } from './providers/openai.js';
+export { AnthropicProvider } from './providers/anthropic.js';
+export { CloudflareProvider } from './providers/cloudflare.js';
+export { CerebrasProvider } from './providers/cerebras.js';
+export { GroqProvider } from './providers/groq.js';
 
 // Factory pattern
 export {
   LLMProviderFactory,
   createLLMProviderFactory,
   createCostOptimizedFactory
-} from './factory';
-export type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from './factory';
+} from './factory.js';
+export type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from './factory.js';
 export {
   MODEL_CATALOG,
   MODEL_RECOMMENDATIONS,
@@ -78,18 +78,18 @@ export {
   getRecommendedModel,
   inferUseCaseFromRequest,
   rankModels,
-} from './model-catalog';
+} from './model-catalog.js';
 export type {
   ModelCatalogEntry,
   ModelLifecycle,
   ModelRecommendationUseCase,
   ModelSelectionContext,
   ProviderName,
-} from './model-catalog';
+} from './model-catalog.js';
 
 // Local imports for use within this file
-import { LLMProviderFactory } from './factory';
-import type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from './factory';
+import { LLMProviderFactory } from './factory.js';
+import type { ProviderFactoryConfig, CostAnalytics, ProviderHealthEntry } from './factory.js';
 import type {
   AnalyzeImageInput,
   ClassifyOptions,
@@ -100,9 +100,9 @@ import type {
   ProviderBalance,
   ToolExecutor,
   ToolLoopOptions
-} from './types';
-import type { ModelRecommendationUseCase } from './model-catalog';
-import { ConfigurationError } from './errors';
+} from './types.js';
+import type { ModelRecommendationUseCase } from './model-catalog.js';
+import { ConfigurationError } from './errors.js';
 
 // Error classes
 export {
@@ -123,27 +123,27 @@ export {
   ToolLoopLimitError,
   ToolLoopAbortedError,
   LLMErrorFactory
-} from './errors';
+} from './errors.js';
 
 // Schema validator (for custom provider authors)
-export { validateSchema } from './utils/schema-validator';
-export type { SchemaField, SchemaFieldType } from './utils/schema-validator';
+export { validateSchema } from './utils/schema-validator.js';
+export type { SchemaField, SchemaFieldType } from './utils/schema-validator.js';
 
 // Schema drift canary (for integration test suites and cron canaries)
-export { extractShape, compareShapes, runCanaryCheck } from './utils/schema-canary';
-export type { ShapeMap, CanaryDiff, CanaryReport } from './utils/schema-canary';
+export { extractShape, compareShapes, runCanaryCheck } from './utils/schema-canary.js';
+export type { ShapeMap, CanaryDiff, CanaryReport } from './utils/schema-canary.js';
 
 // Image generation
-export { ImageProvider, normalizeAiResponse } from './image/index';
-export type { ImageProviderConfig, ImageRequest, ImageResponse, ImageModelConfig, ImageModelInputFormat } from './image/index';
-export { IMAGE_MODELS, getImageModel } from './image/index';
+export { ImageProvider, normalizeAiResponse } from './image/index.js';
+export type { ImageProviderConfig, ImageRequest, ImageResponse, ImageModelConfig, ImageModelInputFormat } from './image/index.js';
+export { IMAGE_MODELS, getImageModel } from './image/index.js';
 
 // Logger
-export { noopLogger, consoleLogger } from './utils/logger';
-export type { Logger } from './utils/logger';
+export { noopLogger, consoleLogger } from './utils/logger.js';
+export type { Logger } from './utils/logger.js';
 
 // Observability hooks
-export { noopHooks, composeHooks } from './utils/hooks';
+export { noopHooks, composeHooks } from './utils/hooks.js';
 export type {
   ObservabilityHooks,
   RequestStartEvent,
@@ -158,33 +158,33 @@ export type {
   QuotaDeniedEvent,
   ProviderBalanceEvent,
   SchemaDriftEvent,
-} from './utils/hooks';
+} from './utils/hooks.js';
 
 // Exhaustion registry
-export { ExhaustionRegistry, defaultExhaustionRegistry } from './utils/exhaustion';
-export type { ExhaustionEntry } from './utils/exhaustion';
+export { ExhaustionRegistry, defaultExhaustionRegistry } from './utils/exhaustion.js';
+export type { ExhaustionEntry } from './utils/exhaustion.js';
 
 // Latency histogram
-export { LatencyHistogram, defaultLatencyHistogram } from './utils/latency-histogram';
-export type { LatencySummary } from './utils/latency-histogram';
+export { LatencyHistogram, defaultLatencyHistogram } from './utils/latency-histogram.js';
+export type { LatencySummary } from './utils/latency-histogram.js';
 
 // Utility classes
-export { RetryManager, defaultRetryManager, withRetry, retry } from './utils/retry';
+export { RetryManager, defaultRetryManager, withRetry, retry } from './utils/retry.js';
 export {
   CircuitBreaker,
   CircuitBreakerManager,
   defaultCircuitBreakerManager
-} from './utils/circuit-breaker';
+} from './utils/circuit-breaker.js';
 export {
   CostTracker,
   CostOptimizer,
   defaultCostTracker
-} from './utils/cost-tracker';
+} from './utils/cost-tracker.js';
 export type {
   ProviderCostEntry,
   ProviderCostBreakdownEntry
-} from './utils/cost-tracker';
-export { CreditLedger } from './utils/credit-ledger';
+} from './utils/cost-tracker.js';
+export { CreditLedger } from './utils/credit-ledger.js';
 export type {
   CreditLedgerSnapshot,
   LedgerEvent,
@@ -203,7 +203,7 @@ export type {
   BurnRate,
   DepletionEstimate,
   SpendSummary,
-} from './utils/credit-ledger';
+} from './utils/credit-ledger.js';
 
 /**
  * Overrides for `LLMProviders.fromEnv()` auto-discovery.

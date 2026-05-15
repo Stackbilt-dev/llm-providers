@@ -11,14 +11,14 @@ import type {
   ModelCapabilities,
   TokenUsage,
   ToolCall
-} from '../types';
-import { BaseProvider } from './base';
+} from '../types.js';
+import { BaseProvider } from './base.js';
 import {
   ConfigurationError,
   ModelNotFoundError
-} from '../errors';
-import { getProviderDefaultModel } from '../model-catalog';
-import { validateSchema, type SchemaField } from '../utils/schema-validator';
+} from '../errors.js';
+import { getProviderDefaultModel } from '../model-catalog.js';
+import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 
 /**
  * Minimum structural fields the Cloudflare Workers AI parser reads.

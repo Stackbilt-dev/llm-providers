@@ -1,5 +1,5 @@
-import type { CreditLedger } from './utils/credit-ledger';
-import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types';
+import type { CreditLedger } from './utils/credit-ledger.js';
+import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
 
 export type ProviderName = 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq';
 export type ModelLifecycle = 'active' | 'compatibility' | 'retired';
