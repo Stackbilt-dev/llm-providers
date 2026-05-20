@@ -1,0 +1,8 @@
+{
+  "drift": {
+    "enabled": true,
+    "include": [
+      ".github/workflows/*.yml"
+    ]
+  }
+}
