@@ -12,6 +12,7 @@ jobs:
     with:
       node-version: '22'
       package-manager: 'npm'
+    secrets: inherit
 
   dep-review:
     if: github.event_name == 'pull_request'
