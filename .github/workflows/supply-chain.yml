@@ -8,7 +8,7 @@ on:
 
 jobs:
   sbom:
-    uses: Stackbilt-dev/stackbilt_llc/.github/workflows/supply-chain-sbom.yml@c87defbe10de10c7d53653338d330bcd48d41746
+    uses: Stackbilt-dev/stackbilt_llc/.github/workflows/supply-chain-sbom.yml@fe2f8dc7de1e0404dee1634d47c6e54a9b46c020
     with:
       node-version: '22'
       package-manager: 'npm'
@@ -16,4 +16,4 @@ jobs:
 
   dep-review:
     if: github.event_name == 'pull_request'
-    uses: Stackbilt-dev/stackbilt_llc/.github/workflows/supply-chain-dep-review.yml@c87defbe10de10c7d53653338d330bcd48d41746
+    uses: Stackbilt-dev/stackbilt_llc/.github/workflows/supply-chain-dep-review.yml@fe2f8dc7de1e0404dee1634d47c6e54a9b46c020
