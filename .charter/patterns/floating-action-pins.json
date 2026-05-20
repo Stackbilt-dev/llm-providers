@@ -1,0 +1,10 @@
+{
+  "id": "floating-action-pins",
+  "name": "Floating Action Pins",
+  "category": "SECURITY",
+  "status": "ACTIVE",
+  "anti_patterns": "uses: (?!Stackbilt-dev/)(?!\\./)[^@]+@v[\\d]",
+  "blessed_solution": "Pin to full commit SHA with a # vX.Y.Z comment: uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4",
+  "rationale": "Tag-based action pins are mutable — a supply chain attacker can move the tag to a malicious commit. SHA pins are immutable.",
+  "created_at": "2026-05-20T00:00:00.000Z"
+}
