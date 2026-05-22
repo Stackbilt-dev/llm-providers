@@ -374,10 +374,22 @@ export interface ToolLoopState {
   lastToolCalls: ToolCall[];
 }
 
+export interface ToolLoopAbortSignal {
+  abort: true;
+  reason?: string;
+}
+
 export interface ToolLoopOptions {
   maxIterations?: number;
   maxCostUSD?: number;
-  onIteration?: (iteration: number, state: ToolLoopState) => void | Promise<void>;
+  /**
+   * Called after each iteration. Return `{ abort: true, reason? }` to stop the
+   * loop immediately and throw `ToolLoopAbortedError`; return void to continue.
+   */
+  onIteration?: (
+    iteration: number,
+    state: ToolLoopState
+  ) => void | ToolLoopAbortSignal | Promise<void | ToolLoopAbortSignal>;
   abortSignal?: AbortSignal;
 }
 

@@ -49,6 +49,7 @@ import { defaultExhaustionRegistry } from './utils/exhaustion.js';
 import { defaultLatencyHistogram } from './utils/latency-histogram.js';
 import {
   PROVIDER_FALLBACK_ORDER,
+  getCatalogEntry,
   getProviderDefaultModel,
   getProviderForCatalogModel,
   inferUseCaseFromRequest,
@@ -268,7 +269,7 @@ export class LLMProviderFactory {
         });
 
         const startTime = Date.now();
-        const response = await provider.generateResponse(providerRequest);
+        let response = await provider.generateResponse(providerRequest);
         const durationMs = Date.now() - startTime;
 
         this.hooks.onRequestEnd?.({
@@ -289,6 +290,16 @@ export class LLMProviderFactory {
         this.recordQuota(providerName, response, providerRequest);
 
         this.logger.debug(`[LLMProviderFactory] Successfully used provider: ${providerName}`);
+
+        const catalogEntry = getCatalogEntry(response.model);
+        if (catalogEntry && catalogEntry.lifecycle !== 'active') {
+          const desc = catalogEntry.capabilities.description;
+          const dateMatch = desc.match(/deprecated\s+([\d]{4}-[\d]{2}-[\d]{2})/i);
+          const warning = dateMatch
+            ? `${response.model} deprecates ${dateMatch[1]} — plan migration`
+            : `${response.model} lifecycle is '${catalogEntry.lifecycle}' — prefer active models for new deployments`;
+          response = { ...response, metadata: { ...response.metadata, llmProvidersDeprecationWarning: warning } };
+        }
 
         if (this.config.responseCache) {
           const cacheKey = deriveResponseCacheKey(request);
@@ -562,7 +573,13 @@ export class LLMProviderFactory {
         messageCount: messages.length,
         lastToolCalls: response.toolCalls
       };
-      await opts.onIteration?.(iteration + 1, state);
+      const iterSignal = await opts.onIteration?.(iteration + 1, state);
+      if (iterSignal && typeof iterSignal === 'object' && iterSignal.abort) {
+        throw new ToolLoopAbortedError(
+          'factory',
+          iterSignal.reason ?? 'aborted by onIteration callback'
+        );
+      }
     }
 
     throw new ToolLoopLimitError('factory', `Tool loop exceeded ${maxIterations} iterations`);

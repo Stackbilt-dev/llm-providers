@@ -42,6 +42,7 @@ export type {
   QuotaCheckResult,
   QuotaRecordInput,
   ToolExecutor,
+  ToolLoopAbortSignal,
   ToolLoopOptions,
   ToolLoopState,
   ClassifyOptions,
@@ -78,6 +79,7 @@ export {
   getProviderDefaultModel,
   getProviderForCatalogModel,
   getRecommendedModel,
+  getRoutingInfo,
   inferUseCaseFromRequest,
   rankModels,
 } from './model-catalog.js';
@@ -87,6 +89,7 @@ export type {
   ModelRecommendationUseCase,
   ModelSelectionContext,
   ProviderName,
+  RoutingInfo,
 } from './model-catalog.js';
 
 // Local imports for use within this file
@@ -448,7 +451,7 @@ export default LLMProviders;
 /**
  * Version and metadata
  */
-export const VERSION = '0.1.0';
+export const VERSION = '1.8.0';
 export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebras', 'groq', 'nvidia'] as const;
 
 /**

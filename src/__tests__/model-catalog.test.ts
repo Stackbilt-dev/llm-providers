@@ -3,7 +3,9 @@ import { CreditLedger } from '../utils/credit-ledger';
 import {
   MODEL_CATALOG,
   MODEL_RECOMMENDATIONS,
+  getCatalogEntry,
   getRecommendedModel,
+  getRoutingInfo,
   inferUseCaseFromRequest,
   type ModelRecommendationUseCase,
 } from '../model-catalog';
@@ -119,5 +121,108 @@ describe('model catalog', () => {
     );
 
     expect(recommended).toBe('gpt-4o-mini');
+  });
+});
+
+describe('getRoutingInfo', () => {
+  it('infers TOOL_CALLING use case and flags requiresTools for requests with tools', () => {
+    const request: Partial<LLMRequest> = {
+      messages: [{ role: 'user', content: 'Call the bash tool.' }],
+      tools: [{
+        type: 'function',
+        function: { name: 'bash', description: 'Run bash', parameters: { type: 'object' } }
+      }],
+    };
+    const info = getRoutingInfo(request, ['groq', 'anthropic']);
+    expect(info.useCase).toBe('TOOL_CALLING');
+    expect(info.requiresTools).toBe(true);
+    expect(info.model).toBeTruthy();
+    expect(info.provider).toBeTruthy();
+  });
+
+  it('returns deprecation warning for a compatibility-lifecycle model', () => {
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4' },
+      ['openai']
+    );
+    expect(info.modelLifecycle).toBe('compatibility');
+    expect(info.deprecationWarning).toBeTruthy();
+  });
+
+  it('returns deprecation warning with date for models that carry a deprecation date in description', () => {
+    // Cerebras llama-3.1-8b is marked '(deprecated 2026-05-27)' in description
+    const entry = getCatalogEntry('llama-3.1-8b');
+    expect(entry).toBeDefined();
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content: 'hi' }], model: 'llama-3.1-8b' },
+      ['cerebras']
+    );
+    expect(info.deprecationWarning).toMatch(/2026-05-27/);
+  });
+
+  it('returns no deprecation warning for an active model', () => {
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content: 'hi' }] },
+      ['groq']
+    );
+    expect(info.modelLifecycle).toBe('active');
+    expect(info.deprecationWarning).toBeUndefined();
+  });
+
+  it('estimates input tokens from message + system prompt length', () => {
+    const content = 'x'.repeat(400); // 400 chars → ~100 tokens
+    const systemPrompt = 'y'.repeat(400); // another ~100
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content }], systemPrompt },
+      ['openai']
+    );
+    // 800 chars / 4 = 200 estimated tokens
+    expect(info.estimatedInputTokens).toBe(200);
+  });
+
+  it('respects a pinned model in the request rather than recommending', () => {
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4o-mini' },
+      ['anthropic', 'openai']
+    );
+    expect(info.model).toBe('gpt-4o-mini');
+    expect(info.provider).toBe('openai');
+  });
+
+  it('sets requestsStreaming when stream flag is true', () => {
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content: 'hi' }], stream: true },
+      ['groq']
+    );
+    expect(info.requestsStreaming).toBe(true);
+  });
+
+  it('infers VISION use case and flags requiresVision for image requests', () => {
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content: 'Describe this.' }], images: [{ url: 'https://example.com/img.png' }] },
+      ['openai', 'anthropic']
+    );
+    expect(info.useCase).toBe('VISION');
+    expect(info.requiresVision).toBe(true);
+    expect(info.catalogEntry?.capabilities.supportsVision).toBe(true);
+  });
+
+  it('infers LONG_CONTEXT for requests with many tokens', () => {
+    const content = 'word '.repeat(5000); // ~25 000 chars → infers LONG_CONTEXT
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content }] },
+      ['anthropic']
+    );
+    expect(info.useCase).toBe('LONG_CONTEXT');
+    expect(info.estimatedInputTokens).toBeGreaterThan(5000);
+  });
+
+  it('returns modelLifecycle unknown for an uncatalogued model', () => {
+    const info = getRoutingInfo(
+      { messages: [{ role: 'user', content: 'hi' }], model: 'custom-private-model' },
+      ['openai']
+    );
+    expect(info.modelLifecycle).toBe('unknown');
+    expect(info.deprecationWarning).toBeUndefined();
   });
 });

@@ -699,6 +699,130 @@ export function getProviderForCatalogModel(model: string): ProviderName | null {
   return entry?.provider ?? null;
 }
 
+/**
+ * Pre-flight routing snapshot for a request.
+ *
+ * Gateways and agent orchestrators call this BEFORE dispatching to understand
+ * what the catalog engine would do: which use-case tier the request falls into,
+ * which model/provider would be selected, estimated token load, and any
+ * lifecycle warnings on the target model. Pair with `metadata.useCase` on the
+ * `LLMRequest` to pass the gateway's classification directly into the factory's
+ * `resolveUseCase()` path so model selection stays catalog-driven at runtime.
+ */
+export interface RoutingInfo {
+  /** Use case inferred from the request's tools, vision, and message length */
+  useCase: ModelRecommendationUseCase;
+  /** Provider that would serve the request */
+  provider: ProviderName;
+  /** Model string that would be selected */
+  model: string;
+  /** Full catalog entry for the selected model, or undefined if not in catalog */
+  catalogEntry: ModelCatalogEntry | undefined;
+  /** Heuristic input token estimate (~4 chars/token for English text) */
+  estimatedInputTokens: number;
+  /** True if the request has tools attached or tool history in messages */
+  requiresTools: boolean;
+  /** True if the request has image inputs */
+  requiresVision: boolean;
+  /** True if request.stream is set */
+  requestsStreaming: boolean;
+  /** Catalog lifecycle of the target model */
+  modelLifecycle: ModelLifecycle | 'unknown';
+  /**
+   * Human-readable deprecation warning if the target model is not on active
+   * lifecycle, or if its catalog description contains a deprecation date.
+   * Undefined when the model is active with no known end-of-life date.
+   */
+  deprecationWarning: string | undefined;
+}
+
+function deprecationNotice(entry: ModelCatalogEntry): string | undefined {
+  if (entry.lifecycle === 'active') {
+    // Some active-lifecycle entries carry a near-term deprecation date in their
+    // description (e.g. "deprecated 2026-05-27"). Surface it as a warning.
+    const dateMatch = entry.capabilities.description.match(/deprecated\s+([\d]{4}-[\d]{2}-[\d]{2})/i);
+    return dateMatch ? `${entry.model} deprecates ${dateMatch[1]} — plan migration` : undefined;
+  }
+  const dateMatch = entry.capabilities.description.match(/deprecated\s+([\d]{4}-[\d]{2}-[\d]{2})/i);
+  if (dateMatch) return `${entry.model} deprecates ${dateMatch[1]} — plan migration`;
+  if (entry.lifecycle === 'retired') return `${entry.model} is retired — update your model configuration`;
+  return `${entry.model} is in compatibility mode — prefer an active model for new deployments`;
+}
+
+/**
+ * Return a routing snapshot for a request without dispatching it.
+ *
+ * @param request - The request to analyse (may be partial; model optional).
+ * @param availableProviders - Providers to consider. Defaults to the full
+ *   fallback order. Pass the list of actually-configured providers for an
+ *   accurate recommendation.
+ * @param context - Optional health and ledger context for ranking.
+ */
+export function getRoutingInfo(
+  request: Partial<LLMRequest>,
+  availableProviders: ProviderName[] = [...PROVIDER_FALLBACK_ORDER],
+  context: ModelSelectionContext = {}
+): RoutingInfo {
+  const requiresTools = usesTools(request);
+  const requiresVision = usesVision(request);
+  const requestsStreaming = request.stream === true;
+  const useCase = inferUseCaseFromRequest(request);
+
+  const charCount = totalMessageLength(request) + (request.systemPrompt?.length ?? 0);
+  const estimatedInputTokens = Math.max(1, Math.ceil(charCount / 4));
+
+  // When a specific model is pinned, report on that model rather than recommending.
+  if (request.model) {
+    const entry = getCatalogEntry(request.model);
+    const provider = (entry?.provider ??
+      getProviderForCatalogModel(request.model) ??
+      availableProviders[0]) as ProviderName;
+    return {
+      useCase,
+      provider,
+      model: request.model,
+      catalogEntry: entry,
+      estimatedInputTokens,
+      requiresTools,
+      requiresVision,
+      requestsStreaming,
+      modelLifecycle: entry?.lifecycle ?? 'unknown',
+      deprecationWarning: entry ? deprecationNotice(entry) : undefined,
+    };
+  }
+
+  const ranked = rankModels(useCase, availableProviders, { ...context, request });
+  const best = ranked[0];
+
+  if (!best) {
+    return {
+      useCase,
+      provider: availableProviders[0] ?? ('anthropic' as ProviderName),
+      model: '',
+      catalogEntry: undefined,
+      estimatedInputTokens,
+      requiresTools,
+      requiresVision,
+      requestsStreaming,
+      modelLifecycle: 'unknown',
+      deprecationWarning: undefined,
+    };
+  }
+
+  return {
+    useCase,
+    provider: best.provider,
+    model: best.model,
+    catalogEntry: best,
+    estimatedInputTokens,
+    requiresTools,
+    requiresVision,
+    requestsStreaming,
+    modelLifecycle: best.lifecycle,
+    deprecationWarning: deprecationNotice(best),
+  };
+}
+
 function activeModelsFor(useCase: ModelRecommendationUseCase): string[] {
   return rankModels(useCase, PROVIDER_FALLBACK_ORDER)
     .filter(entry => entry.lifecycle === 'active')
