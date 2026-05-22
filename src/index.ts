@@ -25,6 +25,7 @@ export type {
   CloudflareConfig,
   CerebrasConfig,
   GroqConfig,
+  NvidiaConfig,
   ModelCapabilities,
   ProviderCapabilities,
   ProviderMetrics,
@@ -60,6 +61,7 @@ export { AnthropicProvider } from './providers/anthropic.js';
 export { CloudflareProvider } from './providers/cloudflare.js';
 export { CerebrasProvider } from './providers/cerebras.js';
 export { GroqProvider } from './providers/groq.js';
+export { NvidiaProvider } from './providers/nvidia.js';
 
 // Factory pattern
 export {
@@ -257,6 +259,9 @@ export class LLMProviders {
     if (typeof env.CEREBRAS_API_KEY === 'string' && env.CEREBRAS_API_KEY) {
       config.cerebras = { apiKey: env.CEREBRAS_API_KEY };
     }
+    if (typeof env.NVIDIA_API_KEY === 'string' && env.NVIDIA_API_KEY) {
+      config.nvidia = { apiKey: env.NVIDIA_API_KEY };
+    }
     if (env.AI != null && typeof env.AI === 'object') {
       config.cloudflare = { ai: env.AI as Ai };
     }
@@ -266,6 +271,7 @@ export class LLMProviders {
       config.openai && 'openai',
       config.groq && 'groq',
       config.cerebras && 'cerebras',
+      config.nvidia && 'nvidia',
       config.cloudflare && 'cloudflare',
     ].filter(Boolean) as string[];
 
@@ -273,7 +279,7 @@ export class LLMProviders {
       throw new ConfigurationError(
         'fromEnv',
         'No LLM providers detected in env. Expected at least one of: ' +
-          'ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, or AI binding.'
+          'ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, CEREBRAS_API_KEY, NVIDIA_API_KEY, or AI binding.'
       );
     }
 
@@ -443,7 +449,7 @@ export default LLMProviders;
  * Version and metadata
  */
 export const VERSION = '0.1.0';
-export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebras', 'groq'] as const;
+export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebras', 'groq', 'nvidia'] as const;
 
 /**
  * Common model mappings for easy reference
@@ -487,6 +493,17 @@ export const MODELS = {
   // Groq models
   GROQ_LLAMA_3_3_70B_VERSATILE: 'llama-3.3-70b-versatile',
   GROQ_LLAMA_3_1_8B_INSTANT: 'llama-3.1-8b-instant',
-  GROQ_GPT_OSS_120B: 'openai/gpt-oss-120b'
+  GROQ_GPT_OSS_120B: 'openai/gpt-oss-120b',
+
+  // NVIDIA NIM models
+  NVIDIA_LLAMA_3_3_70B: 'meta/llama-3.3-70b-instruct',
+  NVIDIA_LLAMA_4_MAVERICK: 'meta/llama-4-maverick-17b-128e-instruct',
+  NVIDIA_NEMOTRON_70B: 'nvidia/llama-3.1-nemotron-70b-instruct',
+  NVIDIA_NEMOTRON_SUPER_49B: 'nvidia/llama-3.3-nemotron-super-49b-v1',
+  NVIDIA_NEMOTRON_ULTRA_253B: 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+  NVIDIA_LLAMA_3_1_70B: 'meta/llama-3.1-70b-instruct',
+  NVIDIA_MISTRAL_LARGE_2: 'mistralai/mistral-large-2-instruct',
+  NVIDIA_DEEPSEEK_V4_FLASH: 'deepseek-ai/deepseek-v4-flash',
+  NVIDIA_DEEPSEEK_V4_PRO: 'deepseek-ai/deepseek-v4-pro',
 } as const;
 

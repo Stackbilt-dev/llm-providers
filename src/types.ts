@@ -86,7 +86,9 @@ export interface LLMRequest {
   images?: LLMImageInput[];
   tools?: Tool[];
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
-  response_format?: { type: 'json_object' | 'text' };
+  response_format?:
+    | { type: 'json_object' | 'text' }
+    | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
   seed?: number;
   gatewayMetadata?: GatewayMetadata;
   cache?: CacheHints;
@@ -100,6 +102,17 @@ export interface LLMRequest {
   topP?: number;
   /** Penalizes repeated tokens. Forwarded by the Cloudflare provider; ignored by others. */
   frequencyPenalty?: number;
+  /** Provider reasoning/thinking controls. Translated to provider-native params at call time. */
+  reasoning?: {
+    /** Token budget / quality hint. 'none' disables reasoning entirely where supported. */
+    effort?: 'low' | 'medium' | 'high' | 'none';
+    /** Cerebras: controls how reasoning tokens appear in the response. */
+    format?: 'parsed' | 'raw' | 'hidden';
+    /** Cerebras zai-glm-4.7: set false to preserve reasoning across turns (improves cache hit rate). */
+    clearThinking?: boolean;
+  };
+  /** Predicted output hint for speculative decoding (Cerebras gpt-oss-120b, zai-glm-4.7). Incompatible with tools. */
+  prediction?: string;
   tenantId?: string;
   requestId?: string;
   metadata?: Record<string, unknown>;
@@ -164,13 +177,13 @@ export interface LLMProvider {
 }
 
 export interface LLMConfig {
-  provider: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'auto';
+  provider: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia' | 'auto';
   model: string;
   temperature: number;
   maxTokens: number;
   apiKey?: string;
   baseUrl?: string;
-  fallbackProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq';
+  fallbackProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia';
   fallbackModel?: string;
   timeout?: number;
   retries?: number;
@@ -211,6 +224,10 @@ export interface CerebrasConfig extends ProviderConfig {
 
 export interface GroqConfig extends ProviderConfig {
   // Groq uses OpenAI-compatible API; no extra fields needed beyond ProviderConfig
+}
+
+export interface NvidiaConfig extends ProviderConfig {
+  // NVIDIA NIM uses OpenAI-compatible API; no extra fields needed beyond ProviderConfig
 }
 
 export interface LLMError extends Error {

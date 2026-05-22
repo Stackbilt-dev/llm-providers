@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   sbom:
     uses: Stackbilt-dev/stackbilt_llc/.github/workflows/supply-chain-sbom.yml@fe2f8dc7de1e0404dee1634d47c6e54a9b46c020

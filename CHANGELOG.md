@@ -3,6 +3,43 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] — 2026-05-22
+
+### Added
+- **NVIDIA NIM provider** — `NvidiaProvider` adds nine NVIDIA-hosted models behind the same `LLMProvider` interface: `meta/llama-3.3-70b-instruct`, `meta/llama-4-maverick-17b-128e-instruct` (1M context), `nvidia/llama-3.1-nemotron-70b-instruct`, `nvidia/llama-3.3-nemotron-super-49b-v1`, `nvidia/llama-3.1-nemotron-ultra-253b-v1`, `meta/llama-3.1-70b-instruct`, `mistralai/mistral-large-2-instruct`, `deepseek-ai/deepseek-v4-flash`, and `deepseek-ai/deepseek-v4-pro`.
+- **`NvidiaConfig` type** — provider config interface exported from package root; identical shape to `GroqConfig` / `CerebrasConfig` (just `apiKey` + base `ProviderConfig` fields).
+- **NVIDIA in `ProviderFactoryConfig`** — `nvidia?: NvidiaConfig` added; re-init on `updateConfig({ nvidia })` wired.
+- **NVIDIA in `LLMProviders.fromEnv()`** — detects `NVIDIA_API_KEY` (`nvapi-…` prefix) automatically; included in the missing-key error message.
+- **NVIDIA catalog entries** — nine entries in `MODEL_CATALOG` with lifecycle, use-case tags, and capability metadata. All `inputTokenCost`/`outputTokenCost` values are `0` — NIM dev-tier is credit-based and production pricing varies by deployment; use `CreditLedger` for budget accounting.
+- **NVIDIA in `PROVIDER_FALLBACK_ORDER`** — inserted after Groq, before Anthropic.
+- **`MODELS.NVIDIA_*` constants** — nine constants covering all catalog models.
+- **Tool calling on NVIDIA NIM** — verified live: Meta Llama 3.1/3.3, Llama 4 Maverick, all Nemotron instruct models, and Mistral Large 2 confirmed tool-capable. DeepSeek V4 Flash/Pro marked `supportsTools: false` pending verification (returned 502 during probe; add to `TOOL_CAPABLE_MODELS` once confirmed).
+- **NVIDIA schema drift detection** — `NVIDIA_RESPONSE_SCHEMA` validated on every response. Handles NVIDIA-specific response differences: `tool_calls` always present as `[]` when unused (not absent); `prompt_tokens_details` may be `null`.
+- **NVIDIA golden fixture** — `src/__tests__/fixtures/response-shapes/nvidia.json` committed.
+- **NVIDIA test suite** — 21 tests covering constructor, generateResponse, streaming, tool call extraction, empty `tool_calls: []` handling, null `prompt_tokens_details` handling, health check, and balance reporting.
+
+## [1.7.0] — 2026-05-22
+
+### Added
+- **Cerebras reasoning forwarding** — `LLMRequest.reasoning.effort`, `reasoning.format`, and `reasoning.clearThinking` are translated to `reasoning_effort`, `reasoning_format`, and `clear_thinking` on Cerebras requests. `clearThinking: false` preserves GLM-4.7 reasoning state across turns, improving prompt cache hit rates in agentic loops.
+- **Cerebras predicted outputs** — `LLMRequest.prediction` forwards to the Cerebras `prediction` field (`gpt-oss-120b`, `zai-glm-4.7`). Combining `prediction` with `tools` throws `ConfigurationError` at the boundary before any network call.
+- **Cerebras `json_schema` structured outputs** — `response_format: { type: 'json_schema', json_schema: { name, schema, strict? } }` is forwarded natively to the Cerebras API. The existing `json_object` system-prompt-injection path is unchanged.
+- **Cerebras prompt cache key forwarding** — `LLMRequest.cache.key` is forwarded as `prompt_cache_key` to Cerebras (128-token block caching, 5m–1h TTL).
+- **`LLMRequest.reasoning` field** — provider-agnostic reasoning controls: `effort` (`low` | `medium` | `high` | `none`), `format` (`parsed` | `raw` | `hidden`), `clearThinking` (boolean). Currently translated only by Cerebras; other providers ignore the field.
+- **`LLMRequest.prediction` field** — provider-agnostic predicted output hint for speculative decoding. Currently forwarded only by Cerebras.
+- **`response_format` json_schema union** — `LLMRequest.response_format` now accepts `{ type: 'json_schema'; json_schema: { name, schema, strict? } }` in addition to the existing `json_object` / `text` variants.
+- **`supportsPromptCache` on Cerebras catalog entries** — flagged on `gpt-oss-120b`, `zai-glm-4.7`, and `qwen-3-235b-a22b-instruct-2507`.
+
+### Deprecated
+- **Cerebras `llama-3.1-8b`** — moved to `compatibility` lifecycle. Cerebras end-of-life: 2026-05-27. Migrate to `openai/gpt-oss-120b` (best perf/cost) or `zai-glm-4.7` (reasoning/tools).
+- **Cerebras `qwen-3-235b-a22b-instruct-2507`** — moved to `compatibility` lifecycle. Cerebras end-of-life: 2026-05-27. Migrate to `openai/gpt-oss-120b` or `zai-glm-4.7`.
+
+### Retired
+- **Cerebras `llama-3.3-70b`** — moved to `retired` lifecycle; model is no longer listed in Cerebras API. The string remains in `CerebrasProvider.models` for backward compatibility (additive-only policy) but the model catalog will not route new traffic to it.
+
+### Fixed
+- **Cerebras `zai-glm-4.7` context length** — corrected from `131000` to `131072` in both `getModelCapabilities()` and the model catalog.
+
 ## [1.6.5] — 2026-05-15
 
 ### Fixed

@@ -292,6 +292,146 @@ describe('CerebrasProvider', () => {
     });
   });
 
+  describe('reasoning and prediction forwarding', () => {
+    const successResponse = {
+      ok: true,
+      json: async () => ({
+        id: 'chatcmpl-123',
+        object: 'chat.completion',
+        created: 1700000000,
+        model: 'zai-glm-4.7',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'Thinking...' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+      }),
+      headers: new Headers({ 'content-type': 'application/json' })
+    };
+
+    it('should forward reasoning_effort and reasoning_format', async () => {
+      mockFetch.mockResolvedValueOnce(successResponse);
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Solve this.' }],
+        model: 'zai-glm-4.7',
+        reasoning: { effort: 'high', format: 'parsed' }
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reasoning_effort).toBe('high');
+      expect(body.reasoning_format).toBe('parsed');
+    });
+
+    it('should forward clear_thinking', async () => {
+      mockFetch.mockResolvedValueOnce(successResponse);
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Multi-turn task.' }],
+        model: 'zai-glm-4.7',
+        reasoning: { clearThinking: false }
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.clear_thinking).toBe(false);
+    });
+
+    it('should forward prediction for gpt-oss-120b', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ...successResponse,
+        json: async () => ({
+          id: 'chatcmpl-123',
+          object: 'chat.completion',
+          created: 1700000000,
+          model: 'openai/gpt-oss-120b',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'def hello():' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+        })
+      });
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Complete this.' }],
+        model: 'openai/gpt-oss-120b',
+        prediction: 'def hello():\n    pass'
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.prediction).toBe('def hello():\n    pass');
+    });
+
+    it('should reject prediction combined with tools', async () => {
+      await expect(provider.generateResponse({
+        messages: [{ role: 'user', content: 'Use a tool.' }],
+        model: 'openai/gpt-oss-120b',
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'search',
+            description: 'Search the web',
+            parameters: { type: 'object', properties: { query: { type: 'string' } } }
+          }
+        }],
+        prediction: 'some expected output'
+      })).rejects.toBeInstanceOf(ConfigurationError);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should forward prompt_cache_key from cache hints', async () => {
+      mockFetch.mockResolvedValueOnce(successResponse);
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Cached prompt.' }],
+        model: 'zai-glm-4.7',
+        cache: { key: 'my-cache-key-123' }
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.prompt_cache_key).toBe('my-cache-key-123');
+    });
+
+    it('should forward json_schema response_format natively', async () => {
+      mockFetch.mockResolvedValueOnce(successResponse);
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Give me JSON.' }],
+        model: 'zai-glm-4.7',
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'result', schema: { type: 'object', properties: { value: { type: 'number' } } } }
+        }
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.response_format).toEqual({
+        type: 'json_schema',
+        json_schema: { name: 'result', schema: { type: 'object', properties: { value: { type: 'number' } } } }
+      });
+    });
+
+    it('should not set response_format for json_object (uses system prompt injection)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'chatcmpl-123',
+          object: 'chat.completion',
+          created: 1700000000,
+          model: 'llama-3.1-8b',
+          choices: [{ index: 0, message: { role: 'assistant', content: '{}' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+        }),
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Give me JSON.' }],
+        model: 'llama-3.1-8b',
+        response_format: { type: 'json_object' }
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.response_format).toBeUndefined();
+      expect(body.messages[0].content).toMatch(/valid JSON only/);
+    });
+  });
+
   describe('metrics', () => {
     it('should track metrics on successful request', async () => {
       mockFetch.mockResolvedValueOnce({

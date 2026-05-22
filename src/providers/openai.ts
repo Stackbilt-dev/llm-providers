@@ -94,7 +94,9 @@ interface OpenAIRequest {
   stream?: boolean;
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
-  response_format?: { type: 'json_object' | 'text' };
+  response_format?:
+    | { type: 'json_object' | 'text' }
+    | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
   seed?: number;
 }
 

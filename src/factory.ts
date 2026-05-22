@@ -17,6 +17,7 @@ import type {
   CloudflareConfig,
   CerebrasConfig,
   GroqConfig,
+  NvidiaConfig,
   FallbackRule,
   ProviderMetrics,
   CircuitBreakerState,
@@ -39,6 +40,7 @@ import { AnthropicProvider } from './providers/anthropic.js';
 import { CloudflareProvider } from './providers/cloudflare.js';
 import { CerebrasProvider } from './providers/cerebras.js';
 import { GroqProvider } from './providers/groq.js';
+import { NvidiaProvider } from './providers/nvidia.js';
 import { CostTracker, defaultCostTracker } from './utils/cost-tracker.js';
 import type { ProviderCostBreakdownEntry } from './utils/cost-tracker.js';
 import type { CreditLedger } from './utils/credit-ledger.js';
@@ -71,8 +73,9 @@ export interface ProviderFactoryConfig {
   cloudflare?: CloudflareConfig;
   cerebras?: CerebrasConfig;
   groq?: GroqConfig;
-  preferredProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'auto';
-  defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'auto';
+  nvidia?: NvidiaConfig;
+  preferredProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia' | 'auto';
+  defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia' | 'auto';
   fallbackRules?: FallbackRule[];
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
@@ -158,6 +161,7 @@ export class LLMProviderFactory {
       ['cloudflare', CloudflareProvider],
       ['cerebras', CerebrasProvider],
       ['groq', GroqProvider],
+      ['nvidia', NvidiaProvider],
     ];
 
     for (const [name, ProviderClass] of providerEntries) {
@@ -1011,6 +1015,7 @@ export class LLMProviderFactory {
       config.cloudflare ||
       config.cerebras ||
       config.groq ||
+      config.nvidia ||
       config.enableRetries !== undefined
     ) {
       this.providers.clear();
@@ -1197,8 +1202,8 @@ export class LLMProviderFactory {
     return this.providers.get(providerName)?.supportsVision === true;
   }
 
-  private getSelectionHealth(): Partial<Record<'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq', ProviderHealthEntry>> {
-    const health: Partial<Record<'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq', ProviderHealthEntry>> = {};
+  private getSelectionHealth(): Partial<Record<'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia', ProviderHealthEntry>> {
+    const health: Partial<Record<'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia', ProviderHealthEntry>> = {};
 
     for (const providerName of this.providers.keys()) {
       const metrics = this.providers.get(providerName)?.getMetrics();
@@ -1206,7 +1211,7 @@ export class LLMProviderFactory {
         ? defaultCircuitBreakerManager.getBreaker(providerName).getState()
         : null;
 
-      health[providerName as 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq'] = {
+      health[providerName as 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia'] = {
         healthy: circuitBreaker?.state !== 'OPEN',
         metrics,
         circuitBreaker,

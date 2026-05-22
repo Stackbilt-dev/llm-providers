@@ -1,9 +1,9 @@
 /**
- * Groq Provider
- * Implementation for Groq fast inference models (OpenAI-compatible API)
+ * NVIDIA NIM Provider
+ * Implementation for NVIDIA NIM inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage } from '../types.js';
+import type { LLMRequest, LLMResponse, NvidiaConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage } from '../types.js';
 import { BaseProvider } from './base.js';
 import {
   LLMErrorFactory,
@@ -14,11 +14,10 @@ import {
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 
-// Groq serves the OpenAI /chat/completions contract — same envelope shape as
-// OpenAI. Kept as a separate constant (not imported from openai.ts) because
-// each provider's envelope is an independent API surface; shared drift would
-// be a correlated outage signal, not a single bug.
-const GROQ_RESPONSE_SCHEMA: SchemaField[] = [
+// NVIDIA NIM serves the OpenAI /chat/completions contract. See groq.ts for the
+// rationale on keeping each OpenAI-compat provider's schema as its own
+// constant rather than a shared import.
+const NVIDIA_RESPONSE_SCHEMA: SchemaField[] = [
   { path: 'id', type: 'string' },
   { path: 'model', type: 'string' },
   {
@@ -53,14 +52,14 @@ const GROQ_RESPONSE_SCHEMA: SchemaField[] = [
   { path: 'usage.total_tokens', type: 'number' },
 ];
 
-interface GroqMessage {
+interface NvidiaMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
   tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
   tool_call_id?: string;
 }
 
-interface GroqTool {
+interface NvidiaTool {
   type: 'function';
   function: {
     name: string;
@@ -69,21 +68,21 @@ interface GroqTool {
   };
 }
 
-interface GroqRequest {
+interface NvidiaRequest {
   model: string;
-  messages: GroqMessage[];
+  messages: NvidiaMessage[];
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
   response_format?:
     | { type: 'json_object' | 'text' }
     | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
-  tools?: GroqTool[];
+  tools?: NvidiaTool[];
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   seed?: number;
 }
 
-interface GroqResponse {
+interface NvidiaResponse {
   id: string;
   object: string;
   created: number;
@@ -97,7 +96,7 @@ interface GroqResponse {
         id: string;
         type: 'function';
         function: { name: string; arguments: string };
-      }>;
+      }> | null;
     };
     finish_reason: 'stop' | 'length' | 'content_filter' | 'tool_calls';
   }>;
@@ -105,26 +104,38 @@ interface GroqResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
-    /** Automatic prompt cache hit tokens (Groq-supported models). */
-    prompt_tokens_details?: {
-      cached_tokens?: number;
-    };
+    // null on NVIDIA NIM — not an object like Groq/Cerebras
+    prompt_tokens_details?: { cached_tokens?: number } | null;
   };
-  system_fingerprint?: string;
+  system_fingerprint?: string | null;
 }
 
-// Models that support tool calling
+// Models that support tool/function calling on NVIDIA NIM.
+// Verified via live API probe; add new models here as NVIDIA certifies them.
+// DeepSeek models omitted — returned 502 during tool-call verification; re-add once confirmed.
 const TOOL_CAPABLE_MODELS = new Set([
-  'openai/gpt-oss-120b',
-  'llama-3.3-70b-versatile',
+  'meta/llama-3.1-70b-instruct',
+  'meta/llama-3.1-8b-instruct',
+  'meta/llama-3.3-70b-instruct',
+  'meta/llama-4-maverick-17b-128e-instruct',
+  'nvidia/llama-3.1-nemotron-70b-instruct',
+  'nvidia/llama-3.3-nemotron-super-49b-v1',
+  'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+  'mistralai/mistral-large-2-instruct',
 ]);
 
-export class GroqProvider extends BaseProvider {
-  name = 'groq';
+export class NvidiaProvider extends BaseProvider {
+  name = 'nvidia';
   models = [
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant',
-    'openai/gpt-oss-120b',
+    'meta/llama-3.3-70b-instruct',
+    'meta/llama-4-maverick-17b-128e-instruct',
+    'nvidia/llama-3.1-nemotron-70b-instruct',
+    'nvidia/llama-3.3-nemotron-super-49b-v1',
+    'deepseek-ai/deepseek-v4-flash',
+    'meta/llama-3.1-70b-instruct',
+    'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+    'mistralai/mistral-large-2-instruct',
+    'deepseek-ai/deepseek-v4-pro',
   ];
   supportsStreaming = true;
   supportsTools = true;
@@ -133,15 +144,15 @@ export class GroqProvider extends BaseProvider {
   private apiKey: string;
   private baseUrl: string;
 
-  constructor(config: GroqConfig) {
+  constructor(config: NvidiaConfig) {
     super(config);
 
     if (!config.apiKey) {
-      throw new AuthenticationError('groq', 'Groq API key is required');
+      throw new AuthenticationError('nvidia', 'NVIDIA API key is required');
     }
 
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl || 'https://api.groq.com/openai/v1';
+    this.baseUrl = config.baseUrl || 'https://integrate.api.nvidia.com/v1';
   }
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
@@ -151,16 +162,16 @@ export class GroqProvider extends BaseProvider {
 
     try {
       const response = await this.executeWithResiliency(async () => {
-        const groqRequest = this.formatRequest(request);
-        const httpResponse = await this.makeGroqRequest('/chat/completions', groqRequest, 'POST', request);
+        const nvidiaRequest = this.formatRequest(request);
+        const httpResponse = await this.makeNvidiaRequest('/chat/completions', nvidiaRequest, 'POST', request);
 
         if (!httpResponse.ok) {
-          throw await LLMErrorFactory.fromFetchResponse('groq', httpResponse);
+          throw await LLMErrorFactory.fromFetchResponse('nvidia', httpResponse);
         }
 
         const data = await httpResponse.json() as unknown;
-        validateSchema('groq', data, GROQ_RESPONSE_SCHEMA);
-        return this.formatResponse(data as GroqResponse, Date.now() - startTime);
+        validateSchema('nvidia', data, NVIDIA_RESPONSE_SCHEMA);
+        return this.formatResponse(data as NvidiaResponse, Date.now() - startTime);
       });
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
@@ -199,7 +210,7 @@ export class GroqProvider extends BaseProvider {
 
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await this.makeGroqRequest('/models', null, 'GET');
+      const response = await this.makeNvidiaRequest('/models', null, 'GET');
       return response.ok;
     } catch {
       return false;
@@ -211,59 +222,112 @@ export class GroqProvider extends BaseProvider {
       provider: this.name,
       status: 'unavailable',
       source: 'not_supported',
-      message: 'Groq does not expose a public billing or credit-balance API; use CreditLedger reporting for local quota state.'
+      message: 'NVIDIA NIM does not expose a public billing or credit-balance API; use CreditLedger reporting for local quota state.'
     };
   }
 
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
+    // Costs are zero placeholders — NVIDIA NIM dev-tier runs on credits;
+    // production pricing varies by model and deployment. Update via CreditLedger.
     return {
-      'llama-3.3-70b-versatile': {
+      'meta/llama-3.3-70b-instruct': {
         maxContextLength: 128000,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
-        inputTokenCost: 0.00059, // $0.59 per 1M tokens
-        outputTokenCost: 0.00079, // $0.79 per 1M tokens
-        description: 'Llama 3.3 70B Versatile - High-quality fast inference on Groq'
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Meta Llama 3.3 70B Instruct on NVIDIA NIM'
       },
-      'llama-3.1-8b-instant': {
+      'meta/llama-4-maverick-17b-128e-instruct': {
+        maxContextLength: 1048576,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Meta Llama 4 Maverick 17B 128E MoE Instruct on NVIDIA NIM'
+      },
+      'nvidia/llama-3.1-nemotron-70b-instruct': {
         maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'NVIDIA Llama 3.1 Nemotron 70B Instruct — NVIDIA-optimized for accuracy'
+      },
+      'nvidia/llama-3.3-nemotron-super-49b-v1': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'NVIDIA Llama 3.3 Nemotron Super 49B v1 — efficiency-optimized'
+      },
+      'deepseek-ai/deepseek-v4-flash': {
+        maxContextLength: 65536,
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: false,
-        inputTokenCost: 0.00005, // $0.05 per 1M tokens
-        outputTokenCost: 0.00008, // $0.08 per 1M tokens
-        description: 'Llama 3.1 8B Instant - Ultra-fast inference on Groq'
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'DeepSeek V4 Flash on NVIDIA NIM'
       },
-      'openai/gpt-oss-120b': {
+      'meta/llama-3.1-70b-instruct': {
         maxContextLength: 128000,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
-        inputTokenCost: 0.00015, // $0.15 per 1M tokens (cached: $0.075/MTok)
-        outputTokenCost: 0.0006,  // $0.60 per 1M tokens
-        description: 'GPT-OSS 120B - OpenAI-compatible tool calling on Groq'
-      }
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Meta Llama 3.1 70B Instruct on NVIDIA NIM'
+      },
+      'nvidia/llama-3.1-nemotron-ultra-253b-v1': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'NVIDIA Llama 3.1 Nemotron Ultra 253B v1 — maximum quality'
+      },
+      'mistralai/mistral-large-2-instruct': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Mistral Large 2 Instruct on NVIDIA NIM'
+      },
+      'deepseek-ai/deepseek-v4-pro': {
+        maxContextLength: 65536,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'DeepSeek V4 Pro on NVIDIA NIM'
+      },
     };
   }
 
-  /**
-   * Stream response support (OpenAI-compatible SSE format)
-   */
   async streamResponse(request: LLMRequest): Promise<ReadableStream<string>> {
     this.validateRequest(request);
 
-    const groqRequest = { ...this.formatRequest(request), stream: true };
+    const nvidiaRequest = { ...this.formatRequest(request), stream: true };
     const hooks = this.config.hooks;
     const providerName = this.name;
 
     return new ReadableStream({
       start: async (controller) => {
         try {
-          const response = await this.makeGroqRequest('/chat/completions', groqRequest, 'POST', request);
+          const response = await this.makeNvidiaRequest('/chat/completions', nvidiaRequest, 'POST', request);
 
           if (!response.ok) {
-            throw await LLMErrorFactory.fromFetchResponse('groq', response);
+            throw await LLMErrorFactory.fromFetchResponse('nvidia', response);
           }
 
           const reader = response.body?.getReader();
@@ -308,7 +372,7 @@ export class GroqProvider extends BaseProvider {
               try {
                 parsed = JSON.parse(data);
               } catch {
-                const err = new SchemaDriftError('groq', 'sse.chunk', 'valid-json', 'malformed-json');
+                const err = new SchemaDriftError('nvidia', 'sse.chunk', 'valid-json', 'malformed-json');
                 emitDrift('sse.chunk', 'valid-json', 'malformed-json');
                 controller.error(err);
                 reader.cancel().catch(() => {});
@@ -327,7 +391,7 @@ export class GroqProvider extends BaseProvider {
               if (typeof content !== 'string') {
                 const actual = String(typeof content);
                 emitDrift('sse.choices[0].delta.content', 'string', actual);
-                controller.error(new SchemaDriftError('groq', 'sse.choices[0].delta.content', 'string', actual));
+                controller.error(new SchemaDriftError('nvidia', 'sse.choices[0].delta.content', 'string', actual));
                 reader.cancel().catch(() => {});
                 return;
               }
@@ -344,9 +408,9 @@ export class GroqProvider extends BaseProvider {
     });
   }
 
-  private async makeGroqRequest(
+  private async makeNvidiaRequest(
     endpoint: string,
-    body: GroqRequest | null,
+    body: NvidiaRequest | null,
     method: string = 'POST',
     request?: LLMRequest
   ): Promise<Response> {
@@ -368,8 +432,8 @@ export class GroqProvider extends BaseProvider {
     return this.makeRequest(`${this.baseUrl}${endpoint}`, options);
   }
 
-  private formatRequest(request: LLMRequest): GroqRequest {
-    const messages: GroqMessage[] = [];
+  private formatRequest(request: LLMRequest): NvidiaRequest {
+    const messages: NvidiaMessage[] = [];
     const model = request.model || this.getDefaultModel(request);
     const usesTools =
       (request.tools?.length ?? 0) > 0 ||
@@ -382,7 +446,7 @@ export class GroqProvider extends BaseProvider {
     if (usesTools && !TOOL_CAPABLE_MODELS.has(model)) {
       throw new ConfigurationError(
         this.name,
-        `Model '${model}' does not support tool calling on Groq`
+        `Model '${model}' does not support tool calling on NVIDIA NIM`
       );
     }
 
@@ -403,12 +467,11 @@ export class GroqProvider extends BaseProvider {
         continue;
       }
 
-      const msg: GroqMessage = {
+      const msg: NvidiaMessage = {
         role: message.role,
         content: message.content
       };
 
-      // Carry tool calls for multi-turn tool conversations
       if (message.toolCalls) {
         msg.tool_calls = message.toolCalls.map(tc => ({
           id: tc.id,
@@ -417,17 +480,16 @@ export class GroqProvider extends BaseProvider {
         }));
       }
       if (message.toolResults) {
-        // Tool results come as separate messages in OpenAI format
         for (const tr of message.toolResults) {
           messages.push({ role: 'tool', content: tr.output, tool_call_id: tr.id });
         }
-        continue; // Don't push the original message — tool results replace it
+        continue;
       }
 
       messages.push(msg);
     }
 
-    const groqRequest: GroqRequest = {
+    const nvidiaRequest: NvidiaRequest = {
       model,
       messages,
       temperature: request.temperature,
@@ -436,14 +498,12 @@ export class GroqProvider extends BaseProvider {
       seed: request.seed
     };
 
-    // Pass through response_format if provided
     if (request.response_format) {
-      groqRequest.response_format = request.response_format;
+      nvidiaRequest.response_format = request.response_format;
     }
 
-    // Add tools if provided. Unsupported tool models are rejected above.
     if (request.tools && request.tools.length > 0) {
-      groqRequest.tools = request.tools.map(t => ({
+      nvidiaRequest.tools = request.tools.map(t => ({
         type: 'function',
         function: {
           name: t.function.name,
@@ -452,20 +512,20 @@ export class GroqProvider extends BaseProvider {
         }
       }));
       if (request.toolChoice) {
-        groqRequest.tool_choice = request.toolChoice;
+        nvidiaRequest.tool_choice = request.toolChoice;
       }
     }
 
-    return groqRequest;
+    return nvidiaRequest;
   }
 
   private formatResponse(
-    data: GroqResponse,
+    data: NvidiaResponse,
     responseTime: number
   ): LLMResponse {
     const choice = data.choices[0];
     if (!choice) {
-      throw new SchemaDriftError('groq', 'choices[0]', 'object', 'undefined');
+      throw new SchemaDriftError('nvidia', 'choices[0]', 'object', 'undefined');
     }
 
     const content = choice.message.content || '';
@@ -479,21 +539,22 @@ export class GroqProvider extends BaseProvider {
         data.model
       )
     };
+    // NVIDIA NIM returns prompt_tokens_details as null; handle null gracefully.
     const cachedTokens = data.usage.prompt_tokens_details?.cached_tokens;
     if (typeof cachedTokens === 'number') {
       usage.cachedInputTokens = cachedTokens;
     }
 
-    // Extract tool calls if present (validated at provider boundary).
-    // Filter to function-type variants before dereferencing `tc.function`:
-    // the schema discriminator treats unknown `type` values as forward-compat
-    // (skipped, not drift), so a future `code_interpreter`-shaped variant
-    // may arrive without the `function` field we expect. Dropping at the map
-    // boundary keeps unknown variants invisible rather than surfacing a bare
-    // TypeError that bypasses the drift/fallback machinery.
+    // Extract tool calls if present. NVIDIA NIM returns `tool_calls: []` (empty
+    // array) when no tools are used, unlike Groq which omits the field entirely.
+    // Filter to function-type variants before dereferencing `tc.function` — same
+    // forward-compat rationale as groq.ts.
     let toolCalls: ToolCall[] | undefined;
-    const functionCalls = choice.message.tool_calls?.filter(tc => tc.type === 'function');
-    if (functionCalls && functionCalls.length > 0) {
+    const rawToolCalls = choice.message.tool_calls;
+    const functionCalls = Array.isArray(rawToolCalls)
+      ? rawToolCalls.filter(tc => tc.type === 'function')
+      : [];
+    if (functionCalls.length > 0) {
       const raw: ToolCall[] = functionCalls.map(tc => ({
         id: tc.id,
         type: 'function' as const,
@@ -520,6 +581,6 @@ export class GroqProvider extends BaseProvider {
   }
 
   private getDefaultModel(request: LLMRequest): string {
-    return getProviderDefaultModel('groq', request);
+    return getProviderDefaultModel('nvidia', request);
   }
 }

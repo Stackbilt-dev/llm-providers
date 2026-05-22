@@ -82,11 +82,19 @@ These utilities process raw provider responses to extract field shapes. Raw resp
 
 ## Audit Trail
 
-This package undergoes the following automated checks on every commit:
+This package undergoes the following automated checks on every commit to `main` and every pull request:
 
-- TypeScript strict mode compilation
-- Full test suite (unit + integration)
-- `npm audit` for known vulnerabilities in dev dependencies
-- Provenance attestation on publish
+| Check | When | Details |
+|-------|------|---------|
+| TypeScript strict mode | Every commit / PR | Zero tolerance for `any` in exported APIs |
+| Full test suite | Every commit / PR | Unit + integration, Node 18 / 20 / 22 matrix |
+| `npm audit` | Every commit / PR | Dev dependencies scanned (`--omit=dev` omitted so all surfaces are checked) |
+| `--ignore-scripts` | Every commit / PR | `npm ci --ignore-scripts` prevents install-time script execution from dev dependencies |
+| SHA-pinned Actions | Every commit / PR | All workflow steps reference full commit SHAs, not mutable version tags |
+| SBOM generation | Every push to `main` | Artifact `sbom-{sha}` retained 90 days via shared Stackbilt supply-chain workflow |
+| Dependency review | Every PR | Blocks PRs that introduce vulnerable or license-incompatible dependencies |
+| Tarball smoke test | On publish | `npm pack` + importability check run before `npm publish` |
+| npm provenance attestation | On publish | Cryptographic link from tarball to the exact commit and CI workflow that built it |
+| OIDC-only publish | On publish | Short-lived token via GitHub OIDC; no long-lived npm publish credentials exist |
 
 For questions about our security practices, email security@stackbilt.dev.

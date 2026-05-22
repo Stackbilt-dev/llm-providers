@@ -1,7 +1,7 @@
 import type { CreditLedger } from './utils/credit-ledger.js';
 import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
 
-export type ProviderName = 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq';
+export type ProviderName = 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia';
 export type ModelLifecycle = 'active' | 'compatibility' | 'retired';
 export type ModelRecommendationUseCase =
   | 'COST_EFFECTIVE'
@@ -37,6 +37,7 @@ export const PROVIDER_FALLBACK_ORDER: ProviderName[] = [
   'cloudflare',
   'cerebras',
   'groq',
+  'nvidia',
   'anthropic',
   'openai',
 ];
@@ -364,50 +365,53 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Workers AI Llama 3.2 Vision'
   }, { speed: 4, quality: 3, cost: 4 }),
 
-  entry('cerebras', 'llama-3.1-8b', 'active', ['COST_EFFECTIVE', 'BALANCED'], {
+  entry('cerebras', 'llama-3.1-8b', 'compatibility', ['COST_EFFECTIVE', 'BALANCED'], {
     maxContextLength: 128000,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: false,
     inputTokenCost: 0.0001,
     outputTokenCost: 0.0001,
-    description: 'Cerebras Llama 3.1 8B'
+    description: 'Cerebras Llama 3.1 8B (deprecated 2026-05-27)'
   }, { speed: 5, quality: 3, cost: 5 }),
-  entry('cerebras', 'llama-3.3-70b', 'active', ['HIGH_PERFORMANCE', 'BALANCED'], {
+  entry('cerebras', 'llama-3.3-70b', 'retired', ['HIGH_PERFORMANCE', 'BALANCED'], {
     maxContextLength: 128000,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: false,
     inputTokenCost: 0.0006,
     outputTokenCost: 0.0006,
-    description: 'Cerebras Llama 3.3 70B'
+    description: 'Cerebras Llama 3.3 70B (retired)'
   }, { speed: 5, quality: 4, cost: 4 }),
   entry('cerebras', 'zai-glm-4.7', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
-    maxContextLength: 131000,
+    maxContextLength: 131072,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
+    supportsPromptCache: true,
     inputTokenCost: 0.00225,
     outputTokenCost: 0.00275,
-    description: 'Cerebras ZAI-GLM 4.7'
+    description: 'Cerebras ZAI-GLM 4.7 — reasoning, tool calling, predicted outputs'
   }, { speed: 4, quality: 5, cost: 2 }),
-  entry('cerebras', 'qwen-3-235b-a22b-instruct-2507', 'active', ['TOOL_CALLING', 'BALANCED', 'HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
-    maxContextLength: 131000,
+  entry('cerebras', 'qwen-3-235b-a22b-instruct-2507', 'compatibility', ['TOOL_CALLING', 'BALANCED', 'HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
+    maxContextLength: 131072,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
+    supportsPromptCache: true,
     inputTokenCost: 0.0006,
     outputTokenCost: 0.0012,
-    description: 'Cerebras Qwen 3 235B MoE'
+    description: 'Cerebras Qwen 3 235B MoE (deprecated 2026-05-27)'
   }, { speed: 4, quality: 4, cost: 3 }),
   entry('cerebras', 'openai/gpt-oss-120b', 'active', ['TOOL_CALLING', 'BALANCED', 'HIGH_PERFORMANCE'], {
     maxContextLength: 128000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
+    supportsPromptCache: true,
     inputTokenCost: 0.00015,
     outputTokenCost: 0.0006,
-    description: 'Cerebras GPT-OSS 120B'
+    description: 'Cerebras GPT-OSS 120B — tool calling, predicted outputs'
   }, { speed: 5, quality: 4, cost: 4 }),
 
   entry('groq', 'llama-3.3-70b-versatile', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'BALANCED'], {
@@ -437,10 +441,95 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.0006,
     description: 'Groq GPT-OSS 120B'
   }, { speed: 5, quality: 4, cost: 4 }),
+
+  // NVIDIA NIM — costs are zero placeholders (dev-tier credit-based; production
+  // pricing varies by model). Update inputTokenCost/outputTokenCost via CreditLedger.
+  entry('nvidia', 'meta/llama-3.3-70b-instruct', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'BALANCED', 'LONG_CONTEXT'], {
+    maxContextLength: 128000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Meta Llama 3.3 70B Instruct on NVIDIA NIM'
+  }, { speed: 3, quality: 4, cost: 3 }),
+  entry('nvidia', 'meta/llama-4-maverick-17b-128e-instruct', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 1048576,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Meta Llama 4 Maverick 17B 128E MoE Instruct on NVIDIA NIM'
+  }, { speed: 4, quality: 5, cost: 3 }),
+  entry('nvidia', 'nvidia/llama-3.1-nemotron-70b-instruct', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'BALANCED'], {
+    maxContextLength: 128000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'NVIDIA Llama 3.1 Nemotron 70B Instruct — NVIDIA-optimized accuracy'
+  }, { speed: 3, quality: 5, cost: 3 }),
+  entry('nvidia', 'nvidia/llama-3.3-nemotron-super-49b-v1', 'active', ['BALANCED', 'TOOL_CALLING', 'HIGH_PERFORMANCE'], {
+    maxContextLength: 128000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'NVIDIA Llama 3.3 Nemotron Super 49B v1 — efficiency-optimized'
+  }, { speed: 4, quality: 4, cost: 3 }),
+  entry('nvidia', 'deepseek-ai/deepseek-v4-flash', 'active', ['COST_EFFECTIVE', 'BALANCED'], {
+    maxContextLength: 65536,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'DeepSeek V4 Flash on NVIDIA NIM'
+  }, { speed: 5, quality: 3, cost: 4 }),
+  entry('nvidia', 'meta/llama-3.1-70b-instruct', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'BALANCED'], {
+    maxContextLength: 128000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Meta Llama 3.1 70B Instruct on NVIDIA NIM'
+  }, { speed: 3, quality: 4, cost: 3 }),
+  entry('nvidia', 'nvidia/llama-3.1-nemotron-ultra-253b-v1', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
+    maxContextLength: 128000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'NVIDIA Llama 3.1 Nemotron Ultra 253B v1 — maximum quality'
+  }, { speed: 1, quality: 5, cost: 3 }),
+  entry('nvidia', 'mistralai/mistral-large-2-instruct', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'BALANCED'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Mistral Large 2 Instruct on NVIDIA NIM'
+  }, { speed: 3, quality: 4, cost: 3 }),
+  entry('nvidia', 'deepseek-ai/deepseek-v4-pro', 'active', ['HIGH_PERFORMANCE', 'BALANCED'], {
+    maxContextLength: 65536,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'DeepSeek V4 Pro on NVIDIA NIM'
+  }, { speed: 2, quality: 5, cost: 3 }),
 ] as const;
 
 function isStructuredRequest(request: Partial<LLMRequest> | undefined): boolean {
-  return request?.response_format?.type === 'json_object';
+  const type = request?.response_format?.type;
+  return type === 'json_object' || type === 'json_schema';
 }
 
 function usesTools(request: Partial<LLMRequest> | undefined): boolean {

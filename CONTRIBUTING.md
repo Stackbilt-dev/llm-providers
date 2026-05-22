@@ -7,7 +7,7 @@ Contributions are welcome. Here is how to get started.
 ```bash
 git clone https://github.com/Stackbilt-dev/llm-providers.git
 cd llm-providers
-npm install
+npm install --ignore-scripts
 ```
 
 ## Development

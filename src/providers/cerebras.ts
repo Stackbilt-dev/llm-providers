@@ -77,6 +77,17 @@ interface CerebrasRequest {
   tools?: CerebrasTool[];
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   seed?: number;
+  reasoning_effort?: 'low' | 'medium' | 'high' | 'none';
+  reasoning_format?: 'parsed' | 'raw' | 'hidden';
+  /** zai-glm-4.7 only: set false to preserve reasoning across turns for better cache hit rates. */
+  clear_thinking?: boolean;
+  /** Speculative decoding hint. Incompatible with tools. */
+  prediction?: string;
+  /** Provider-side prompt cache key (128-token blocks). */
+  prompt_cache_key?: string;
+  response_format?:
+    | { type: 'json_object' }
+    | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
 }
 
 interface CerebrasResponse {
@@ -226,31 +237,34 @@ export class CerebrasProvider extends BaseProvider {
         description: 'Llama 3.3 70B - High-quality fast inference on Cerebras'
       },
       'zai-glm-4.7': {
-        maxContextLength: 131000,
+        maxContextLength: 131072,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
+        supportsPromptCache: true,
         inputTokenCost: 0.00225, // $2.25 per 1M tokens
         outputTokenCost: 0.00275, // $2.75 per 1M tokens
-        description: 'ZAI-GLM 4.7 355B - Reasoning mode, tool calling, structured outputs (Preview)'
+        description: 'ZAI-GLM 4.7 355B - Reasoning mode, tool calling, predicted outputs (Preview)'
       },
       'qwen-3-235b-a22b-instruct-2507': {
-        maxContextLength: 131000,
+        maxContextLength: 131072,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
+        supportsPromptCache: true,
         inputTokenCost: 0.0006, // $0.60 per 1M tokens
         outputTokenCost: 0.0012, // $1.20 per 1M tokens
-        description: 'Qwen 3 235B MoE (22B active) - Tool calling, structured outputs (Preview)'
+        description: 'Qwen 3 235B MoE (22B active) - Tool calling, structured outputs (deprecated 2026-05-27)'
       },
       'openai/gpt-oss-120b': {
         maxContextLength: 128000,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
+        supportsPromptCache: true,
         inputTokenCost: 0.00015, // $0.15 per 1M tokens (placeholder — update once Cerebras publishes official pricing)
         outputTokenCost: 0.0006, // $0.60 per 1M tokens (placeholder — mirrored from Groq)
-        description: 'GPT-OSS 120B on Cerebras'
+        description: 'GPT-OSS 120B on Cerebras — tool calling, predicted outputs'
       }
     };
   }
@@ -394,6 +408,13 @@ export class CerebrasProvider extends BaseProvider {
       );
     }
 
+    if (request.prediction && usesTools) {
+      throw new ConfigurationError(
+        this.name,
+        'Predicted outputs are incompatible with tool use on Cerebras'
+      );
+    }
+
     if (request.systemPrompt) {
       messages.push({
         role: 'system',
@@ -457,6 +478,25 @@ export class CerebrasProvider extends BaseProvider {
       if (request.toolChoice) {
         result.tool_choice = request.toolChoice;
       }
+    }
+
+    // Forward reasoning params
+    if (request.reasoning) {
+      if (request.reasoning.effort !== undefined) result.reasoning_effort = request.reasoning.effort;
+      if (request.reasoning.format !== undefined) result.reasoning_format = request.reasoning.format;
+      if (request.reasoning.clearThinking !== undefined) result.clear_thinking = request.reasoning.clearThinking;
+    }
+
+    // Forward predicted outputs
+    if (request.prediction) result.prediction = request.prediction;
+
+    // Forward provider prompt cache key
+    if (request.cache?.key) result.prompt_cache_key = request.cache.key;
+
+    // Native json_schema forwarding (json_object uses system-prompt injection above)
+    const rf = request.response_format;
+    if (rf?.type === 'json_schema') {
+      result.response_format = rf;
     }
 
     return result;

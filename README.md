@@ -4,7 +4,7 @@ A multi-provider LLM abstraction layer with automatic failover, graduated circui
 
 ## Features
 
-- **Multi-provider failover** -- OpenAI, Anthropic, Cloudflare Workers AI, Cerebras, and Groq behind a single interface
+- **Multi-provider failover** -- OpenAI, Anthropic, Cloudflare Workers AI, Cerebras, Groq, and NVIDIA NIM behind a single interface
 - **Graduated circuit breaker** -- 4-state machine (closed / degraded / recovering / open) with probabilistic traffic routing prevents cascading failures
 - **Exponential backoff retry** -- configurable delays, jitter, and per-error-class behavior
 - **Cost tracking and optimization** -- per-provider cost attribution, budget alerts with CreditLedger, automatic routing to cheaper providers
@@ -66,7 +66,7 @@ console.log(`Provider: ${response.provider}, Cost: $${response.usage.cost}`);
 import { LLMProviders } from '@stackbilt/llm-providers';
 
 // Scans env for ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY,
-// CEREBRAS_API_KEY, and AI binding — configures only what's present
+// CEREBRAS_API_KEY, NVIDIA_API_KEY, and AI binding — configures only what's present
 const llm = LLMProviders.fromEnv(env, {
   costOptimization: true,
   enableCircuitBreaker: true,
@@ -80,8 +80,9 @@ const llm = LLMProviders.fromEnv(env, {
 | **OpenAI** | GPT-4o Mini, GPT-4 Turbo, GPT-4, GPT-3.5 Turbo | Yes | Yes | Default: `gpt-4o-mini` |
 | **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Sonnet 4, Haiku 4.5, 3.7 Sonnet, 3.5 Sonnet/Haiku, 3 Opus/Sonnet | Yes | Yes | Default: `claude-haiku-4-5-20251001` |
 | **Cloudflare** | Gemma 4 26B, Llama 4 Scout, GPT-OSS 120B, LLaMA 3.x, Mistral 7B, Qwen 1.5, TinyLlama, and more | Yes | GPT-OSS, Gemma 4, Llama 4 Scout | Default is request-aware and catalog-driven |
-| **Cerebras** | LLaMA 3.1 8B, LLaMA 3.3 70B, ZAI-GLM 4.7, Qwen 3 235B | Yes | GLM/Qwen only | ~2,200 tok/s |
+| **Cerebras** | GPT-OSS 120B, ZAI-GLM 4.7, LLaMA 3.1 8B *(deprecated 2026-05-27)*, Qwen 3 235B *(deprecated 2026-05-27)* | Yes | GLM, Qwen, GPT-OSS | ~2,200 tok/s |
 | **Groq** | LLaMA 3.3 70B Versatile, LLaMA 3.1 8B Instant, GPT-OSS 120B | Yes | LLaMA 3.3 70B, GPT-OSS 120B | Ultra-fast inference |
+| **NVIDIA NIM** | Llama 3.3/3.1 70B, Llama 4 Maverick, Nemotron 70B/49B/253B, Mistral Large 2, DeepSeek V4 Flash/Pro | Yes | Llama, Nemotron, Mistral Large 2 | Costs $0 placeholder — dev-tier credits; set real rates in `CreditLedger` |
 
 ### Provider Configuration
 
@@ -100,6 +101,9 @@ const llm = LLMProviders.fromEnv(env, {
 
 // Groq
 { apiKey: 'gsk_...' }
+
+// NVIDIA NIM
+{ apiKey: 'nvapi-...' }
 ```
 
 ## Logging
@@ -232,7 +236,7 @@ const llm = new LLMProviders({
 });
 ```
 
-Default provider precedence remains Cloudflare → Cerebras → Groq → Anthropic → OpenAI, but actual dispatch is catalog-driven and can be reordered at runtime by request fit, circuit-breaker state, and ledger burn-rate pressure.
+Default provider precedence remains Cloudflare → Cerebras → Groq → NVIDIA → Anthropic → OpenAI, but actual dispatch is catalog-driven and can be reordered at runtime by request fit, circuit-breaker state, and ledger burn-rate pressure.
 
 ## Error Handling
 
@@ -272,6 +276,8 @@ MODELS.CLAUDE_HAIKU_4_5;        // 'claude-haiku-4-5-20251001'
 MODELS.GPT_4O;                  // 'gpt-4o' (deprecated / compatibility only)
 MODELS.GPT_4O_MINI;             // 'gpt-4o-mini'
 MODELS.CEREBRAS_ZAI_GLM_4_7;    // 'zai-glm-4.7'
+MODELS.NVIDIA_NEMOTRON_70B;     // 'nvidia/llama-3.1-nemotron-70b-instruct'
+MODELS.NVIDIA_LLAMA_4_MAVERICK; // 'meta/llama-4-maverick-17b-128e-instruct'
 
 // Get best active model for a use case given available providers
 const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
@@ -402,6 +408,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `CloudflareProvider` | Cloudflare Workers AI (streaming, tools on GPT-OSS/Gemma 4/Llama 4, batch) |
 | `CerebrasProvider` | Cerebras fast inference (streaming, tools on GLM/Qwen) |
 | `GroqProvider` | Groq fast inference (streaming, tools on GPT-OSS/LLaMA 3.3 70B) |
+| `NvidiaProvider` | NVIDIA NIM inference (streaming, tools on Llama/Nemotron/Mistral) |
 | `BaseProvider` | Abstract base with shared resiliency, metrics, and cost calculation |
 
 ### Utilities
@@ -461,6 +468,21 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `runCanaryCheck(provider, golden, liveResponse)` | Compare live response shape against golden fixture |
 | `extractShape(obj)` | Extract flat path → type map from any object |
 | `retry(fn, config)` | One-shot retry wrapper for any async function |
+
+## Security
+
+`@stackbilt/llm-providers` treats supply chain security as a first-class concern:
+
+- **Zero runtime dependencies.** The published tarball contains only compiled source and the Apache-2.0 license — no transitive dependency tree to audit or compromise.
+- **npm provenance attestation.** Every published version is cryptographically linked to the exact GitHub commit and CI workflow that built it. Verify on the npm registry page under "Provenance."
+- **CI-only OIDC publishing.** Releases are published exclusively through GitHub Actions with short-lived OIDC tokens. No long-lived npm publish credentials exist.
+- **SHA-pinned Actions.** Every workflow step references a full commit SHA, not a mutable tag. A compromised `v4` tag cannot inject code into this workflow.
+- **SBOM on every commit.** The supply chain workflow generates a Software Bill of Materials artifact (`sbom-{sha}`) on every push to `main`, retained for 90 days.
+- **Dependency review on every PR.** Pull requests are blocked if any newly introduced dependency has a known vulnerability or an incompatible license.
+- **`--ignore-scripts` on install.** CI and publish both run `npm ci --ignore-scripts`, preventing install-time script execution from dev dependencies.
+- **`npm audit` on every build.** Vulnerabilities in dev dependencies are caught before tests run and before publish.
+
+See [SECURITY.md](./SECURITY.md) for the full security policy and vulnerability reporting.
 
 ## License
 
