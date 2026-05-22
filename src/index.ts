@@ -451,7 +451,7 @@ export default LLMProviders;
 /**
  * Version and metadata
  */
-export const VERSION = '1.8.0';
+export const VERSION = '1.9.0';
 export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebras', 'groq', 'nvidia'] as const;
 
 /**

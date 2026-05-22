@@ -3,6 +3,18 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] — 2026-05-22
+
+### Added
+- **`getRoutingInfo(request, providers?, context?)`** — pre-flight routing snapshot for gateways and agent orchestrators. Call once at ingress to get `{ useCase, provider, model, catalogEntry, estimatedInputTokens, requiresTools, requiresVision, requestsStreaming, modelLifecycle, deprecationWarning }` without dispatching the request. Export from package root.
+- **`RoutingInfo` type** — interface for the above snapshot.
+- **`metadata.useCase` passthrough** — set `request.metadata.useCase` to a `ModelRecommendationUseCase` value (e.g. `'TOOL_CALLING'`) and the factory's `resolveUseCase()` will honor it directly, bypassing inference. Pair with `getRoutingInfo()` to classify once at the gateway layer and let the catalog engine drive dispatch from there.
+- **`ToolLoopAbortSignal` type** — `{ abort: true; reason?: string }`. Return this from the `onIteration` callback in `generateResponseWithTools` to stop the tool loop immediately and throw `ToolLoopAbortedError`. Void-returning callbacks are unaffected.
+- **Response deprecation annotation** — `generateResponse()` attaches `metadata.llmProvidersDeprecationWarning` to any response whose model is on `compatibility` or `retired` lifecycle, or whose catalog description contains a deprecation date. Cerebras models deprecating 2026-05-27 will surface warnings on every response starting now.
+
+### Fixed
+- **`VERSION` constant** — was hardcoded `'0.1.0'` since v1.0.0; corrected to track the actual package version (`'1.9.0'`).
+
 ## [1.8.0] — 2026-05-22
 
 ### Added

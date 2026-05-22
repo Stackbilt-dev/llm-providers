@@ -12,7 +12,9 @@ A multi-provider LLM abstraction layer with automatic failover, graduated circui
 - **Rate limit enforcement** -- CreditLedger tracks RPM/RPD/TPM/TPD per provider; factory skips providers that exceed limits
 - **Streaming with fallback** -- SSE streaming on all providers; factory-level streaming routes through the same circuit-breaker and fallback chain as non-streaming requests
 - **Tool/function calling** -- OpenAI, Anthropic, Cerebras, and Cloudflare tool use with unified response format
-- **Tool-use loop helper** -- `generateResponseWithTools` owns the request → parse → execute → repeat cycle with iteration caps, cost limits, and abort signal support
+- **Tool-use loop helper** -- `generateResponseWithTools` owns the request → parse → execute → repeat cycle with iteration caps, cost limits, abort signal support, and `onIteration` early-exit via `{ abort: true }`
+- **Routing introspection** -- `getRoutingInfo()` returns a pre-flight routing snapshot (use case, provider, model, token estimate, lifecycle, deprecation warning) without dispatching the request; pairs with `request.metadata.useCase` to pre-classify intent at the gateway and let the catalog drive dispatch
+- **Deprecation annotations** -- `generateResponse()` attaches `metadata.llmProvidersDeprecationWarning` to every response that uses a non-active-lifecycle model
 - **Provider-agnostic cache hints** -- `LLMRequest.cache` translates to provider-native caching (Anthropic `cache_control` breakpoints; automatic on OpenAI/Groq/Cerebras); cached token counts normalized into `TokenUsage`
 - **Schema drift detection** -- envelope validation on every provider response; streaming frames validated per-chunk; `SchemaDriftError` routes through fallback chain and fires `onSchemaDrift` hook
 - **Schema canary** -- `runCanaryCheck` / `extractShape` / `compareShapes` for comparing live response shapes against committed golden fixtures
@@ -218,6 +220,58 @@ const recommended = llm.getRecommendedModel({
 });
 ```
 
+## Routing Introspection
+
+`getRoutingInfo()` lets gateways and agent orchestrators inspect what the catalog engine *would* do — without dispatching the request. Use this at ingress to classify intent once, log the routing decision, enforce policies, or pre-warm the right provider.
+
+```typescript
+import { getRoutingInfo, LLMProviders } from '@stackbilt/llm-providers';
+
+// Standalone — pass the providers you have configured
+const info = getRoutingInfo(
+  { messages: [{ role: 'user', content: 'Call the weather tool' }], tools: [...] },
+  ['cloudflare', 'cerebras', 'groq']
+);
+
+// info.useCase              → 'TOOL_CALLING'
+// info.provider             → 'cerebras'
+// info.model                → 'zai-glm-4.7'
+// info.estimatedInputTokens → heuristic count
+// info.modelLifecycle       → 'active'
+// info.deprecationWarning   → undefined (or a warning string for non-active models)
+```
+
+### metadata.useCase passthrough
+
+After calling `getRoutingInfo()`, set `request.metadata.useCase` to the classified value before dispatching. The factory's `resolveUseCase()` reads this field directly, skipping re-inference and ensuring the gateway's classification is honored:
+
+```typescript
+const info = getRoutingInfo(request, configuredProviders);
+
+// Attach the gateway's classification so the factory doesn't re-infer it
+const annotatedRequest = {
+  ...request,
+  metadata: { ...request.metadata, useCase: info.useCase },
+};
+
+const response = await llm.generateResponse(annotatedRequest);
+```
+
+### Deprecation warnings on responses
+
+When `generateResponse()` routes to a model on `compatibility` or `retired` lifecycle, the response includes a warning:
+
+```typescript
+const response = await llm.generateResponse({ model: 'llama-3.1-8b', ... });
+
+if (response.metadata?.llmProvidersDeprecationWarning) {
+  console.warn(response.metadata.llmProvidersDeprecationWarning);
+  // → "llama-3.1-8b deprecates 2026-05-27 — plan migration"
+}
+```
+
+This fires automatically — no opt-in required. The warning surface is the response, so any layer that handles responses (the gateway, the caller) sees it regardless of which layer made the call.
+
 ## Fallback Rules
 
 Customize when and how the factory falls back between providers:
@@ -326,7 +380,17 @@ const result = await llm.generateResponseWithTools(
       throw new Error(`Unknown tool: ${name}`);
     }
   },
-  { maxIterations: 5, maxCostUSD: 0.10 }
+  {
+    maxIterations: 5,
+    maxCostUSD: 0.10,
+    onIteration: (iteration, state) => {
+      // Return { abort: true, reason? } to stop the loop early and throw ToolLoopAbortedError.
+      // Returning void (or nothing) continues to the next iteration.
+      if (state.messages.some(m => m.role === 'assistant' && m.content?.includes('DONE'))) {
+        return { abort: true, reason: 'found answer' };
+      }
+    },
+  }
 );
 
 console.log(result.message); // final assistant response after tool execution
@@ -446,6 +510,8 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `CacheHints` | Cache strategy, key, ttl, sessionId, cacheablePrefix for provider-agnostic prompt caching |
 | `ToolExecutor` | Interface for `generateResponseWithTools`: `execute(name, args) => Promise<unknown>` |
 | `ToolLoopOptions` | Loop config: maxIterations, maxCostUSD, onIteration, abortSignal |
+| `ToolLoopAbortSignal` | `{ abort: true; reason?: string }` — return from `onIteration` to stop the loop and throw `ToolLoopAbortedError` |
+| `RoutingInfo` | Pre-flight routing snapshot: useCase, provider, model, estimatedInputTokens, lifecycle, deprecationWarning |
 | `CanaryReport` | Schema canary result: provider, status ('ok'|'drift'), diff |
 | `ShapeMap` | Flat `path → JSON-type` map produced by `extractShape` |
 | `ProviderFactoryConfig` | Factory config: provider configs, fallback rules, ledger, logger |
@@ -465,6 +531,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `llm.generateResponseWithTools(request, executor, opts?)` | Managed tool-use loop with caps and abort-signal support |
 | `llm.getRecommendedModel(request, useCase?)` | Runtime recommendation using configured providers, health, and ledger state |
 | `getRecommendedModel(useCase, providers, context?)` | Pick the best active model for a use case |
+| `getRoutingInfo(request, providers?, context?)` | Pre-flight routing snapshot — use case, model, lifecycle, deprecation warning — without dispatching |
 | `runCanaryCheck(provider, golden, liveResponse)` | Compare live response shape against golden fixture |
 | `extractShape(obj)` | Extract flat path → type map from any object |
 | `retry(fn, config)` | One-shot retry wrapper for any async function |
