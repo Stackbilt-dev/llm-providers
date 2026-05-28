@@ -9,7 +9,7 @@
  * not our adapter's behaviour) and records both shapes:
  *
  *   1. groq/compound        — built-in tools via compound_custom.tools.enabled_tools,
- *                             citations expected at message.executed_tools[].search_results
+ *                             citations at message.executed_tools[].search_results.results[]
  *   2. openai/gpt-oss-120b  — OpenAI-compatible tools: [{ type: 'browser_search' }]
  *
  * Outputs (per call):

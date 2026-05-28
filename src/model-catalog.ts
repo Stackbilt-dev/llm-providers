@@ -734,7 +734,9 @@ export function modelSupportsBuiltInTools(
   const entry = MODEL_CATALOG.find(e => e.model === model && e.provider === provider);
   const supported = entry?.capabilities.supportsBuiltInTools;
   if (!supported || supported.length === 0) return false;
-  return tool === undefined ? true : supported.includes(tool as never);
+  // `tool` is an open-ended string (request- or response-side identifier);
+  // widen the typed array rather than narrowing the argument.
+  return tool === undefined ? true : (supported as readonly string[]).includes(tool);
 }
 
 /**
