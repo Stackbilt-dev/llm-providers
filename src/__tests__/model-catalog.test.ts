@@ -4,6 +4,8 @@ import {
   MODEL_CATALOG,
   MODEL_RECOMMENDATIONS,
   getCatalogEntry,
+  getProvidersForCatalogModel,
+  modelSupportsBuiltInTools,
   getRecommendedModel,
   getRoutingInfo,
   inferUseCaseFromRequest,
@@ -224,5 +226,42 @@ describe('getRoutingInfo', () => {
     );
     expect(info.modelLifecycle).toBe('unknown');
     expect(info.deprecationWarning).toBeUndefined();
+  });
+});
+
+describe('getProvidersForCatalogModel', () => {
+  it('returns all providers serving a collided model string, in fallback order', () => {
+    // openai/gpt-oss-120b is hosted by both Cerebras and Groq.
+    const providers = getProvidersForCatalogModel('openai/gpt-oss-120b');
+    expect(providers).toEqual(['cerebras', 'groq']);
+  });
+
+  it('returns a single provider for an unambiguous model', () => {
+    expect(getProvidersForCatalogModel('llama-3.3-70b-versatile')).toEqual(['groq']);
+  });
+
+  it('returns an empty array for an unknown model', () => {
+    expect(getProvidersForCatalogModel('groq/compound')).toEqual([]);
+    expect(getProvidersForCatalogModel('not-a-real-model')).toEqual([]);
+  });
+});
+
+describe('modelSupportsBuiltInTools', () => {
+  it('is true for the Groq-hosted gpt-oss entry', () => {
+    expect(modelSupportsBuiltInTools('openai/gpt-oss-120b', 'groq')).toBe(true);
+    expect(modelSupportsBuiltInTools('openai/gpt-oss-120b', 'groq', 'web_search')).toBe(true);
+  });
+
+  it('is false for the Cerebras-hosted gpt-oss entry — the disambiguator', () => {
+    expect(modelSupportsBuiltInTools('openai/gpt-oss-120b', 'cerebras')).toBe(false);
+  });
+
+  it('is false for a tool the model does not advertise', () => {
+    expect(modelSupportsBuiltInTools('openai/gpt-oss-120b', 'groq', 'wolfram_alpha')).toBe(false);
+  });
+
+  it('is false for function-only models and unknown pairs', () => {
+    expect(modelSupportsBuiltInTools('llama-3.3-70b-versatile', 'groq')).toBe(false);
+    expect(modelSupportsBuiltInTools('not-a-real-model', 'groq')).toBe(false);
   });
 });

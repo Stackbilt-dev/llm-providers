@@ -439,6 +439,10 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.00015,
     outputTokenCost: 0.0006,
+    // Groq-hosted gpt-oss runs built-in browser_search + code_interpreter
+    // server-side (issue #69). The same model string on Cerebras does NOT —
+    // this capability is what disambiguates the cross-provider catalog collision.
+    supportsBuiltInTools: ['web_search', 'code_interpreter'],
     description: 'Groq GPT-OSS 120B'
   }, { speed: 5, quality: 4, cost: 4 }),
 
@@ -697,6 +701,40 @@ export function getCatalogEntry(model: string): ModelCatalogEntry | undefined {
 export function getProviderForCatalogModel(model: string): ProviderName | null {
   const entry = getCatalogEntry(model);
   return entry?.provider ?? null;
+}
+
+/**
+ * All providers that serve this exact model string, ordered by
+ * `PROVIDER_FALLBACK_ORDER`. Some model strings are hosted by more than one
+ * provider (e.g. `openai/gpt-oss-120b` runs on both Cerebras and Groq); the
+ * singular `getProviderForCatalogModel` returns only the first catalog match,
+ * which hides the collision. Routing uses this plural form to choose a
+ * configured / capability-matching provider deterministically.
+ */
+export function getProvidersForCatalogModel(model: string): ProviderName[] {
+  const providers = MODEL_CATALOG
+    .filter(entry => entry.model === model)
+    .map(entry => entry.provider);
+  const unique = [...new Set(providers)];
+  return unique.sort(
+    (a, b) => PROVIDER_FALLBACK_ORDER.indexOf(a) - PROVIDER_FALLBACK_ORDER.indexOf(b),
+  );
+}
+
+/**
+ * Whether a specific (model, provider) pair advertises a given built-in tool,
+ * or any built-in tool when `tool` is omitted. Used to steer a built-in-tools
+ * request to the capable provider when a model string is hosted by several.
+ */
+export function modelSupportsBuiltInTools(
+  model: string,
+  provider: ProviderName,
+  tool?: string,
+): boolean {
+  const entry = MODEL_CATALOG.find(e => e.model === model && e.provider === provider);
+  const supported = entry?.capabilities.supportsBuiltInTools;
+  if (!supported || supported.length === 0) return false;
+  return tool === undefined ? true : supported.includes(tool as never);
 }
 
 /**
