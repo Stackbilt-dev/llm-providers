@@ -85,6 +85,14 @@ export interface LLMRequest {
   systemPrompt?: string;
   images?: LLMImageInput[];
   tools?: Tool[];
+  /**
+   * Provider-hosted built-in tools (Groq web search, code interpreter, …).
+   * Only honored by providers/models that advertise `supportsBuiltInTools`;
+   * adapters translate to the native wire shape and gate at the boundary.
+   * Results are surfaced on `LLMResponse.metadata.builtInToolResults`
+   * (cast to `BuiltInToolResult[]`).
+   */
+  builtInTools?: BuiltInTool[];
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   response_format?:
     | { type: 'json_object' | 'text' }
@@ -129,6 +137,42 @@ export interface Tool {
       required?: string[];
     };
   };
+}
+
+/**
+ * Provider-hosted built-in tools (e.g. Groq web search / code interpreter).
+ * Conceptually distinct from caller-defined function `Tool`s: the provider runs
+ * them server-side and returns their results inline. Identifiers are normalized
+ * across providers (Groq's compound vocabulary is the canonical superset); each
+ * adapter translates to its native wire shape and gates on model capability.
+ */
+export type BuiltInToolType =
+  | 'web_search'
+  | 'visit_website'
+  | 'browser_automation'
+  | 'code_interpreter'
+  | 'wolfram_alpha';
+
+export interface BuiltInTool {
+  type: BuiltInToolType;
+}
+
+/**
+ * A single built-in tool execution surfaced on `LLMResponse.metadata.builtInToolResults`.
+ * Shape mirrors Groq's `message.executed_tools[]` (verified live, issue #69):
+ * `type` is provider-native and open-ended (`'search'`, `'browser_search'`,
+ * `'browser.open'`, …) — do not treat it as a closed enum. Results carry the
+ * provider's web-search citations when the execution produced any.
+ */
+export interface BuiltInToolResult {
+  /** Provider-native tool kind. Open-ended — varies by provider and model. */
+  type: string;
+  /** Tool name when the provider supplies one (Groq gpt-oss); absent on compound. */
+  name?: string;
+  /** Raw JSON-string arguments the model passed, e.g. `'{"query":"…"}'`. */
+  arguments?: string;
+  /** Search results / citations carried by this execution, when present. */
+  results: Array<{ title: string; url: string; content: string; score: number }>;
 }
 
 export interface LLMResponse {
@@ -305,6 +349,12 @@ export interface ModelCapabilities {
   description: string;
   /** Provider-side prompt/prefix caching supported for this model. */
   supportsPromptCache?: boolean;
+  /**
+   * Provider-hosted built-in tools this model can run server-side, normalized
+   * to `BuiltInToolType`. Absent/empty means the model is function-tools only.
+   * Drives capability-aware routing and boundary gating for `LLMRequest.builtInTools`.
+   */
+  supportsBuiltInTools?: BuiltInToolType[];
 }
 
 export interface ProviderCapabilities {

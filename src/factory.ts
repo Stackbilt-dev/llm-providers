@@ -52,6 +52,8 @@ import {
   getCatalogEntry,
   getProviderDefaultModel,
   getProviderForCatalogModel,
+  getProvidersForCatalogModel,
+  modelSupportsBuiltInTools,
   inferUseCaseFromRequest,
   rankModels,
   type ModelRecommendationUseCase,
@@ -696,7 +698,7 @@ export class LLMProviderFactory {
 
     // If specific provider requested, try it first
     if (request.model) {
-      const providerForModel = this.getProviderForModel(request.model);
+      const providerForModel = this.getProviderForModel(request.model, request);
       if (providerForModel && this.providers.has(providerForModel)) {
         chain.push(providerForModel);
         providerModels.set(providerForModel, request.model);
@@ -745,10 +747,27 @@ export class LLMProviderFactory {
   /**
    * Get appropriate provider for a specific model
    */
-  private getProviderForModel(model: string): string | null {
-    const catalogProvider = getProviderForCatalogModel(model);
-    if (catalogProvider) {
-      return catalogProvider;
+  private getProviderForModel(model: string, request?: LLMRequest): string | null {
+    // A model string may be hosted by more than one provider (e.g.
+    // `openai/gpt-oss-120b` on both Cerebras and Groq). Resolve against the
+    // full set rather than the first catalog match so the collision can't
+    // silently misroute.
+    const catalogProviders = getProvidersForCatalogModel(model);
+    if (catalogProviders.length > 0) {
+      // Prefer a configured provider; fall back to fallback-order otherwise.
+      const configured = catalogProviders.filter(p => this.providers.has(p));
+      const pool = configured.length > 0 ? configured : catalogProviders;
+
+      // A built-in-tools request must land on a provider whose catalog entry
+      // advertises them for this model — that's what steers a collided model
+      // string (gpt-oss on Cerebras vs Groq) to the capable host. Plain
+      // requests keep the prior fallback-order default (no regression).
+      if ((request?.builtInTools?.length ?? 0) > 0) {
+        const capable = pool.find(p => modelSupportsBuiltInTools(model, p));
+        if (capable) return capable;
+      }
+
+      return pool[0];
     }
 
     // OpenAI models
@@ -766,8 +785,13 @@ export class LLMProviderFactory {
       return 'cloudflare';
     }
 
-    // Groq models (openai/gpt-oss-120b is Groq-hosted, not @cf/ prefixed)
-    if (model.includes('-versatile') || model.includes('-instant') || model === 'openai/gpt-oss-120b') {
+    // Groq models. `openai/gpt-oss-120b` is Groq-hosted (also handled above via
+    // the catalog), and the `groq/` namespace (`groq/compound`,
+    // `groq/compound-mini`) is Groq-unique — route it before a full catalog
+    // entry exists so the system model doesn't fall through to a substituted
+    // default on another provider.
+    if (model.includes('-versatile') || model.includes('-instant')
+        || model === 'openai/gpt-oss-120b' || model.startsWith('groq/')) {
       return 'groq';
     }
 
