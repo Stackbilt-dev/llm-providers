@@ -9,8 +9,10 @@ import {
   getRecommendedModel,
   getRoutingInfo,
   inferUseCaseFromRequest,
+  rankModels,
   type ModelRecommendationUseCase,
 } from '../model-catalog';
+import { MODELS } from '../index';
 import type { CircuitBreakerState, LLMRequest } from '../types';
 
 function closedState(): CircuitBreakerState {
@@ -238,10 +240,11 @@ describe('getProvidersForCatalogModel', () => {
 
   it('returns a single provider for an unambiguous model', () => {
     expect(getProvidersForCatalogModel('llama-3.3-70b-versatile')).toEqual(['groq']);
+    // groq/compound is catalogued under Groq as of S3.
+    expect(getProvidersForCatalogModel('groq/compound')).toEqual(['groq']);
   });
 
   it('returns an empty array for an unknown model', () => {
-    expect(getProvidersForCatalogModel('groq/compound')).toEqual([]);
     expect(getProvidersForCatalogModel('not-a-real-model')).toEqual([]);
   });
 });
@@ -263,5 +266,66 @@ describe('modelSupportsBuiltInTools', () => {
   it('is false for function-only models and unknown pairs', () => {
     expect(modelSupportsBuiltInTools('llama-3.3-70b-versatile', 'groq')).toBe(false);
     expect(modelSupportsBuiltInTools('not-a-real-model', 'groq')).toBe(false);
+  });
+
+  it('advertises all five built-in tools for both Compound systems', () => {
+    for (const model of ['groq/compound', 'groq/compound-mini']) {
+      for (const tool of ['web_search', 'visit_website', 'browser_automation', 'code_interpreter', 'wolfram_alpha']) {
+        expect(modelSupportsBuiltInTools(model, 'groq', tool)).toBe(true);
+      }
+    }
+  });
+});
+
+describe('groq/compound catalog entries (S3)', () => {
+  it('catalogues groq/compound and groq/compound-mini under Groq, active, RESEARCH-tagged', () => {
+    for (const model of ['groq/compound', 'groq/compound-mini']) {
+      const entry = getCatalogEntry(model);
+      expect(entry).toBeDefined();
+      expect(entry?.provider).toBe('groq');
+      expect(entry?.lifecycle).toBe('active');
+      expect(entry?.useCases).toContain('RESEARCH');
+      expect(entry?.capabilities.supportsTools).toBe(true);
+    }
+  });
+
+  it('recommends a Compound system for the RESEARCH use case, full Compound first', () => {
+    const ranked = rankModels('RESEARCH', ['groq']);
+    expect(ranked[0]?.model).toBe('groq/compound');
+    expect(ranked.map(e => e.model)).toContain('groq/compound-mini');
+  });
+
+  it('lists both Compound systems under MODEL_RECOMMENDATIONS.RESEARCH', () => {
+    expect(MODEL_RECOMMENDATIONS.RESEARCH).toEqual(
+      expect.arrayContaining(['groq/compound', 'groq/compound-mini'])
+    );
+  });
+
+  // AC #6: existing callers must not silently route to a Compound system — Groq
+  // auto-enables web_search on those models, so generic traffic landing there
+  // would incur search surcharges. Compound is tagged RESEARCH-only; verify it
+  // never wins a generic groq-only recommendation.
+  it('does NOT select a Compound system for generic use cases on a groq-only setup', () => {
+    for (const useCase of ['TOOL_CALLING', 'HIGH_PERFORMANCE', 'BALANCED', 'COST_EFFECTIVE', 'LONG_CONTEXT'] as const) {
+      const recommended = getRecommendedModel(useCase, ['groq']);
+      expect(recommended).not.toBe('groq/compound');
+      expect(recommended).not.toBe('groq/compound-mini');
+    }
+  });
+
+  it('exports MODELS.GROQ_COMPOUND / GROQ_COMPOUND_MINI pointing at catalogued models', () => {
+    expect(MODELS.GROQ_COMPOUND).toBe('groq/compound');
+    expect(MODELS.GROQ_COMPOUND_MINI).toBe('groq/compound-mini');
+    expect(getCatalogEntry(MODELS.GROQ_COMPOUND)).toBeDefined();
+    expect(getCatalogEntry(MODELS.GROQ_COMPOUND_MINI)).toBeDefined();
+  });
+
+  it('does not infer RESEARCH from request shape — it is opt-in via pinned model or metadata.useCase', () => {
+    // A plain research-flavoured prompt with tools still infers TOOL_CALLING.
+    const request: Partial<LLMRequest> = {
+      messages: [{ role: 'user', content: 'Find authoritative sources on a topic.' }],
+      builtInTools: [{ type: 'web_search' }],
+    };
+    expect(inferUseCaseFromRequest(request)).not.toBe('RESEARCH');
   });
 });

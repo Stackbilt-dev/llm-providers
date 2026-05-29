@@ -785,11 +785,12 @@ export class LLMProviderFactory {
       return 'cloudflare';
     }
 
-    // Groq models. `openai/gpt-oss-120b` is Groq-hosted (also handled above via
-    // the catalog), and the `groq/` namespace (`groq/compound`,
-    // `groq/compound-mini`) is Groq-unique — route it before a full catalog
-    // entry exists so the system model doesn't fall through to a substituted
-    // default on another provider.
+    // Groq models. These are normally resolved via the catalog path above
+    // (`llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, `groq/compound`,
+    // `groq/compound-mini` all have catalog entries). This heuristic is the
+    // fallback for any future Groq model string not yet catalogued — the
+    // `groq/` namespace is Groq-unique, so route it here rather than letting it
+    // fall through to a substituted default on another provider.
     if (model.includes('-versatile') || model.includes('-instant')
         || model === 'openai/gpt-oss-120b' || model.startsWith('groq/')) {
       return 'groq';
@@ -1272,7 +1273,8 @@ export class LLMProviderFactory {
         normalized === 'BALANCED' ||
         normalized === 'TOOL_CALLING' ||
         normalized === 'LONG_CONTEXT' ||
-        normalized === 'VISION'
+        normalized === 'VISION' ||
+        normalized === 'RESEARCH'
       ) {
         return normalized;
       }
