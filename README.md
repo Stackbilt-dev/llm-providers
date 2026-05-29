@@ -426,7 +426,13 @@ Notes:
 - **Capability-aware routing.** `openai/gpt-oss-120b` is hosted by both Cerebras and Groq; only Groq runs built-in tools, so a `builtInTools` request is steered to Groq automatically. Plain requests keep the default routing.
 - **Provenance.** The Compound systems are tagged `RESEARCH`-only in the catalog and are not auto-selected for generic use cases — pin the model (or request the `RESEARCH` use case) to use them, since selecting a Compound model can incur per-search surcharges.
 - **Cost.** Built-in tool surcharges (e.g. web search ~$5/1k requests) are billed by the provider and are **not** attributed per-call in `TokenUsage`; track them via `CreditLedger` if needed.
-- **Citations.** Structured search results surface on `LLMResponse.metadata.builtInToolResults` (`{ type, name?, arguments?, results: [{ title, url, content, score }] }`). Result parsing for the Groq adapter is being wired in a follow-up; the request path and gating described here are live today.
+- **Citations.** Structured search results surface on `LLMResponse.metadata.builtInToolResults` — `Array<{ type, name?, arguments?, results: [{ title, url, content, score }] }>`. Only executions that ran a web search appear (e.g. `code_interpreter` runs, which carry no citations, are omitted); the field is absent when no search ran. Citation sub-fields are passed through as the provider returns them — treat them as best-effort and validate URLs before use.
+- **Reasoning.** When the model exposes its internal reasoning (the queries it searched), it surfaces on `LLMResponse.metadata.reasoning` as a string. Absent when the model doesn't emit it.
+
+```typescript
+const citations = res.metadata?.builtInToolResults?.[0]?.results ?? [];
+// → [{ title, url, content, score }, …]
+```
 
 ## Prompt Cache Hints
 

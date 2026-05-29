@@ -16,10 +16,10 @@ Groq built-in tools (issue #69), landing across stacked PRs. Additive only.
 - **`RESEARCH` `ModelRecommendationUseCase`** — new use case with `scoreUseCase` weights and a `MODEL_RECOMMENDATIONS.RESEARCH` list; honored by `factory.resolveUseCase()` via `metadata.useCase`. Not inferred from request shape (opt-in only).
 - **Capability-aware built-in-tools routing** — `openai/gpt-oss-120b` is hosted by both Cerebras and Groq; a `builtInTools` request is steered to Groq (the capable host) while plain requests keep the prior default. Resolves the catalog collision via `getProvidersForCatalogModel`.
 - **Groq built-in-tools request fork + boundary gating** — Compound systems send tools on `compound_custom.tools.enabled_tools` (identifiers verbatim); `openai/gpt-oss-120b` sends OpenAI-style `tools: [{ type }]` with `web_search` → `browser_search` translation, merged alongside function tools. Unsupported `(model, tool)` pairs throw `ConfigurationError` naming the capable models.
+- **Groq built-in tool result parsing** — `message.executed_tools[]` is parsed into `LLMResponse.metadata.builtInToolResults` (`Array<{ type, name?, arguments?, results: [{ title, url, content, score }] }>`). Only executions carrying a non-empty `search_results.results` surface; non-search runs (e.g. `code_interpreter`) are omitted, and the field is absent when no search ran. The model's internal reasoning surfaces on `metadata.reasoning` when present. `GROQ_RESPONSE_SCHEMA` extended with an optional, shallow `executed_tools` entry (validates `type` only — citation sub-fields are intentionally unguarded to avoid false `SchemaDriftError` fallback on a single sampled shape).
 
 ### Notes
 - Built-in tool surcharges are billed by the provider and are **not** attributed per-call in `TokenUsage`; use `CreditLedger` for accounting.
-- Structured result surfacing (`metadata.builtInToolResults`) for the Groq adapter is being wired in a follow-up PR; the request path and gating are complete.
 
 ## [1.9.0] — 2026-05-22
 
