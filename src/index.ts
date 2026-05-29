@@ -502,6 +502,8 @@ export const MODELS = {
   GROQ_LLAMA_3_3_70B_VERSATILE: 'llama-3.3-70b-versatile',
   GROQ_LLAMA_3_1_8B_INSTANT: 'llama-3.1-8b-instant',
   GROQ_GPT_OSS_120B: 'openai/gpt-oss-120b',
+  GROQ_COMPOUND: 'groq/compound',
+  GROQ_COMPOUND_MINI: 'groq/compound-mini',
 
   // NVIDIA NIM models
   NVIDIA_LLAMA_3_3_70B: 'meta/llama-3.3-70b-instruct',

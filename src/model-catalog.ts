@@ -9,7 +9,8 @@ export type ModelRecommendationUseCase =
   | 'BALANCED'
   | 'TOOL_CALLING'
   | 'LONG_CONTEXT'
-  | 'VISION';
+  | 'VISION'
+  | 'RESEARCH';
 
 export interface ModelCatalogEntry {
   provider: ProviderName;
@@ -445,6 +446,47 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBuiltInTools: ['web_search', 'code_interpreter'],
     description: 'Groq GPT-OSS 120B'
   }, { speed: 5, quality: 4, cost: 4 }),
+  // Groq Compound systems (issue #69): server-side agentic systems that route
+  // between backing models and natively run all five built-in tools. Same
+  // `/chat/completions` endpoint — no new HTTP path. Token costs are an estimate
+  // (roll-up of Llama 4 Scout 17B / GPT-OSS 120B); built-in surcharges
+  // (web_search $5/1k req, code_interpreter $0.18/hr, browser_automation
+  // $0.08/hr) are billed separately and are NOT token-tracked here.
+  //
+  // Tagged RESEARCH-only — deliberately NOT TOOL_CALLING/HIGH_PERFORMANCE/etc.
+  // despite supporting function tools. Compound autonomously runs web_search as
+  // part of its routing, so any generic traffic that landed here risks
+  // unpredictable per-search surcharges. Keeping them out of the generic
+  // recommendation pools means they are only auto-selected when a caller asks
+  // for RESEARCH explicitly (or pins the model, the intended path).
+  //
+  // costScore 1 (most expensive) on both reflects that surcharge-inflated
+  // effective cost — and structurally keeps them below the generic groq lineup
+  // in every non-RESEARCH pool, including LONG_CONTEXT where no groq model
+  // carries a tag bonus and the slightly larger window would otherwise edge them
+  // ahead. Full Compound outranks Mini for RESEARCH via its higher qualityScore.
+  entry('groq', 'groq/compound', 'active', ['RESEARCH'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0.00015,
+    outputTokenCost: 0.0006,
+    supportsBuiltInTools: ['web_search', 'visit_website', 'browser_automation', 'code_interpreter', 'wolfram_alpha'],
+    supportsVision: false,
+    description: 'Groq Compound — agentic system routing Llama 4 Scout (17B) / GPT-OSS 120B by query complexity; runs all five built-in tools server-side. Token cost estimated; built-in tool surcharges billed separately, not token-tracked.'
+  }, { speed: 4, quality: 5, cost: 1 }),
+  entry('groq', 'groq/compound-mini', 'active', ['RESEARCH'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsBatching: false,
+    inputTokenCost: 0.0001,
+    outputTokenCost: 0.0004,
+    supportsBuiltInTools: ['web_search', 'visit_website', 'browser_automation', 'code_interpreter', 'wolfram_alpha'],
+    supportsVision: false,
+    description: 'Groq Compound Mini — lower-latency single-pass variant of Compound; same five built-in tools. Token cost estimated; built-in tool surcharges billed separately, not token-tracked.'
+  }, { speed: 5, quality: 4, cost: 1 }),
 
   // NVIDIA NIM — costs are zero placeholders (dev-tier credit-based; production
   // pricing varies by model). Update inputTokenCost/outputTokenCost via CreditLedger.
@@ -564,6 +606,11 @@ function scoreUseCase(entry: ModelCatalogEntry, useCase: ModelRecommendationUseC
     TOOL_CALLING: { cost: 2, speed: 3, quality: 5 },
     LONG_CONTEXT: { cost: 2, speed: 2, quality: 4 },
     VISION: { cost: 2, speed: 2, quality: 4 },
+    // Research favours model quality strongly over cost/speed — the workload is
+    // authoritative-source gathering, where a better backing model and richer
+    // built-in-tool routing matter more than latency. Quality-dominant so full
+    // Compound ranks above Compound Mini for the same RESEARCH request.
+    RESEARCH: { cost: 1, speed: 2, quality: 6 },
   } as const;
 
   const weight = weights[useCase];
@@ -876,4 +923,5 @@ export const MODEL_RECOMMENDATIONS = {
   TOOL_CALLING: activeModelsFor('TOOL_CALLING'),
   LONG_CONTEXT: activeModelsFor('LONG_CONTEXT'),
   VISION: activeModelsFor('VISION'),
+  RESEARCH: activeModelsFor('RESEARCH'),
 } as const;
