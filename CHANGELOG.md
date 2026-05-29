@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
-Groq built-in tools (issue #69), landing across stacked PRs. Additive only.
+Groq built-in tools (issue #69). Additive only.
 
 ### Added
 - **`LLMRequest.builtInTools`** — optional `Array<{ type: BuiltInToolType }>` requesting server-side tools (web search, code interpreter, etc.). Normalized identifiers: `web_search`, `visit_website`, `browser_automation`, `code_interpreter`, `wolfram_alpha`. Ignored by providers/models that don't advertise `supportsBuiltInTools`.
@@ -20,6 +20,7 @@ Groq built-in tools (issue #69), landing across stacked PRs. Additive only.
 
 ### Notes
 - Built-in tool surcharges are billed by the provider and are **not** attributed per-call in `TokenUsage`; use `CreditLedger` for accounting.
+- Streaming with `builtInTools` runs the search server-side but emits content deltas only — structured `metadata.builtInToolResults` / `metadata.reasoning` are available on non-streaming `generateResponse` only.
 
 ## [1.9.0] — 2026-05-22
 
