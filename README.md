@@ -428,12 +428,13 @@ Notes:
 - **Capability-aware routing.** `openai/gpt-oss-120b` is hosted by both Cerebras and Groq; only Groq runs built-in tools, so a `builtInTools` request is steered to Groq automatically. Plain requests keep the default routing.
 - **Provenance.** The Compound systems are tagged `RESEARCH`-only in the catalog and are not auto-selected for generic use cases — pin the model (or request the `RESEARCH` use case) to use them, since selecting a Compound model can incur per-search surcharges.
 - **Cost.** Built-in tool surcharges (e.g. web search ~$5/1k requests) are billed by the provider and are **not** attributed per-call in `TokenUsage`; track them via `CreditLedger` if needed.
-- **Citations.** Structured search results surface on `LLMResponse.metadata.builtInToolResults` — `Array<{ type, name?, arguments?, results: [{ title, url, content, score }] }>`. Only executions that ran a web search appear (e.g. `code_interpreter` runs, which carry no citations, are omitted); the field is absent when no search ran. Citation sub-fields are passed through as the provider returns them — treat them as best-effort and validate URLs before use.
+- **Citations.** Structured search results surface on `LLMResponse.metadata.builtInToolResults` — `Array<{ type, name?, arguments?, results: [{ title, url, content, score }] }>`. Only executions that ran a web search appear (e.g. `code_interpreter` runs, which carry no citations, are omitted); the field is absent when no search ran. The model often runs **several** searches in one call, so `builtInToolResults` is an array of executions — iterate all of them (don't read only `[0]`) to get the full citation set. Citation sub-fields are passed through as the provider returns them — treat them as best-effort and validate URLs before use. `score` is the provider's **retrieval-relevance** score, not an authority/quality ranking. Note also that the response `content` is the model's synthesized answer (it may cite a curated subset), while `builtInToolResults` holds the raw retrieved hits — they are different sets.
 - **Reasoning.** When the model exposes its internal reasoning (the queries it searched), it surfaces on `LLMResponse.metadata.reasoning` as a string. Absent when the model doesn't emit it.
 - **Streaming.** `builtInTools` is accepted on streaming requests and the search still runs server-side, but the streaming path emits content deltas only — structured `metadata.builtInToolResults` and `metadata.reasoning` are **not** surfaced while streaming. Use non-streaming `generateResponse` when you need the structured citations.
 
 ```typescript
-const citations = res.metadata?.builtInToolResults?.[0]?.results ?? [];
+// Flatten across all executions — the model may run several searches per call.
+const citations = (res.metadata?.builtInToolResults ?? []).flatMap(exec => exec.results);
 // → [{ title, url, content, score }, …]
 ```
 
