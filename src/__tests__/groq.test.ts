@@ -547,19 +547,17 @@ describe('GroqProvider', () => {
     });
 
     it('rejects built-in tools on a function-only model, naming capable models', async () => {
-      await expect(provider.generateResponse({
+      // Single invocation, asserted twice — a second generateResponse call would
+      // accumulate a circuit-breaker failure and mask the ConfigurationError.
+      const promise = provider.generateResponse({
         messages: [{ role: 'user', content: 'hi' }],
         model: 'llama-3.3-70b-versatile',
         builtInTools: [{ type: 'web_search' }],
         maxTokens: 100,
-      })).rejects.toThrow(ConfigurationError);
+      });
 
-      await expect(provider.generateResponse({
-        messages: [{ role: 'user', content: 'hi' }],
-        model: 'llama-3.3-70b-versatile',
-        builtInTools: [{ type: 'web_search' }],
-        maxTokens: 100,
-      })).rejects.toThrow(/groq\/compound/);
+      await expect(promise).rejects.toBeInstanceOf(ConfigurationError);
+      await expect(promise).rejects.toThrow(/groq\/compound/);
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
