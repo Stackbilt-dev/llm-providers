@@ -70,7 +70,13 @@ describe('GroqProvider', () => {
   describe('getModels', () => {
     it('should return available models', () => {
       const models = provider.getModels();
-      expect(models).toEqual(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-120b']);
+      expect(models).toEqual([
+        'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant',
+        'openai/gpt-oss-120b',
+        'groq/compound',
+        'groq/compound-mini',
+      ]);
     });
 
     it('should return a copy of the models array', () => {
@@ -450,6 +456,137 @@ describe('GroqProvider', () => {
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(body.tools).toHaveLength(1);
+    });
+  });
+
+  describe('built-in tools (S4)', () => {
+    const okResponse = (model: string) => ({
+      ok: true,
+      json: async () => ({
+        id: 'chatcmpl-bi-1',
+        object: 'chat.completion',
+        created: 1700000000,
+        model,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+      }),
+      headers: new Headers({ 'content-type': 'application/json' })
+    });
+
+    it('forks web_search onto compound_custom.tools.enabled_tools for groq/compound', async () => {
+      mockFetch.mockResolvedValueOnce(okResponse('groq/compound'));
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Find sources on X.' }],
+        model: 'groq/compound',
+        builtInTools: [{ type: 'web_search' }],
+        maxTokens: 100,
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.compound_custom).toEqual({ tools: { enabled_tools: ['web_search'] } });
+      // Compound does NOT use the OpenAI-style tools array for built-ins.
+      expect(body.tools).toBeUndefined();
+    });
+
+    it('passes all five normalized identifiers verbatim to compound', async () => {
+      mockFetch.mockResolvedValueOnce(okResponse('groq/compound-mini'));
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Research.' }],
+        model: 'groq/compound-mini',
+        builtInTools: [
+          { type: 'web_search' },
+          { type: 'visit_website' },
+          { type: 'browser_automation' },
+          { type: 'code_interpreter' },
+          { type: 'wolfram_alpha' },
+        ],
+        maxTokens: 100,
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.compound_custom.tools.enabled_tools).toEqual([
+        'web_search', 'visit_website', 'browser_automation', 'code_interpreter', 'wolfram_alpha',
+      ]);
+    });
+
+    it('translates web_search → browser_search on the gpt-oss tools array', async () => {
+      mockFetch.mockResolvedValueOnce(okResponse('openai/gpt-oss-120b'));
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Find sources on X.' }],
+        model: 'openai/gpt-oss-120b',
+        builtInTools: [{ type: 'web_search' }],
+        maxTokens: 100,
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.tools).toEqual([{ type: 'browser_search' }]);
+      expect(body.compound_custom).toBeUndefined();
+    });
+
+    it('merges built-in tools alongside function tools on gpt-oss', async () => {
+      mockFetch.mockResolvedValueOnce(okResponse('openai/gpt-oss-120b'));
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Weather then search.' }],
+        model: 'openai/gpt-oss-120b',
+        tools: [{
+          type: 'function',
+          function: { name: 'get_weather', description: 'Weather', parameters: { type: 'object' } }
+        }],
+        builtInTools: [{ type: 'web_search' }],
+        maxTokens: 100,
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const types = body.tools.map((t: { type: string }) => t.type);
+      expect(types).toContain('function');
+      expect(types).toContain('browser_search');
+    });
+
+    it('rejects built-in tools on a function-only model, naming capable models', async () => {
+      await expect(provider.generateResponse({
+        messages: [{ role: 'user', content: 'hi' }],
+        model: 'llama-3.3-70b-versatile',
+        builtInTools: [{ type: 'web_search' }],
+        maxTokens: 100,
+      })).rejects.toThrow(ConfigurationError);
+
+      await expect(provider.generateResponse({
+        messages: [{ role: 'user', content: 'hi' }],
+        model: 'llama-3.3-70b-versatile',
+        builtInTools: [{ type: 'web_search' }],
+        maxTokens: 100,
+      })).rejects.toThrow(/groq\/compound/);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unsupported tool on gpt-oss, naming its supported subset', async () => {
+      await expect(provider.generateResponse({
+        messages: [{ role: 'user', content: 'hi' }],
+        model: 'openai/gpt-oss-120b',
+        builtInTools: [{ type: 'wolfram_alpha' }],
+        maxTokens: 100,
+      })).rejects.toThrow(/web_search/);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('accepts a pinned groq/compound model through validateRequest', async () => {
+      mockFetch.mockResolvedValueOnce(okResponse('groq/compound'));
+
+      const response = await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Research.' }],
+        model: 'groq/compound',
+        builtInTools: [{ type: 'web_search' }],
+        maxTokens: 100,
+      });
+
+      expect(response.provider).toBe('groq');
+      expect(mockFetch).toHaveBeenCalled();
     });
   });
 
