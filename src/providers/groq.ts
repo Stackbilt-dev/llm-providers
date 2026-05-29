@@ -3,7 +3,7 @@
  * Implementation for Groq fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage, BuiltInTool, BuiltInToolType } from '../types.js';
+import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage, BuiltInTool, BuiltInToolType, BuiltInToolResult } from '../types.js';
 import { BaseProvider } from './base.js';
 import {
   LLMErrorFactory,
@@ -42,6 +42,25 @@ const GROQ_RESPONSE_SCHEMA: SchemaField[] = [
                 { path: 'function.arguments', type: 'string' },
               ],
             },
+          },
+        },
+        // Built-in tool executions (issue #69 S5). Validated SHALLOW on purpose:
+        // only the always-present `type` is checked. `search_results.results`
+        // sub-fields ({title,url,content,score}) are NOT validated here —
+        // SchemaDriftError routes through the fallback chain, and the fallback
+        // host (Cerebras gpt-oss) doesn't run built-in tools, so a false drift
+        // on a citation sub-field (sampled n=1 in the S0 spike) would silently
+        // degrade a working search response into a tool-less one. The parser
+        // soft-degrades instead; citation-field coverage lives in a parser unit
+        // test (the binding note's accepted alternative to a deep fixture).
+        {
+          path: 'message.executed_tools',
+          type: 'array',
+          optional: true,
+          items: {
+            shape: [
+              { path: 'type', type: 'string' },
+            ],
           },
         },
       ],
@@ -106,10 +125,26 @@ interface GroqResponse {
     message: {
       role: string;
       content: string | null;
+      // The model's internal reasoning (exposes built-in search queries).
+      // Present on both compound and gpt-oss when built-in tools run.
+      reasoning?: string;
       tool_calls?: Array<{
         id: string;
         type: 'function';
         function: { name: string; arguments: string };
+      }>;
+      // Server-side built-in tool executions (issue #69). Open-ended `type`
+      // (compound: 'search'; gpt-oss: 'browser_search'/'browser.open'/…); only
+      // search executions carry `search_results.results`. Verified live in S0.
+      executed_tools?: Array<{
+        index?: number;
+        type: string;
+        name?: string;
+        arguments?: string;
+        output?: string;
+        search_results?: {
+          results?: Array<{ title: string; url: string; content: string; score: number }>;
+        };
       }>;
     };
     finish_reason: 'stop' | 'length' | 'content_filter' | 'tool_calls';
@@ -613,6 +648,8 @@ export class GroqProvider extends BaseProvider {
       toolCalls = this.validateToolCalls(raw);
     }
 
+    const builtInToolResults = this.extractBuiltInToolResults(choice.message.executed_tools);
+
     return {
       id: data.id,
       message: content,
@@ -625,9 +662,51 @@ export class GroqProvider extends BaseProvider {
       toolCalls,
       metadata: {
         systemFingerprint: data.system_fingerprint,
-        created: data.created
+        created: data.created,
+        // Surface only when present, to keep metadata clean for plain responses.
+        ...(builtInToolResults ? { builtInToolResults } : {}),
+        ...(choice.message.reasoning ? { reasoning: choice.message.reasoning } : {}),
       }
     };
+  }
+
+  /**
+   * Map Groq's `message.executed_tools[]` → normalized `BuiltInToolResult[]`
+   * (issue #69, verified live in S0).
+   *
+   * Keeps only executions that carry a non-empty `search_results.results` and
+   * flattens those into `results`, preserving the per-execution `type` / `name`
+   * / `arguments`. Non-search executions (e.g. `code_interpreter`) have no
+   * `search_results` and so drop out by design — that's the locked spec, not a
+   * bug. Citation sub-fields are mapped as-is: any field the provider omits
+   * surfaces as `undefined` (soft degrade) rather than throwing, since the
+   * schema deliberately doesn't guard them (consumers HEAD-probe URLs anyway).
+   */
+  private extractBuiltInToolResults(
+    executed: GroqResponse['choices'][number]['message']['executed_tools']
+  ): BuiltInToolResult[] | undefined {
+    if (!executed || executed.length === 0) return undefined;
+
+    const out: BuiltInToolResult[] = [];
+    for (const exec of executed) {
+      const results = exec.search_results?.results;
+      if (!Array.isArray(results) || results.length === 0) continue;
+
+      const entry: BuiltInToolResult = {
+        type: exec.type,
+        results: results.map(r => ({
+          title: r.title,
+          url: r.url,
+          content: r.content,
+          score: r.score,
+        })),
+      };
+      if (exec.name !== undefined) entry.name = exec.name;
+      if (exec.arguments !== undefined) entry.arguments = exec.arguments;
+      out.push(entry);
+    }
+
+    return out.length > 0 ? out : undefined;
   }
 
   private getDefaultModel(request: LLMRequest): string {

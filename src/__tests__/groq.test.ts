@@ -588,6 +588,118 @@ describe('GroqProvider', () => {
     });
   });
 
+  describe('built-in tool results (S5)', () => {
+    // Real wire shape locked from the S0 spike: executed_tools[].search_results
+    // is an object { results: [...] }, results carry {title,url,content,score}.
+    const searchResponse = (model: string, message: Record<string, unknown>) => ({
+      ok: true,
+      json: async () => ({
+        id: 'chatcmpl-bi-res',
+        object: 'chat.completion',
+        created: 1700000000,
+        model,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'answer', ...message }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 30, completion_tokens: 40, total_tokens: 70 }
+      }),
+      headers: new Headers({ 'content-type': 'application/json' })
+    });
+
+    it('flattens compound executed_tools into metadata.builtInToolResults (all four citation fields)', async () => {
+      mockFetch.mockResolvedValueOnce(searchResponse('groq/compound', {
+        reasoning: 'I should search the web.',
+        executed_tools: [{
+          index: 0,
+          type: 'search',
+          arguments: '{"query":"authoritative sources on X"}',
+          search_results: {
+            results: [
+              { title: 'Source A', url: 'https://a.example/x', content: 'snippet A', score: 0.91 },
+              { title: 'Source B', url: 'https://b.example/x', content: 'snippet B', score: 0.84 },
+            ]
+          }
+        }]
+      }));
+
+      const res = await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Find sources.' }],
+        model: 'groq/compound',
+        builtInTools: [{ type: 'web_search' }],
+        maxTokens: 100,
+      });
+
+      const results = res.metadata?.builtInToolResults as Array<Record<string, unknown>>;
+      expect(results).toHaveLength(1);
+      expect(results[0].type).toBe('search');
+      expect(results[0].arguments).toBe('{"query":"authoritative sources on X"}');
+      expect(results[0].name).toBeUndefined(); // compound omits name
+      const citations = results[0].results as Array<Record<string, unknown>>;
+      expect(citations).toHaveLength(2);
+      // Direct assertion on the four citation fields (the binding S5 note).
+      expect(citations[0]).toEqual({ title: 'Source A', url: 'https://a.example/x', content: 'snippet A', score: 0.91 });
+      // reasoning surfaces too
+      expect(res.metadata?.reasoning).toBe('I should search the web.');
+    });
+
+    it('keeps only search executions and preserves gpt-oss name/arguments', async () => {
+      mockFetch.mockResolvedValueOnce(searchResponse('openai/gpt-oss-120b', {
+        executed_tools: [
+          {
+            index: 0,
+            type: 'browser_search',
+            name: 'browser.search',
+            arguments: '{"query":"X"}',
+            search_results: { results: [{ title: 'T', url: 'https://t.example', content: 'c', score: 0.5 }] }
+          },
+          // Non-search execution (no search_results) — dropped by design.
+          { index: 1, type: 'browser.open', name: 'browser.open', arguments: '{"id":1}' },
+        ]
+      }));
+
+      const res = await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Find.' }],
+        model: 'openai/gpt-oss-120b',
+        builtInTools: [{ type: 'web_search' }],
+        maxTokens: 100,
+      });
+
+      const results = res.metadata?.builtInToolResults as Array<Record<string, unknown>>;
+      expect(results).toHaveLength(1);
+      expect(results[0].type).toBe('browser_search');
+      expect(results[0].name).toBe('browser.search');
+    });
+
+    it('omits builtInToolResults when no execution carries results', async () => {
+      mockFetch.mockResolvedValueOnce(searchResponse('groq/compound', {
+        executed_tools: [
+          { index: 0, type: 'code_interpreter', arguments: '{}', output: '42' },
+          { index: 1, type: 'search', search_results: { results: [] } },
+        ]
+      }));
+
+      const res = await provider.generateResponse({
+        messages: [{ role: 'user', content: 'Compute.' }],
+        model: 'groq/compound',
+        builtInTools: [{ type: 'code_interpreter' }],
+        maxTokens: 100,
+      });
+
+      expect(res.metadata?.builtInToolResults).toBeUndefined();
+    });
+
+    it('omits builtInToolResults entirely for a plain response (no executed_tools)', async () => {
+      mockFetch.mockResolvedValueOnce(searchResponse('llama-3.3-70b-versatile', {}));
+
+      const res = await provider.generateResponse({
+        messages: [{ role: 'user', content: 'hi' }],
+        model: 'llama-3.3-70b-versatile',
+        maxTokens: 100,
+      });
+
+      expect(res.metadata?.builtInToolResults).toBeUndefined();
+      expect(res.metadata?.reasoning).toBeUndefined();
+    });
+  });
+
   describe('healthCheck', () => {
     it('should return true when API is healthy', async () => {
       mockFetch.mockResolvedValueOnce({
