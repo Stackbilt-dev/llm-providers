@@ -178,6 +178,8 @@ const llm = new LLMProviders({
 });
 ```
 
+> **Server-side built-in tool surcharges are not token-tracked.** Costs in `TokenUsage` and the ledger cover token spend only. Groq's built-in tools bill separately per use (web search ~$5/1k requests, code interpreter ~$0.18/hr, browser automation ~$0.08/hr) and are **not** attributed per call in v1. If you run `builtInTools` workloads, account for these surcharges out of band (e.g. a manual ledger adjustment or a separate budget line).
+
 ## Model Catalog & Runtime Selection
 
 Model selection is driven by a declarative catalog rather than a hardcoded fallback array. The selector intersects:
@@ -428,6 +430,7 @@ Notes:
 - **Cost.** Built-in tool surcharges (e.g. web search ~$5/1k requests) are billed by the provider and are **not** attributed per-call in `TokenUsage`; track them via `CreditLedger` if needed.
 - **Citations.** Structured search results surface on `LLMResponse.metadata.builtInToolResults` — `Array<{ type, name?, arguments?, results: [{ title, url, content, score }] }>`. Only executions that ran a web search appear (e.g. `code_interpreter` runs, which carry no citations, are omitted); the field is absent when no search ran. Citation sub-fields are passed through as the provider returns them — treat them as best-effort and validate URLs before use.
 - **Reasoning.** When the model exposes its internal reasoning (the queries it searched), it surfaces on `LLMResponse.metadata.reasoning` as a string. Absent when the model doesn't emit it.
+- **Streaming.** `builtInTools` is accepted on streaming requests and the search still runs server-side, but the streaming path emits content deltas only — structured `metadata.builtInToolResults` and `metadata.reasoning` are **not** surfaced while streaming. Use non-streaming `generateResponse` when you need the structured citations.
 
 ```typescript
 const citations = res.metadata?.builtInToolResults?.[0]?.results ?? [];
@@ -509,7 +512,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `AnthropicProvider` | Anthropic Claude models (streaming, tools) |
 | `CloudflareProvider` | Cloudflare Workers AI (streaming, tools on GPT-OSS/Gemma 4/Llama 4, batch) |
 | `CerebrasProvider` | Cerebras fast inference (streaming, tools on GLM/Qwen) |
-| `GroqProvider` | Groq fast inference (streaming, tools on GPT-OSS/LLaMA 3.3 70B) |
+| `GroqProvider` | Groq fast inference (streaming, tools on GPT-OSS/LLaMA 3.3 70B; server-side built-in tools on Compound systems and GPT-OSS) |
 | `NvidiaProvider` | NVIDIA NIM inference (streaming, tools on Llama/Nemotron/Mistral) |
 | `BaseProvider` | Abstract base with shared resiliency, metrics, and cost calculation |
 
@@ -542,8 +545,10 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 
 | Type | Description |
 |------|-------------|
-| `LLMRequest` | Unified request: messages, model, temperature, tools, response_format, cache, lora |
-| `LLMResponse` | Unified response: message, usage (with cost), provider, tool calls |
+| `LLMRequest` | Unified request: messages, model, temperature, tools, builtInTools, response_format, cache, lora |
+| `LLMResponse` | Unified response: message, usage (with cost), provider, tool calls, metadata (builtInToolResults, reasoning) |
+| `BuiltInTool` / `BuiltInToolType` | Server-side tool request: `{ type }` where type is `web_search` \| `visit_website` \| `browser_automation` \| `code_interpreter` \| `wolfram_alpha` |
+| `BuiltInToolResult` | A surfaced built-in execution: `{ type, name?, arguments?, results: [{ title, url, content, score }] }` on `metadata.builtInToolResults` |
 | `TokenUsage` | Token counts, cost, and cached token fields (cachedInputTokens, cacheReadInputTokens, cacheCreationInputTokens) |
 | `CacheHints` | Cache strategy, key, ttl, sessionId, cacheablePrefix for provider-agnostic prompt caching |
 | `ToolExecutor` | Interface for `generateResponseWithTools`: `execute(name, args) => Promise<unknown>` |
