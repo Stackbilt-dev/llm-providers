@@ -3,6 +3,24 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Groq built-in tools (issue #69), landing across stacked PRs. Additive only.
+
+### Added
+- **`LLMRequest.builtInTools`** — optional `Array<{ type: BuiltInToolType }>` requesting server-side tools (web search, code interpreter, etc.). Normalized identifiers: `web_search`, `visit_website`, `browser_automation`, `code_interpreter`, `wolfram_alpha`. Ignored by providers/models that don't advertise `supportsBuiltInTools`.
+- **`BuiltInTool`, `BuiltInToolType`, `BuiltInToolResult` types** — exported from package root. `BuiltInToolResult` mirrors Groq's `executed_tools[]` (`{ type, name?, arguments?, results: [{ title, url, content, score }] }`); `type` is provider-native and open-ended.
+- **`ModelCapabilities.supportsBuiltInTools`** — per-model list of built-in tools a (model, provider) pair advertises; drives capability-aware routing and boundary gating.
+- **`modelSupportsBuiltInTools(model, provider, tool?)`** — catalog accessor; the single source of truth for built-in-tool gating.
+- **`groq/compound` + `groq/compound-mini` catalog entries** — Groq Compound systems (all five built-in tools), tagged `RESEARCH`-only so they stay out of generic recommendation pools (selecting a Compound model can incur per-search surcharges). `MODELS.GROQ_COMPOUND` / `MODELS.GROQ_COMPOUND_MINI` exported.
+- **`RESEARCH` `ModelRecommendationUseCase`** — new use case with `scoreUseCase` weights and a `MODEL_RECOMMENDATIONS.RESEARCH` list; honored by `factory.resolveUseCase()` via `metadata.useCase`. Not inferred from request shape (opt-in only).
+- **Capability-aware built-in-tools routing** — `openai/gpt-oss-120b` is hosted by both Cerebras and Groq; a `builtInTools` request is steered to Groq (the capable host) while plain requests keep the prior default. Resolves the catalog collision via `getProvidersForCatalogModel`.
+- **Groq built-in-tools request fork + boundary gating** — Compound systems send tools on `compound_custom.tools.enabled_tools` (identifiers verbatim); `openai/gpt-oss-120b` sends OpenAI-style `tools: [{ type }]` with `web_search` → `browser_search` translation, merged alongside function tools. Unsupported `(model, tool)` pairs throw `ConfigurationError` naming the capable models.
+
+### Notes
+- Built-in tool surcharges are billed by the provider and are **not** attributed per-call in `TokenUsage`; use `CreditLedger` for accounting.
+- Structured result surfacing (`metadata.builtInToolResults`) for the Groq adapter is being wired in a follow-up PR; the request path and gating are complete.
+
 ## [1.9.0] — 2026-05-22
 
 ### Added

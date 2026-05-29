@@ -13,6 +13,7 @@ A multi-provider LLM abstraction layer with automatic failover, graduated circui
 - **Streaming with fallback** -- SSE streaming on all providers; factory-level streaming routes through the same circuit-breaker and fallback chain as non-streaming requests
 - **Tool/function calling** -- OpenAI, Anthropic, Cerebras, and Cloudflare tool use with unified response format
 - **Tool-use loop helper** -- `generateResponseWithTools` owns the request → parse → execute → repeat cycle with iteration caps, cost limits, abort signal support, and `onIteration` early-exit via `{ abort: true }`
+- **Server-side built-in tools** -- `LLMRequest.builtInTools` (e.g. `[{ type: 'web_search' }]`) drives Groq's Compound systems and GPT-OSS 120B to run web search / code interpreter server-side; capability-gated per model and routed to the capable provider automatically
 - **Routing introspection** -- `getRoutingInfo()` returns a pre-flight routing snapshot (use case, provider, model, token estimate, lifecycle, deprecation warning) without dispatching the request; pairs with `request.metadata.useCase` to pre-classify intent at the gateway and let the catalog drive dispatch
 - **Deprecation annotations** -- `generateResponse()` attaches `metadata.llmProvidersDeprecationWarning` to every response that uses a non-active-lifecycle model
 - **Provider-agnostic cache hints** -- `LLMRequest.cache` translates to provider-native caching (Anthropic `cache_control` breakpoints; automatic on OpenAI/Groq/Cerebras); cached token counts normalized into `TokenUsage`
@@ -83,7 +84,7 @@ const llm = LLMProviders.fromEnv(env, {
 | **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Sonnet 4, Haiku 4.5, 3.7 Sonnet, 3.5 Sonnet/Haiku, 3 Opus/Sonnet | Yes | Yes | Default: `claude-haiku-4-5-20251001` |
 | **Cloudflare** | Gemma 4 26B, Llama 4 Scout, GPT-OSS 120B, LLaMA 3.x, Mistral 7B, Qwen 1.5, TinyLlama, and more | Yes | GPT-OSS, Gemma 4, Llama 4 Scout | Default is request-aware and catalog-driven |
 | **Cerebras** | GPT-OSS 120B, ZAI-GLM 4.7, LLaMA 3.1 8B *(deprecated 2026-05-27)*, Qwen 3 235B *(deprecated 2026-05-27)* | Yes | GLM, Qwen, GPT-OSS | ~2,200 tok/s |
-| **Groq** | LLaMA 3.3 70B Versatile, LLaMA 3.1 8B Instant, GPT-OSS 120B | Yes | LLaMA 3.3 70B, GPT-OSS 120B | Ultra-fast inference |
+| **Groq** | LLaMA 3.3 70B Versatile, LLaMA 3.1 8B Instant, GPT-OSS 120B, Compound, Compound Mini | Yes | LLaMA 3.3 70B, GPT-OSS 120B | Ultra-fast inference; Compound systems run built-in tools |
 | **NVIDIA NIM** | Llama 3.3/3.1 70B, Llama 4 Maverick, Nemotron 70B/49B/253B, Mistral Large 2, DeepSeek V4 Flash/Pro | Yes | Llama, Nemotron, Mistral Large 2 | Costs $0 placeholder — dev-tier credits; set real rates in `CreditLedger` |
 
 ### Provider Configuration
@@ -330,6 +331,8 @@ MODELS.CLAUDE_HAIKU_4_5;        // 'claude-haiku-4-5-20251001'
 MODELS.GPT_4O;                  // 'gpt-4o' (deprecated / compatibility only)
 MODELS.GPT_4O_MINI;             // 'gpt-4o-mini'
 MODELS.CEREBRAS_ZAI_GLM_4_7;    // 'zai-glm-4.7'
+MODELS.GROQ_COMPOUND;           // 'groq/compound' (RESEARCH; built-in tools)
+MODELS.GROQ_COMPOUND_MINI;      // 'groq/compound-mini'
 MODELS.NVIDIA_NEMOTRON_70B;     // 'nvidia/llama-3.1-nemotron-70b-instruct'
 MODELS.NVIDIA_LLAMA_4_MAVERICK; // 'meta/llama-4-maverick-17b-128e-instruct'
 
@@ -395,6 +398,35 @@ const result = await llm.generateResponseWithTools(
 
 console.log(result.message); // final assistant response after tool execution
 ```
+
+## Built-in Tools (Server-Side)
+
+Some models run tools **server-side** — the provider executes web search, code interpretation, etc. inside a single completion call, no execute callback required. Set `LLMRequest.builtInTools` with normalized identifiers; the adapter translates to each model family's native wire shape and rejects unsupported combinations at the boundary.
+
+```typescript
+import { LLMProviders, MODELS } from '@stackbilt/llm-providers';
+
+const llm = LLMProviders.fromEnv(env);
+const res = await llm.generateResponse({
+  model: MODELS.GROQ_COMPOUND,                 // 'groq/compound'
+  messages: [{ role: 'user', content: 'Find authoritative sources on topic X.' }],
+  builtInTools: [{ type: 'web_search' }],
+});
+```
+
+Normalized identifiers: `web_search`, `visit_website`, `browser_automation`, `code_interpreter`, `wolfram_alpha`.
+
+| Model | Built-in tools | Wire shape |
+|-------|----------------|------------|
+| `groq/compound`, `groq/compound-mini` | all five | `compound_custom.tools.enabled_tools` (identifiers verbatim) |
+| `openai/gpt-oss-120b` (Groq) | `web_search`, `code_interpreter` | OpenAI-style `tools: [{ type }]`, `web_search` → `browser_search` |
+| all other models | — | rejected with `ConfigurationError` naming the capable models |
+
+Notes:
+- **Capability-aware routing.** `openai/gpt-oss-120b` is hosted by both Cerebras and Groq; only Groq runs built-in tools, so a `builtInTools` request is steered to Groq automatically. Plain requests keep the default routing.
+- **Provenance.** The Compound systems are tagged `RESEARCH`-only in the catalog and are not auto-selected for generic use cases — pin the model (or request the `RESEARCH` use case) to use them, since selecting a Compound model can incur per-search surcharges.
+- **Cost.** Built-in tool surcharges (e.g. web search ~$5/1k requests) are billed by the provider and are **not** attributed per-call in `TokenUsage`; track them via `CreditLedger` if needed.
+- **Citations.** Structured search results surface on `LLMResponse.metadata.builtInToolResults` (`{ type, name?, arguments?, results: [{ title, url, content, score }] }`). Result parsing for the Groq adapter is being wired in a follow-up; the request path and gating described here are live today.
 
 ## Prompt Cache Hints
 
