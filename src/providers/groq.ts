@@ -3,7 +3,7 @@
  * Implementation for Groq fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage } from '../types.js';
+import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage, BuiltInTool, BuiltInToolType } from '../types.js';
 import { BaseProvider } from './base.js';
 import {
   LLMErrorFactory,
@@ -11,7 +11,7 @@ import {
   ConfigurationError,
   SchemaDriftError
 } from '../errors.js';
-import { getProviderDefaultModel } from '../model-catalog.js';
+import { getProviderDefaultModel, getCatalogEntry, modelSupportsBuiltInTools } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 
 // Groq serves the OpenAI /chat/completions contract — same envelope shape as
@@ -60,7 +60,7 @@ interface GroqMessage {
   tool_call_id?: string;
 }
 
-interface GroqTool {
+interface GroqFunctionTool {
   type: 'function';
   function: {
     name: string;
@@ -68,6 +68,15 @@ interface GroqTool {
     parameters: Record<string, unknown>;
   };
 }
+
+// Built-in tool entry on the OpenAI-compatible `tools` array, used by the
+// gpt-oss path (e.g. `{ type: 'browser_search' }`). `type` is the provider's
+// native wire identifier, not our normalized `BuiltInToolType`.
+interface GroqBuiltInTool {
+  type: string;
+}
+
+type GroqTool = GroqFunctionTool | GroqBuiltInTool;
 
 interface GroqRequest {
   model: string;
@@ -80,6 +89,10 @@ interface GroqRequest {
     | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
   tools?: GroqTool[];
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  // Compound systems (groq/compound*) configure built-in tools here rather than
+  // on the OpenAI-style `tools` array. `enabled_tools` takes Groq's compound
+  // vocabulary, which equals our normalized BuiltInToolType identifiers.
+  compound_custom?: { tools: { enabled_tools: string[] } };
   seed?: number;
 }
 
@@ -119,12 +132,28 @@ const TOOL_CAPABLE_MODELS = new Set([
   'llama-3.3-70b-versatile',
 ]);
 
+// Compound systems configure built-in tools via `compound_custom.tools`, taking
+// the normalized identifiers verbatim. Every other capable model (gpt-oss) uses
+// the OpenAI-style `tools` array with a different vocabulary.
+const COMPOUND_MODELS = new Set(['groq/compound', 'groq/compound-mini']);
+
+// Translate normalized BuiltInToolType → gpt-oss native wire identifier. Only
+// the tools the catalog advertises for gpt-oss appear here; the capability gate
+// (modelSupportsBuiltInTools) runs first, so a missing key after the gate passes
+// is an internal map/catalog drift, not a caller error.
+const GPT_OSS_BUILTIN_WIRE: Partial<Record<BuiltInToolType, string>> = {
+  web_search: 'browser_search',
+  code_interpreter: 'code_interpreter',
+};
+
 export class GroqProvider extends BaseProvider {
   name = 'groq';
   models = [
     'llama-3.3-70b-versatile',
     'llama-3.1-8b-instant',
     'openai/gpt-oss-120b',
+    'groq/compound',
+    'groq/compound-mini',
   ];
   supportsStreaming = true;
   supportsTools = true;
@@ -243,6 +272,27 @@ export class GroqProvider extends BaseProvider {
         inputTokenCost: 0.00015, // $0.15 per 1M tokens (cached: $0.075/MTok)
         outputTokenCost: 0.0006,  // $0.60 per 1M tokens
         description: 'GPT-OSS 120B - OpenAI-compatible tool calling on Groq'
+      },
+      // Compound systems: token costs are estimates (roll-up of the backing
+      // models); built-in tool surcharges are billed separately and not
+      // token-tracked. See model-catalog.ts for the routing rationale.
+      'groq/compound': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.00015,
+        outputTokenCost: 0.0006,
+        description: 'Groq Compound - agentic system with server-side built-in tools'
+      },
+      'groq/compound-mini': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsBatching: false,
+        inputTokenCost: 0.0001,
+        outputTokenCost: 0.0004,
+        description: 'Groq Compound Mini - lower-latency built-in-tools system'
       }
     };
   }
@@ -456,7 +506,68 @@ export class GroqProvider extends BaseProvider {
       }
     }
 
+    // Built-in tools (web_search etc.) — gated against the catalog and forked by
+    // model family. Runs independently of the function-tool path above; gpt-oss
+    // can carry both at once on the same `tools` array.
+    if (request.builtInTools && request.builtInTools.length > 0) {
+      this.applyBuiltInTools(groqRequest, model, request.builtInTools);
+    }
+
     return groqRequest;
+  }
+
+  /**
+   * Gate and serialize built-in tools onto a Groq request.
+   *
+   * Capability is checked against the catalog (`modelSupportsBuiltInTools`) so
+   * the adapter and catalog can't drift. The wire shape then forks by family:
+   * compound systems take the normalized identifiers on
+   * `compound_custom.tools.enabled_tools`; gpt-oss takes OpenAI-style
+   * `{ type }` entries on the shared `tools` array, translated to its native
+   * vocabulary (`web_search` → `browser_search`).
+   */
+  private applyBuiltInTools(
+    groqRequest: GroqRequest,
+    model: string,
+    builtInTools: BuiltInTool[]
+  ): void {
+    for (const tool of builtInTools) {
+      if (!modelSupportsBuiltInTools(model, 'groq', tool.type)) {
+        const supported = getCatalogEntry(model)?.capabilities.supportsBuiltInTools ?? [];
+        const detail = supported.length > 0
+          ? `Model '${model}' supports built-in tools [${supported.join(', ')}] but not '${tool.type}'.`
+          : `Model '${model}' does not support built-in tools on Groq.`;
+        throw new ConfigurationError(
+          this.name,
+          `${detail} Built-in tools require groq/compound or groq/compound-mini ` +
+          `(all tools), or openai/gpt-oss-120b (web_search, code_interpreter).`
+        );
+      }
+    }
+
+    if (COMPOUND_MODELS.has(model)) {
+      // Compound's enabled_tools vocabulary equals the normalized identifiers —
+      // no translation. Dedupe to keep the wire payload clean.
+      groqRequest.compound_custom = {
+        tools: { enabled_tools: [...new Set(builtInTools.map(t => t.type))] }
+      };
+      return;
+    }
+
+    // gpt-oss path: merge built-in entries into the OpenAI-style tools array.
+    const builtInEntries: GroqBuiltInTool[] = builtInTools.map(tool => {
+      const wireType = GPT_OSS_BUILTIN_WIRE[tool.type];
+      if (!wireType) {
+        // Gate passed but no wire mapping — catalog advertises a tool the
+        // translation map doesn't cover. Internal drift, not a caller error.
+        throw new ConfigurationError(
+          this.name,
+          `Internal: no Groq wire mapping for built-in tool '${tool.type}' on '${model}'`
+        );
+      }
+      return { type: wireType };
+    });
+    groqRequest.tools = [...(groqRequest.tools ?? []), ...builtInEntries];
   }
 
   private formatResponse(
