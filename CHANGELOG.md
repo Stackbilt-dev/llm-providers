@@ -3,7 +3,7 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.10.0] — 2026-05-29
 
 Groq built-in tools (issue #69). Additive only.
 
