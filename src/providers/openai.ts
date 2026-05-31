@@ -14,6 +14,7 @@ import {
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
+import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
 
 // Minimum envelope `formatResponse` reads. `tool_calls` uses a discriminated
 // union (single `function` variant today) so an additive new tool type upstream
@@ -92,6 +93,7 @@ interface OpenAIRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  stream_options?: { include_usage?: boolean };
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
   response_format?:
@@ -460,11 +462,18 @@ export class OpenAIProvider extends BaseProvider {
   async streamResponse(request: LLMRequest): Promise<ReadableStream<string>> {
     this.validateRequest(request);
 
-    const openaiRequest = { ...this.formatRequest(request), stream: true };
+    const openaiRequest = {
+      ...this.formatRequest(request),
+      stream: true,
+      stream_options: { include_usage: true }
+    };
     const hooks = this.config.hooks;
     const providerName = this.name;
+    const usageTracker = createStreamUsageTracker();
+    const model = openaiRequest.model;
+    let finalUsage: TokenUsage | undefined;
 
-    return new ReadableStream({
+    const stream = new ReadableStream<string>({
       start: async (controller) => {
         try {
           const response = await this.makeOpenAIRequest('/chat/completions', openaiRequest, 'POST', request);
@@ -507,7 +516,11 @@ export class OpenAIProvider extends BaseProvider {
 
               const data = line.slice(6).trim();
               if (data === '[DONE]' || data === '') {
-                if (data === '[DONE]') { controller.close(); return; }
+                if (data === '[DONE]') {
+                  usageTracker.resolve(finalUsage);
+                  controller.close();
+                  return;
+                }
                 continue;
               }
 
@@ -524,6 +537,9 @@ export class OpenAIProvider extends BaseProvider {
 
               if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
               const chunk = parsed as Record<string, unknown>;
+              const parsedUsage = this.parseOpenAICompatibleStreamUsage(chunk['usage'], model);
+              if (parsedUsage) finalUsage = parsedUsage;
+
               const choices = chunk['choices'];
               if (!Array.isArray(choices) || choices.length === 0) continue;
               const delta = (choices[0] as Record<string, unknown>)['delta'];
@@ -543,12 +559,16 @@ export class OpenAIProvider extends BaseProvider {
             }
           }
 
+          usageTracker.resolve(finalUsage);
           controller.close();
         } catch (error) {
+          usageTracker.resolve(undefined);
           controller.error(error);
         }
       }
     });
+
+    return attachStreamUsage(stream, usageTracker.promise);
   }
 
   /**

@@ -43,6 +43,7 @@ import { GroqProvider } from './providers/groq.js';
 import { NvidiaProvider } from './providers/nvidia.js';
 import { CostTracker, defaultCostTracker } from './utils/cost-tracker.js';
 import type { ProviderCostBreakdownEntry } from './utils/cost-tracker.js';
+import { getStreamUsage } from './utils/stream-usage.js';
 import type { CreditLedger } from './utils/credit-ledger.js';
 import { defaultCircuitBreakerManager } from './utils/circuit-breaker.js';
 import { defaultExhaustionRegistry } from './utils/exhaustion.js';
@@ -434,7 +435,8 @@ export class LLMProviderFactory {
           model,
           providerRequest,
           startTime,
-          estimatedCost
+          estimatedCost,
+          opened.usage
         );
       } catch (error) {
         const err = error as Error;
@@ -1068,18 +1070,25 @@ export class LLMProviderFactory {
   private async openStreamWithFirstChunk(
     provider: LLMProvider,
     request: LLMRequest
-  ): Promise<{ reader: ReadableStreamDefaultReader<string>; firstChunk?: string; done: boolean }> {
+  ): Promise<{
+    reader: ReadableStreamDefaultReader<string>;
+    firstChunk?: string;
+    done: boolean;
+    usage?: Promise<LLMResponse['usage'] | undefined>;
+  }> {
     if (!provider.streamResponse) {
       throw new ConfigurationError(provider.name, 'Provider does not support streaming');
     }
 
     const stream = await provider.streamResponse(request);
+    const usage = getStreamUsage(stream);
     const reader = stream.getReader();
     const first = await reader.read();
     return {
       reader,
       firstChunk: first.value,
-      done: first.done
+      done: first.done,
+      usage
     };
   }
 
@@ -1091,7 +1100,8 @@ export class LLMProviderFactory {
     model: string,
     request: LLMRequest,
     startTime: number,
-    estimatedCost: number
+    estimatedCost: number,
+    streamUsage?: Promise<LLMResponse['usage'] | undefined>
   ): ReadableStream<string> {
     return new ReadableStream<string>({
       start: async (controller) => {
@@ -1108,7 +1118,22 @@ export class LLMProviderFactory {
             }
           }
 
-          const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: estimatedCost };
+          const usage = await streamUsage?.catch(() => undefined) ?? {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            cost: estimatedCost
+          };
+          const responseForUsage: LLMResponse = {
+            message: '',
+            usage,
+            model,
+            provider: providerName,
+            responseTime: Date.now() - startTime,
+          };
+          if (this.config.costOptimization || this.config.ledger) {
+            this.costTracker.trackCost(providerName, responseForUsage);
+          }
           this.hooks.onRequestEnd?.({
             provider: providerName,
             model,
@@ -1119,13 +1144,7 @@ export class LLMProviderFactory {
             finishReason: 'stop',
             timestamp: Date.now(),
           });
-          this.recordQuotaInput({
-            tenantId: request.tenantId,
-            provider: providerName,
-            model,
-            actualCost: estimatedCost,
-            metadata: request.metadata
-          });
+          this.recordQuota(providerName, responseForUsage, request);
           controller.close();
         } catch (error) {
           controller.error(error);

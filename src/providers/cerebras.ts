@@ -13,6 +13,7 @@ import {
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
+import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
 
 // Cerebras serves the OpenAI /chat/completions contract. See groq.ts for the
 // rationale on keeping each OpenAI-compat provider's schema as its own
@@ -74,6 +75,7 @@ interface CerebrasRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  stream_options?: { include_usage?: boolean };
   tools?: CerebrasTool[];
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   seed?: number;
@@ -275,11 +277,18 @@ export class CerebrasProvider extends BaseProvider {
   async streamResponse(request: LLMRequest): Promise<ReadableStream<string>> {
     this.validateRequest(request);
 
-    const cerebrasRequest = { ...this.formatRequest(request), stream: true };
+    const cerebrasRequest = {
+      ...this.formatRequest(request),
+      stream: true,
+      stream_options: { include_usage: true }
+    };
     const hooks = this.config.hooks;
     const providerName = this.name;
+    const usageTracker = createStreamUsageTracker();
+    const model = cerebrasRequest.model;
+    let finalUsage: TokenUsage | undefined;
 
-    return new ReadableStream({
+    const stream = new ReadableStream<string>({
       start: async (controller) => {
         try {
           const response = await this.makeCerebrasRequest('/chat/completions', cerebrasRequest, 'POST', request);
@@ -322,7 +331,11 @@ export class CerebrasProvider extends BaseProvider {
 
               const data = line.slice(6).trim();
               if (data === '[DONE]' || data === '') {
-                if (data === '[DONE]') { controller.close(); return; }
+                if (data === '[DONE]') {
+                  usageTracker.resolve(finalUsage);
+                  controller.close();
+                  return;
+                }
                 continue;
               }
 
@@ -339,6 +352,9 @@ export class CerebrasProvider extends BaseProvider {
 
               if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
               const chunk = parsed as Record<string, unknown>;
+              const parsedUsage = this.parseOpenAICompatibleStreamUsage(chunk['usage'], model);
+              if (parsedUsage) finalUsage = parsedUsage;
+
               const choices = chunk['choices'];
               if (!Array.isArray(choices) || choices.length === 0) continue;
               const delta = (choices[0] as Record<string, unknown>)['delta'];
@@ -358,12 +374,16 @@ export class CerebrasProvider extends BaseProvider {
             }
           }
 
+          usageTracker.resolve(finalUsage);
           controller.close();
         } catch (error) {
+          usageTracker.resolve(undefined);
           controller.error(error);
         }
       }
     });
+
+    return attachStreamUsage(stream, usageTracker.promise);
   }
 
   private async makeCerebrasRequest(

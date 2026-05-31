@@ -22,6 +22,7 @@ import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
 import { defaultCostTracker } from '../utils/cost-tracker';
 import { defaultLatencyHistogram } from '../utils/latency-histogram';
+import { getStreamUsage } from '../utils/stream-usage';
 import type { ObservabilityHooks, SchemaDriftEvent } from '../utils/hooks';
 
 const mockFetch = vi.fn();
@@ -993,6 +994,17 @@ function openAiSseDelta(content: string): string {
   return JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] });
 }
 
+function openAiSseUsage(inputTokens: number, outputTokens: number): string {
+  return JSON.stringify({
+    choices: [],
+    usage: {
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: inputTokens + outputTokens,
+    },
+  });
+}
+
 describe.each(openAiCompatStreamCases)('$name streaming SSE schema validation (#41)', ({ factory, model, providerKey }) => {
   let provider: BaseProvider;
 
@@ -1016,6 +1028,33 @@ describe.each(openAiCompatStreamCases)('$name streaming SSE schema validation (#
       model,
     });
     expect(await drainStream(stream)).toBe('Hello, world!');
+  });
+
+  it('requests stream usage and exposes final token counts', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        openAiSseDelta('Hello'),
+        openAiSseUsage(11, 7),
+        '[DONE]',
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model,
+    });
+    const usage = getStreamUsage(stream);
+
+    expect(await drainStream(stream)).toBe('Hello');
+    expect(await usage).toMatchObject({
+      inputTokens: 11,
+      outputTokens: 7,
+      totalTokens: 18,
+    });
+
+    const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.stream_options).toEqual({ include_usage: true });
   });
 
   it('closes cleanly on [DONE] without error', async () => {
@@ -1128,6 +1167,44 @@ describe('AnthropicProvider streaming SSE schema validation (#41)', () => {
     });
 
     expect(await drainStream(stream)).toBe('Hello, world!');
+  });
+
+  it('exposes final stream usage from message_start and message_delta events', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: sseBody([
+        JSON.stringify({
+          type: 'message_start',
+          message: {
+            id: 'msg_1',
+            usage: {
+              input_tokens: 9,
+              output_tokens: 0,
+              cache_read_input_tokens: 3,
+              cache_creation_input_tokens: 2,
+            },
+          },
+        }),
+        validTextDelta('hi'),
+        JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 4 } }),
+        '[DONE]',
+      ]),
+    });
+
+    const stream = await provider.streamResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+    const usage = getStreamUsage(stream);
+
+    expect(await drainStream(stream)).toBe('hi');
+    expect(await usage).toMatchObject({
+      inputTokens: 9,
+      outputTokens: 4,
+      totalTokens: 13,
+      cacheReadInputTokens: 3,
+      cacheCreationInputTokens: 2,
+    });
   });
 
   it('skips non-content-block-delta events (forward-compat)', async () => {

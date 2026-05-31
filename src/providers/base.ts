@@ -11,7 +11,8 @@ import type {
   ProviderConfig,
   ModelCapabilities,
   ProviderMetrics,
-  ToolCall
+  ToolCall,
+  TokenUsage
 } from '../types.js';
 import type { Logger } from '../utils/logger.js';
 import { noopLogger } from '../utils/logger.js';
@@ -404,6 +405,43 @@ export abstract class BaseProvider implements LLMProvider {
     const outputCost = (outputTokens / 1000) * capabilities.outputTokenCost;
 
     return inputCost + outputCost;
+  }
+
+  protected parseOpenAICompatibleStreamUsage(
+    rawUsage: unknown,
+    model: string
+  ): TokenUsage | undefined {
+    if (!rawUsage || typeof rawUsage !== 'object' || Array.isArray(rawUsage)) return undefined;
+
+    const usage = rawUsage as Record<string, unknown>;
+    const inputTokens = usage['prompt_tokens'];
+    const outputTokens = usage['completion_tokens'];
+    const totalTokens = usage['total_tokens'];
+
+    if (
+      typeof inputTokens !== 'number' ||
+      typeof outputTokens !== 'number' ||
+      typeof totalTokens !== 'number'
+    ) {
+      return undefined;
+    }
+
+    const parsed: TokenUsage = {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      cost: this.calculateCost(inputTokens, outputTokens, model),
+    };
+
+    const details = usage['prompt_tokens_details'];
+    if (details && typeof details === 'object' && !Array.isArray(details)) {
+      const cachedTokens = (details as Record<string, unknown>)['cached_tokens'];
+      if (typeof cachedTokens === 'number') {
+        parsed.cachedInputTokens = cachedTokens;
+      }
+    }
+
+    return parsed;
   }
 
   /**

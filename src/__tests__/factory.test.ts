@@ -13,6 +13,7 @@ import { defaultCostTracker } from '../utils/cost-tracker';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
 import { defaultLatencyHistogram } from '../utils/latency-histogram';
+import { attachStreamUsage } from '../utils/stream-usage';
 
 // Mock providers
 const mockOpenAIProvider = {
@@ -445,6 +446,51 @@ describe('LLMProviderFactory', () => {
       expect(await readStream(stream)).toBe('Anthropic stream');
       expect(mockOpenAIProvider.streamResponse).toHaveBeenCalled();
       expect(mockAnthropicProvider.streamResponse).toHaveBeenCalled();
+    });
+
+    it('records actual stream usage after the stream drains', async () => {
+      const quotaHook = {
+        check: vi.fn().mockResolvedValue({ allowed: true, remainingBudget: 1 }),
+        record: vi.fn().mockResolvedValue(undefined)
+      };
+      const streamFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'openai',
+        costOptimization: true,
+        quotaHook
+      });
+      const usage: LLMResponse['usage'] = {
+        inputTokens: 12,
+        outputTokens: 34,
+        totalTokens: 46,
+        cost: 0.123
+      };
+      const providerStream = attachStreamUsage(new ReadableStream<string>({
+        start(controller) {
+          controller.enqueue('OpenAI stream');
+          controller.close();
+        }
+      }), Promise.resolve(usage));
+
+      mockOpenAIProvider.streamResponse.mockResolvedValueOnce(providerStream);
+
+      const stream = await streamFactory.generateResponseStream({
+        ...testRequest,
+        tenantId: 'tenant-stream'
+      });
+
+      expect(await readStream(stream)).toBe('OpenAI stream');
+      expect(quotaHook.record).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId: 'tenant-stream',
+        provider: 'openai',
+        actualCost: 0.123,
+        inputTokens: 12,
+        outputTokens: 34
+      }));
+      expect(streamFactory.getCostAnalytics().breakdown?.openai).toMatchObject({
+        cost: 0.123,
+        tokens: { input: 12, output: 34 }
+      });
     });
 
     it('should call quota hooks before and after successful dispatch', async () => {

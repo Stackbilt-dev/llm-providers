@@ -23,6 +23,7 @@ import {
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
+import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
 
 /**
  * Minimum envelope fields the Anthropic response parser reads. Changing this
@@ -606,8 +607,31 @@ export class AnthropicProvider extends BaseProvider {
     const anthropicRequest = { ...this.formatRequest(request), stream: true };
     const hooks = this.config.hooks;
     const providerName = this.name;
+    const usageTracker = createStreamUsageTracker();
+    const model = anthropicRequest.model;
+    let sawUsage = false;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadInputTokens: number | undefined;
+    let cacheCreationInputTokens: number | undefined;
 
-    return new ReadableStream({
+    const currentUsage = (): TokenUsage | undefined => {
+      if (!sawUsage) return undefined;
+
+      const usage: TokenUsage = {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        cost: this.calculateCost(inputTokens, outputTokens, model),
+      };
+
+      if (cacheReadInputTokens !== undefined) usage.cacheReadInputTokens = cacheReadInputTokens;
+      if (cacheCreationInputTokens !== undefined) usage.cacheCreationInputTokens = cacheCreationInputTokens;
+
+      return usage;
+    };
+
+    const stream = new ReadableStream<string>({
       start: async (controller) => {
         try {
           const response = await this.makeAnthropicRequest('/v1/messages', anthropicRequest, 'POST', request);
@@ -649,7 +673,14 @@ export class AnthropicProvider extends BaseProvider {
               if (!line.startsWith('data: ')) continue;
 
               const data = line.slice(6).trim();
-              if (data === '[DONE]' || data === '') continue;
+              if (data === '[DONE]' || data === '') {
+                if (data === '[DONE]') {
+                  usageTracker.resolve(currentUsage());
+                  controller.close();
+                  return;
+                }
+                continue;
+              }
 
               let parsed: unknown;
               try {
@@ -664,6 +695,43 @@ export class AnthropicProvider extends BaseProvider {
 
               if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
               const event = parsed as Record<string, unknown>;
+
+              if (event['type'] === 'message_start') {
+                const message = event['message'];
+                const usage = message && typeof message === 'object' && !Array.isArray(message)
+                  ? (message as Record<string, unknown>)['usage']
+                  : undefined;
+                if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
+                  const usageObj = usage as Record<string, unknown>;
+                  if (typeof usageObj['input_tokens'] === 'number') {
+                    inputTokens = usageObj['input_tokens'];
+                    sawUsage = true;
+                  }
+                  if (typeof usageObj['output_tokens'] === 'number') {
+                    outputTokens = usageObj['output_tokens'];
+                    sawUsage = true;
+                  }
+                  if (typeof usageObj['cache_read_input_tokens'] === 'number') {
+                    cacheReadInputTokens = usageObj['cache_read_input_tokens'];
+                  }
+                  if (typeof usageObj['cache_creation_input_tokens'] === 'number') {
+                    cacheCreationInputTokens = usageObj['cache_creation_input_tokens'];
+                  }
+                }
+                continue;
+              }
+
+              if (event['type'] === 'message_delta') {
+                const usage = event['usage'];
+                if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
+                  const usageObj = usage as Record<string, unknown>;
+                  if (typeof usageObj['output_tokens'] === 'number') {
+                    outputTokens = usageObj['output_tokens'];
+                    sawUsage = true;
+                  }
+                }
+                continue;
+              }
 
               if (event['type'] !== 'content_block_delta') continue;
 
@@ -694,12 +762,16 @@ export class AnthropicProvider extends BaseProvider {
             }
           }
 
+          usageTracker.resolve(currentUsage());
           controller.close();
         } catch (error) {
+          usageTracker.resolve(undefined);
           controller.error(error);
         }
       }
     });
+
+    return attachStreamUsage(stream, usageTracker.promise);
   }
 
   /**
