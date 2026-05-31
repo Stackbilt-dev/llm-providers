@@ -17,6 +17,7 @@ import { BaseProvider } from './base.js';
 import {
   LLMErrorFactory,
   AuthenticationError,
+  ConfigurationError,
   ModelNotFoundError,
   RateLimitError,
   SchemaDriftError
@@ -496,11 +497,16 @@ export class AnthropicProvider extends BaseProvider {
     return [
       { type: 'text', text },
       ...images.map(image => {
+        /**
+         * Anthropic image blocks require base64 bytes. Passing URL images as
+         * placeholder text would make a vision request succeed without the
+         * model seeing the image, so fail before dispatch instead.
+         */
         if (image.url) {
-          return {
-            type: 'text' as const,
-            text: `[Image URL: ${image.url}]`
-          };
+          throw new ConfigurationError(
+            this.name,
+            'Anthropic does not support image URLs; convert the image to base64 data or use an OpenAI-compatible provider for URL-based vision.'
+          );
         }
 
         return {

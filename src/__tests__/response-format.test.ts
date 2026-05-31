@@ -169,6 +169,16 @@ describe('Anthropic response_format', () => {
     expect(response.content).toBe('{"result": "ok"}');
   });
 
+  it('rejects URL image inputs instead of converting them to placeholder text', async () => {
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'Describe this image' }],
+      model: 'claude-haiku-4-5-20251001',
+      images: [{ url: 'https://example.com/image.png' }]
+    })).rejects.toThrow(/does not support image URLs/);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('should inject system prompt even when none provided', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
