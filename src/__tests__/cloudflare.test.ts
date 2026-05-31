@@ -7,12 +7,26 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CloudflareProvider } from '../providers/cloudflare';
 import { ConfigurationError } from '../errors';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
+import { getStreamUsage } from '../utils/stream-usage';
 import type { LLMRequest } from '../types';
 
 class TestableCloudflareProvider extends CloudflareProvider {
   exposeModelCapabilities() {
     return this.getModelCapabilities();
   }
+}
+
+async function readStream(stream: ReadableStream<string>): Promise<string> {
+  const reader = stream.getReader();
+  let output = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    output += value;
+  }
+
+  return output;
 }
 
 describe('CloudflareProvider', () => {
@@ -291,6 +305,50 @@ describe('CloudflareProvider', () => {
           tool_call_id: 'call_weather'
         }
       ]);
+    });
+  });
+
+  describe('streamResponse', () => {
+    it('attaches Workers AI usage from object stream chunks', async () => {
+      mockAiRun.mockResolvedValueOnce(new ReadableStream({
+        start(controller) {
+          controller.enqueue({
+            response: 'Hello ',
+            usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 }
+          });
+          controller.enqueue({ response: 'stream' });
+          controller.close();
+        }
+      }));
+
+      const stream = await provider.streamResponse(testRequest);
+      const usagePromise = getStreamUsage(stream);
+
+      expect(await readStream(stream)).toBe('Hello stream');
+      await expect(usagePromise).resolves.toMatchObject({
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 10
+      });
+    });
+
+    it('attaches non-zero estimated usage when stream chunks omit provider usage', async () => {
+      mockAiRun.mockResolvedValueOnce(new ReadableStream({
+        start(controller) {
+          controller.enqueue('Cloudflare ');
+          controller.enqueue('stream');
+          controller.close();
+        }
+      }));
+
+      const stream = await provider.streamResponse(testRequest);
+      const usagePromise = getStreamUsage(stream);
+
+      expect(await readStream(stream)).toBe('Cloudflare stream');
+      const usage = await usagePromise;
+      expect(usage?.inputTokens).toBeGreaterThan(0);
+      expect(usage?.outputTokens).toBeGreaterThan(0);
+      expect(usage?.totalTokens).toBe((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0));
     });
   });
 

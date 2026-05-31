@@ -19,6 +19,7 @@ import {
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
+import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
 
 /**
  * Minimum structural fields the Cloudflare Workers AI parser reads.
@@ -830,8 +831,17 @@ export class CloudflareProvider extends BaseProvider {
 
     const model = request.model || this.getRecommendedModel(request);
     const cloudflareRequest = { ...this.formatRequest(request, model), stream: true };
+    const usageTracker = createStreamUsageTracker();
+    let finalUsage: TokenUsage | undefined;
+    let streamedContent = '';
 
-    return new ReadableStream({
+    const resolveUsage = () => {
+      usageTracker.resolve(
+        finalUsage ?? this.extractUsage({ response: streamedContent }, model, request, streamedContent)
+      );
+    };
+
+    const stream = new ReadableStream<string>({
       start: async (controller) => {
         try {
           // Cloudflare AI streaming support
@@ -845,16 +855,20 @@ export class CloudflareProvider extends BaseProvider {
               const { done, value } = await reader.read();
 
               if (done) {
-                controller.close();
                 break;
               }
 
               // Handle different chunk formats
               if (typeof value === 'string') {
+                streamedContent += value;
                 controller.enqueue(value);
               } else if (value != null && typeof value === 'object') {
                 const chunk = value as WorkersAIResult;
+                if (chunk.usage) {
+                  finalUsage = this.extractUsage(chunk, model, request, streamedContent);
+                }
                 if (typeof chunk.response === 'string') {
+                  streamedContent += chunk.response;
                   controller.enqueue(chunk.response);
                 }
               }
@@ -862,14 +876,25 @@ export class CloudflareProvider extends BaseProvider {
           } else {
             // Non-streaming response, send all at once
             const content = typeof stream === 'string' ? stream : (stream as WorkersAIResult)?.response || '';
+            if (typeof stream === 'object' && stream !== null && !Array.isArray(stream)) {
+              const result = stream as WorkersAIResult;
+              if (result.usage) {
+                finalUsage = this.extractUsage(result, model, request, content);
+              }
+            }
+            streamedContent += content;
             controller.enqueue(content);
-            controller.close();
           }
+          resolveUsage();
+          controller.close();
         } catch (error) {
+          usageTracker.resolve(undefined);
           controller.error(error);
         }
       }
     });
+
+    return attachStreamUsage(stream, usageTracker.promise);
   }
 
   /**
