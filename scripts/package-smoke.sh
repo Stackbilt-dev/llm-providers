@@ -19,7 +19,23 @@ cd "$TMP_DIR"
 NPM_CONFIG_CACHE="$CACHE_DIR" npm init -y >/dev/null
 NPM_CONFIG_CACHE="$CACHE_DIR" npm install "./$PACK_NAME" >/dev/null
 
-node -e "const p=require('@stackbilt/llm-providers'); if(!p||!p.LLMProviders) throw new Error('Missing LLMProviders from require');"
-node --input-type=module -e "import * as p from '@stackbilt/llm-providers'; if(!p||!p.LLMProviders) throw new Error('Missing LLMProviders from import');"
+node <<'NODE'
+const p = require('@stackbilt/llm-providers');
+const pkg = require('./node_modules/@stackbilt/llm-providers/package.json');
+
+if (!p || !p.LLMProviders) throw new Error('Missing LLMProviders from require');
+if (p.VERSION !== pkg.version) throw new Error('VERSION does not match package.json');
+NODE
+
+node --input-type=module <<'NODE'
+import * as p from '@stackbilt/llm-providers';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const pkg = require('./node_modules/@stackbilt/llm-providers/package.json');
+
+if (!p || !p.LLMProviders) throw new Error('Missing LLMProviders from import');
+if (p.VERSION !== pkg.version) throw new Error('VERSION does not match package.json');
+NODE
 
 echo "package smoke test passed"

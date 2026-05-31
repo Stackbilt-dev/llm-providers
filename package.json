@@ -35,13 +35,14 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "sync:version": "node scripts/sync-version.mjs",
+    "build": "npm run sync:version && tsc",
+    "typecheck": "npm run sync:version && tsc --noEmit",
+    "test": "npm run sync:version && vitest run",
     "test:package": "bash ./scripts/package-smoke.sh",
-    "test:watch": "vitest watch",
-    "test:coverage": "vitest run --coverage",
-    "prepare": "tsc",
+    "test:watch": "npm run sync:version && vitest watch",
+    "test:coverage": "npm run sync:version && vitest run --coverage",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
