@@ -171,6 +171,22 @@ describe('AnthropicProvider cache hint translation (#52)', () => {
     const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
     expect(typeof body.system).toBe('string');
   });
+
+  it('normalizes cache creation tokens as cache write tokens', async () => {
+    mockFetch.mockResolvedValueOnce(anthropicOkResponse({
+      cache_read_input_tokens: 6,
+      cache_creation_input_tokens: 9,
+    }));
+
+    const resp = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    expect(resp.usage.cacheReadInputTokens).toBe(6);
+    expect(resp.usage.cacheCreationInputTokens).toBe(9);
+    expect(resp.usage.cacheWriteInputTokens).toBe(9);
+  });
 });
 
 // ── OpenAI cached token extraction ───────────────────────────────────────────

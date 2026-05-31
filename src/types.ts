@@ -199,6 +199,8 @@ export interface TokenUsage {
   cacheReadInputTokens?: number;
   /** Anthropic: tokens written to a new cache_control breakpoint (cache miss/create). */
   cacheCreationInputTokens?: number;
+  /** Provider-agnostic alias for cache write/create tokens. */
+  cacheWriteInputTokens?: number;
 }
 
 export interface LLMProvider {

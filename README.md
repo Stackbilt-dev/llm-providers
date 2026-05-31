@@ -270,6 +270,19 @@ const recommended = llm.getRecommendedModel({
 });
 ```
 
+Gateway layers can also ask directly by workload class instead of carrying their own provider/model maps:
+
+```typescript
+import { getProviderDefaultModelForWorkload } from '@stackbilt/llm-providers';
+
+const fastSummaryModel = getProviderDefaultModelForWorkload('groq', 'summary');
+const toolLoopModel = getProviderDefaultModelForWorkload('groq', 'tool_loop', {
+  modelPreferences: {
+    tool_loop: { groq: 'openai/gpt-oss-120b' },
+  },
+});
+```
+
 ## Routing Introspection
 
 `getRoutingInfo()` lets gateways and agent orchestrators inspect what the catalog engine *would* do — without dispatching the request. Use this at ingress to classify intent once, log the routing decision, enforce policies, or pre-warm the right provider.
@@ -502,6 +515,7 @@ const response = await llm.generateResponse({
 
 // Cached token counts are normalized in TokenUsage
 console.log(response.usage.cacheReadInputTokens);    // Anthropic cache hit tokens
+console.log(response.usage.cacheWriteInputTokens);   // Anthropic cache create/write tokens
 console.log(response.usage.cachedInputTokens);       // OpenAI / Groq / Cerebras cache hit tokens
 ```
 
@@ -597,7 +611,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `LLMResponse` | Unified response: message, usage (with cost), provider, tool calls, metadata (builtInToolResults, reasoning) |
 | `BuiltInTool` / `BuiltInToolType` | Server-side tool request: `{ type }` where type is `web_search` \| `visit_website` \| `browser_automation` \| `code_interpreter` \| `wolfram_alpha` |
 | `BuiltInToolResult` | A surfaced built-in execution: `{ type, name?, arguments?, results: [{ title, url, content, score }] }` on `metadata.builtInToolResults` |
-| `TokenUsage` | Token counts, cost, and cached token fields (cachedInputTokens, cacheReadInputTokens, cacheCreationInputTokens) |
+| `TokenUsage` | Token counts, cost, and cached token fields (cachedInputTokens, cacheReadInputTokens, cacheCreationInputTokens, cacheWriteInputTokens) |
 | `CacheHints` | Cache strategy, key, ttl, sessionId, cacheablePrefix for provider-agnostic prompt caching |
 | `ToolExecutor` | Interface for `generateResponseWithTools`: `execute(name, args) => Promise<unknown>` |
 | `ToolLoopOptions` | Loop config: maxIterations, maxCostUSD, onIteration, abortSignal |
@@ -622,6 +636,8 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `llm.generateResponseWithTools(request, executor, opts?)` | Managed tool-use loop with caps and abort-signal support |
 | `llm.getRecommendedModel(request, useCase?)` | Runtime recommendation using configured providers, health, and ledger state |
 | `getRecommendedModel(useCase, providers, context?)` | Pick the best active model for a use case |
+| `getRecommendedModelForWorkload(workload, providers, context?)` | Pick a model using gateway-friendly workload classes like `summary`, `planning`, `code_draft`, `long_context`, `tool_loop` |
+| `getProviderDefaultModelForWorkload(provider, workload, context?)` | Provider-scoped workload default with optional `modelPreferences` overrides |
 | `getRoutingInfo(request, providers?, context?)` | Pre-flight routing snapshot — use case, model, lifecycle, deprecation warning — without dispatching |
 | `runCanaryCheck(provider, golden, liveResponse)` | Compare live response shape against golden fixture |
 | `extractShape(obj)` | Extract flat path → type map from any object |

@@ -5,10 +5,13 @@ import {
   MODEL_RECOMMENDATIONS,
   getCatalogEntry,
   getProvidersForCatalogModel,
+  getProviderDefaultModelForWorkload,
   modelSupportsBuiltInTools,
   getRecommendedModel,
+  getRecommendedModelForWorkload,
   getRoutingInfo,
   inferUseCaseFromRequest,
+  normalizeModelWorkload,
   rankModels,
   type ModelRecommendationUseCase,
 } from '../model-catalog';
@@ -66,6 +69,24 @@ describe('model catalog', () => {
     const recommended = getRecommendedModel('BALANCED', ['openai']);
 
     expect(recommended).toBe('gpt-4o-mini');
+  });
+
+  it('maps gateway workload classes onto catalog use cases', () => {
+    expect(normalizeModelWorkload('summary')).toBe('COST_EFFECTIVE');
+    expect(normalizeModelWorkload('tool_loop')).toBe('TOOL_CALLING');
+    expect(normalizeModelWorkload('LONG_CONTEXT')).toBe('LONG_CONTEXT');
+  });
+
+  it('returns provider defaults by workload and honors model preferences', () => {
+    expect(getProviderDefaultModelForWorkload('groq', 'tool_loop')).toBe('llama-3.3-70b-versatile');
+
+    const preferred = getRecommendedModelForWorkload('summary', ['groq'], {
+      modelPreferences: {
+        summary: { groq: 'llama-3.1-8b-instant' }
+      }
+    });
+
+    expect(preferred).toBe('llama-3.1-8b-instant');
   });
 
   it('does not select Workers AI Gemma for BALANCED when Cerebras is configured', () => {

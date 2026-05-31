@@ -12,6 +12,22 @@ export type ModelRecommendationUseCase =
   | 'VISION'
   | 'RESEARCH';
 
+export type ModelWorkloadClass =
+  | 'summary'
+  | 'planning'
+  | 'code_draft'
+  | 'long_context'
+  | 'tool_loop'
+  | 'vision'
+  | 'research'
+  | 'cost_effective'
+  | 'balanced'
+  | 'high_performance';
+
+export type ModelPreferenceMap = Partial<
+  Record<ModelRecommendationUseCase | ModelWorkloadClass, Partial<Record<ProviderName, string>>>
+>;
+
 export interface ModelCatalogEntry {
   provider: ProviderName;
   model: string;
@@ -32,7 +48,31 @@ export interface ModelSelectionContext {
   request?: Partial<LLMRequest>;
   providerHealth?: Partial<Record<ProviderName, SelectionHealthEntry>>;
   ledger?: Pick<CreditLedger, 'getDepletionEstimate' | 'utilizationPct'>;
+  modelPreferences?: ModelPreferenceMap;
 }
+
+const WORKLOAD_USE_CASES: Record<ModelWorkloadClass, ModelRecommendationUseCase> = {
+  summary: 'COST_EFFECTIVE',
+  planning: 'BALANCED',
+  code_draft: 'HIGH_PERFORMANCE',
+  long_context: 'LONG_CONTEXT',
+  tool_loop: 'TOOL_CALLING',
+  vision: 'VISION',
+  research: 'RESEARCH',
+  cost_effective: 'COST_EFFECTIVE',
+  balanced: 'BALANCED',
+  high_performance: 'HIGH_PERFORMANCE',
+};
+
+const USE_CASES = new Set<ModelRecommendationUseCase>([
+  'COST_EFFECTIVE',
+  'HIGH_PERFORMANCE',
+  'BALANCED',
+  'TOOL_CALLING',
+  'LONG_CONTEXT',
+  'VISION',
+  'RESEARCH',
+]);
 
 export const PROVIDER_FALLBACK_ORDER: ProviderName[] = [
   'cloudflare',
@@ -730,6 +770,59 @@ export function getRecommendedModel(
   }
 
   return ranked[0].model;
+}
+
+export function normalizeModelWorkload(
+  workload: ModelRecommendationUseCase | ModelWorkloadClass
+): ModelRecommendationUseCase {
+  if (USE_CASES.has(workload as ModelRecommendationUseCase)) {
+    return workload as ModelRecommendationUseCase;
+  }
+
+  const normalized = workload.toLowerCase() as ModelWorkloadClass;
+  const useCase = WORKLOAD_USE_CASES[normalized];
+  if (!useCase) {
+    throw new Error(`Unknown model workload class: ${workload}`);
+  }
+
+  return useCase;
+}
+
+function getPreferredModelForWorkload(
+  workload: ModelRecommendationUseCase | ModelWorkloadClass,
+  useCase: ModelRecommendationUseCase,
+  availableProviders: string[],
+  context: ModelSelectionContext,
+): string | undefined {
+  const preferences = context.modelPreferences;
+  if (!preferences) return undefined;
+
+  const workloadPrefs = preferences[workload];
+  const useCasePrefs = preferences[useCase];
+  for (const provider of availableProviders as ProviderName[]) {
+    const preferred = workloadPrefs?.[provider] ?? useCasePrefs?.[provider];
+    if (preferred) return preferred;
+  }
+
+  return undefined;
+}
+
+export function getRecommendedModelForWorkload(
+  workload: ModelRecommendationUseCase | ModelWorkloadClass,
+  availableProviders: string[],
+  context: ModelSelectionContext = {},
+): string {
+  const useCase = normalizeModelWorkload(workload);
+  const preferred = getPreferredModelForWorkload(workload, useCase, availableProviders, context);
+  return preferred ?? getRecommendedModel(useCase, availableProviders, context);
+}
+
+export function getProviderDefaultModelForWorkload(
+  provider: ProviderName,
+  workload: ModelRecommendationUseCase | ModelWorkloadClass,
+  context: Omit<ModelSelectionContext, 'request'> = {},
+): string {
+  return getRecommendedModelForWorkload(workload, [provider], context);
 }
 
 export function getProviderDefaultModel(

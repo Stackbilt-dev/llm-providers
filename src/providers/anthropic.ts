@@ -546,6 +546,7 @@ export class AnthropicProvider extends BaseProvider {
     }
     if (typeof data.usage.cache_creation_input_tokens === 'number') {
       usage.cacheCreationInputTokens = data.usage.cache_creation_input_tokens;
+      usage.cacheWriteInputTokens = data.usage.cache_creation_input_tokens;
     }
 
     const response: LLMResponse = {
@@ -632,7 +633,10 @@ export class AnthropicProvider extends BaseProvider {
       };
 
       if (cacheReadInputTokens !== undefined) usage.cacheReadInputTokens = cacheReadInputTokens;
-      if (cacheCreationInputTokens !== undefined) usage.cacheCreationInputTokens = cacheCreationInputTokens;
+      if (cacheCreationInputTokens !== undefined) {
+        usage.cacheCreationInputTokens = cacheCreationInputTokens;
+        usage.cacheWriteInputTokens = cacheCreationInputTokens;
+      }
 
       return usage;
     };
