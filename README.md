@@ -170,15 +170,13 @@ const ledger = new CreditLedger();
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const breaker = defaultCircuitBreakerManager.getBreaker('openai');
-
-    const [breakerJson, exhaustionJson, ledgerJson] = await Promise.all([
-      env.LLM_STATE.get('breaker:openai'),
+    const [breakersJson, exhaustionJson, ledgerJson] = await Promise.all([
+      env.LLM_STATE.get('circuit-breakers'),
       env.LLM_STATE.get('exhaustion'),
       env.LLM_STATE.get('credit-ledger'),
     ]);
 
-    if (breakerJson) breaker.restore(breakerJson);
+    if (breakersJson) defaultCircuitBreakerManager.restore(breakersJson);
     if (exhaustionJson) defaultExhaustionRegistry.restore(exhaustionJson);
     if (ledgerJson) ledger.restore(JSON.parse(ledgerJson));
 
@@ -187,7 +185,7 @@ export default {
       return new Response('ok');
     } finally {
       await Promise.all([
-        env.LLM_STATE.put('breaker:openai', breaker.serialize()),
+        env.LLM_STATE.put('circuit-breakers', defaultCircuitBreakerManager.serialize()),
         env.LLM_STATE.put('exhaustion', defaultExhaustionRegistry.serialize()),
         env.LLM_STATE.put('credit-ledger', JSON.stringify(ledger.snapshot())),
       ]);
@@ -196,7 +194,7 @@ export default {
 };
 ```
 
-For standalone lower-level use, `CircuitBreaker.deserialize(json)` and `ExhaustionRegistry.deserialize(json)` reconstruct fresh instances from persisted JSON.
+For standalone lower-level use, `CircuitBreaker.deserialize(json)`, `CircuitBreakerManager.deserialize(json)`, and `ExhaustionRegistry.deserialize(json)` reconstruct fresh instances from persisted JSON.
 
 ## Cost Tracking & Budget Management
 

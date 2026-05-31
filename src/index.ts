@@ -190,7 +190,7 @@ export {
   CircuitBreakerManager,
   defaultCircuitBreakerManager
 } from './utils/circuit-breaker.js';
-export type { CircuitBreakerSnapshot } from './utils/circuit-breaker.js';
+export type { CircuitBreakerManagerSnapshot, CircuitBreakerSnapshot } from './utils/circuit-breaker.js';
 export {
   CostTracker,
   CostOptimizer,

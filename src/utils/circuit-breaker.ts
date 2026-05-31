@@ -35,6 +35,12 @@ export interface CircuitBreakerSnapshot {
   };
 }
 
+export interface CircuitBreakerManagerSnapshot {
+  version: 1;
+  defaultConfig: CircuitBreakerConfig;
+  breakers: CircuitBreakerSnapshot[];
+}
+
 const DEFAULT_CONFIG: ResolvedCircuitBreakerConfig = {
   failureThreshold: DEFAULT_DEGRADATION_CURVE.length,
   resetTimeout: 60_000,
@@ -485,7 +491,7 @@ export class CircuitBreaker {
  */
 export class CircuitBreakerManager {
   private breakers: Map<string, CircuitBreaker> = new Map();
-  private defaultConfig: Partial<CircuitBreakerConfig>;
+  private defaultConfig: CircuitBreakerConfig;
   private logger: Logger;
 
   constructor(defaultConfig?: Partial<CircuitBreakerConfig>, logger?: Logger) {
@@ -551,6 +557,65 @@ export class CircuitBreakerManager {
     }
 
     return health;
+  }
+
+  /**
+   * Snapshot all managed breakers for external persistence.
+   */
+  snapshot(): CircuitBreakerManagerSnapshot {
+    return {
+      version: 1,
+      defaultConfig: {
+        ...this.defaultConfig,
+        degradationCurve: [...(this.defaultConfig.degradationCurve ?? DEFAULT_DEGRADATION_CURVE)]
+      },
+      breakers: Array.from(this.breakers.values()).map(
+        breaker => JSON.parse(breaker.serialize()) as CircuitBreakerSnapshot
+      )
+    };
+  }
+
+  /**
+   * Serialize all managed breaker state for Workers KV, D1, Redis, etc.
+   */
+  serialize(): string {
+    return JSON.stringify(this.snapshot());
+  }
+
+  /**
+   * Restore all managed breaker state onto this manager.
+   */
+  restore(snapshot: CircuitBreakerManagerSnapshot | string): void {
+    const parsed = typeof snapshot === 'string'
+      ? JSON.parse(snapshot) as CircuitBreakerManagerSnapshot
+      : snapshot;
+
+    if (parsed.version !== 1) {
+      throw new Error(`Unsupported CircuitBreakerManager snapshot version: ${String(parsed.version)}`);
+    }
+
+    const restoredConfig = normalizeConfig(parsed.defaultConfig ?? {});
+    this.defaultConfig = {
+      ...restoredConfig,
+      degradationCurve: [...restoredConfig.degradationCurve]
+    };
+    this.breakers.clear();
+    for (const breakerSnapshot of parsed.breakers) {
+      const breaker = new CircuitBreaker(breakerSnapshot.name, breakerSnapshot.config, this.logger);
+      breaker.restore(breakerSnapshot);
+      this.breakers.set(breaker.name, breaker);
+    }
+  }
+
+  static deserialize(json: string, logger?: Logger): CircuitBreakerManager {
+    const snapshot = JSON.parse(json) as CircuitBreakerManagerSnapshot;
+    if (snapshot.version !== 1) {
+      throw new Error(`Unsupported CircuitBreakerManager snapshot version: ${String(snapshot.version)}`);
+    }
+
+    const manager = new CircuitBreakerManager(snapshot.defaultConfig, logger);
+    manager.restore(snapshot);
+    return manager;
   }
 
   resetAll(): void {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CircuitBreaker } from '../utils/circuit-breaker';
+import { CircuitBreaker, CircuitBreakerManager } from '../utils/circuit-breaker';
 import { CircuitBreakerOpenError } from '../errors';
 
 describe('CircuitBreaker', () => {
@@ -202,6 +202,47 @@ describe('CircuitBreaker', () => {
       consecutiveFailures: 2,
       totalFailures: 2,
       totalRequests: 2
+    });
+  });
+
+  it('serializes and restores all breakers through the manager', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const manager = new CircuitBreakerManager({
+      failureThreshold: 3,
+      degradationCurve: [1, 0.5, 0.1]
+    });
+
+    await expect(manager.execute('openai', async () => {
+      throw new Error('openai down');
+    })).rejects.toThrow('openai down');
+    await expect(manager.execute('groq', async () => {
+      throw new Error('groq down');
+    })).rejects.toThrow('groq down');
+    await expect(manager.execute('groq', async () => {
+      throw new Error('groq down again');
+    })).rejects.toThrow('groq down again');
+
+    const serialized = manager.serialize();
+    const restored = CircuitBreakerManager.deserialize(serialized);
+
+    expect(restored.getAllStates().openai).toMatchObject({
+      state: 'DEGRADED',
+      consecutiveFailures: 1,
+      totalRequests: 1,
+      primaryTrafficPct: 0.5
+    });
+    expect(restored.getAllStates().groq).toMatchObject({
+      state: 'DEGRADED',
+      consecutiveFailures: 2,
+      totalRequests: 2,
+      primaryTrafficPct: 0.1
+    });
+
+    const target = new CircuitBreakerManager();
+    target.restore(serialized);
+    expect(target.getAllStates().groq).toMatchObject({
+      consecutiveFailures: 2,
+      totalFailures: 2
     });
   });
 });
