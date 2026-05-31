@@ -9,8 +9,9 @@ A multi-provider LLM abstraction layer with automatic failover, graduated circui
 - **Exponential backoff retry** -- configurable delays, jitter, and per-error-class behavior
 - **Cost tracking and optimization** -- per-provider cost attribution, budget alerts with CreditLedger, automatic routing to cheaper providers
 - **Declarative model catalog** -- semantic model metadata drives recommendations, provider defaults, and fallback routing
+- **Workload-aware model defaults** -- gateways can request provider-tuned defaults for `summary`, `planning`, `code_draft`, `long_context`, `tool_loop`, and related workload classes
 - **Rate limit enforcement** -- CreditLedger tracks RPM/RPD/TPM/TPD per provider; factory skips providers that exceed limits
-- **Streaming with fallback** -- SSE streaming on all providers; factory-level streaming routes through the same circuit-breaker and fallback chain as non-streaming requests
+- **Streaming with fallback and usage accounting** -- SSE streaming on all providers; factory-level streaming routes through the same circuit-breaker and fallback chain as non-streaming requests and records final usage after the stream drains
 - **Tool/function calling** -- OpenAI, Anthropic, Cerebras, and Cloudflare tool use with unified response format
 - **Tool-use loop helper** -- `generateResponseWithTools` owns the request → parse → execute → repeat cycle with iteration caps, cost limits, abort signal support, and `onIteration` early-exit via `{ abort: true }`
 - **Server-side built-in tools** -- `LLMRequest.builtInTools` (e.g. `[{ type: 'web_search' }]`) drives Groq's Compound systems and GPT-OSS 120B to run web search / code interpreter server-side; capability-gated per model and routed to the capable provider automatically
@@ -108,6 +109,23 @@ const llm = LLMProviders.fromEnv(env, {
 // NVIDIA NIM
 { apiKey: 'nvapi-...' }
 ```
+
+## Vision Inputs
+
+Vision requests use `request.images`. The factory routes image inputs only to providers that advertise `supportsVision === true`; providers that cannot see images reject the request instead of silently dropping image content.
+
+```typescript
+await llm.generateResponse({
+  messages: [{ role: 'user', content: 'What is in this image?' }],
+  images: [{ data: base64Png, mimeType: 'image/png' }],
+});
+```
+
+Provider notes:
+
+- OpenAI-compatible providers that support URL images may accept `images: [{ url }]`.
+- Anthropic requires base64 image bytes. URL images throw `ConfigurationError`; convert the URL to bytes before dispatch or route URL-based vision to an OpenAI-compatible provider.
+- Cerebras, Groq, and NVIDIA currently advertise `supportsVision = false`, so the factory skips them for image requests.
 
 ## Logging
 
@@ -402,7 +420,7 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 
 ## Factory-Level Streaming
 
-`generateResponseStream` uses the same provider-selection, circuit-breaker, and exhaustion-registry path as `generateResponse`. Pre-stream HTTP errors (401, 429, 503, circuit open) fall over to the next provider before emitting the first chunk.
+`generateResponseStream` uses the same provider-selection, circuit-breaker, and exhaustion-registry path as `generateResponse`. Pre-stream HTTP errors (401, 429, 503, circuit open) fall over to the next provider before emitting the first chunk. After the stream drains, the factory records attached usage to cost tracking, quota hooks, and request-end hooks.
 
 ```typescript
 const stream = await llm.generateResponseStream({
@@ -581,7 +599,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | Class / Export | Description |
 |----------------|-------------|
 | `CircuitBreaker` | Graduated 4-state circuit breaker with probabilistic degradation |
-| `CircuitBreakerManager` | Manages circuit breakers across multiple providers |
+| `CircuitBreakerManager` | Manages and serializes circuit breakers across multiple providers |
 | `RetryManager` | Exponential backoff retry with jitter |
 | `CostTracker` | Per-provider cost accumulation and budget alerts |
 | `CreditLedger` | Monthly budgets, rate limits, burn rate projection, threshold events |
@@ -615,6 +633,9 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `ToolLoopOptions` | Loop config: maxIterations, maxCostUSD, onIteration, abortSignal |
 | `ToolLoopAbortSignal` | `{ abort: true; reason?: string }` — return from `onIteration` to stop the loop and throw `ToolLoopAbortedError` |
 | `RoutingInfo` | Pre-flight routing snapshot: useCase, provider, model, estimatedInputTokens, lifecycle, deprecationWarning |
+| `ModelWorkloadClass` | Gateway-friendly workload class: `summary`, `planning`, `code_draft`, `long_context`, `tool_loop`, `vision`, `research`, `cost_effective`, `balanced`, `high_performance` |
+| `ModelPreferenceMap` | Optional provider+workload override map for workload-aware recommendation APIs |
+| `CircuitBreakerSnapshot` / `CircuitBreakerManagerSnapshot` | Serializable reliability state for external persistence |
 | `CanaryReport` | Schema canary result: provider, status ('ok'|'drift'), diff |
 | `ShapeMap` | Flat `path → JSON-type` map produced by `extractShape` |
 | `ProviderFactoryConfig` | Factory config: provider configs, fallback rules, ledger, logger |
