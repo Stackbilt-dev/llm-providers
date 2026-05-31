@@ -40,6 +40,7 @@ describe('GroqProvider', () => {
       expect(provider.supportsStreaming).toBe(true);
       expect(provider.supportsTools).toBe(true);
       expect(provider.supportsBatching).toBe(false);
+      expect(provider.supportsVision).toBe(false);
     });
 
     it('should throw AuthenticationError without API key', () => {
@@ -58,6 +59,16 @@ describe('GroqProvider', () => {
         baseUrl: 'https://custom.groq.com/v1'
       });
       expect(p.validateConfig()).toBe(true);
+    });
+  });
+
+  describe('vision handling', () => {
+    it('rejects image inputs instead of silently dropping them', async () => {
+      await expect(provider.generateResponse({
+        ...testRequest,
+        images: [{ data: 'QUJD', mimeType: 'image/png' }]
+      })).rejects.toThrow(ConfigurationError);
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 

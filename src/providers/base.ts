@@ -28,6 +28,7 @@ export abstract class BaseProvider implements LLMProvider {
   abstract supportsStreaming: boolean;
   abstract supportsTools: boolean;
   abstract supportsBatching: boolean;
+  abstract supportsVision?: boolean;
 
   protected config: ProviderConfig;
   protected logger: Logger;
@@ -270,6 +271,10 @@ export abstract class BaseProvider implements LLMProvider {
         this.name,
         `Model '${request.model}' not supported. Available models: ${this.models.join(', ')}`
       );
+    }
+
+    if ((request.images?.length ?? 0) > 0 && this.supportsVision !== true) {
+      throw new ConfigurationError(this.name, `${this.name} does not support image input`);
     }
 
     if (request.images) {

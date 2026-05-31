@@ -733,6 +733,41 @@ describe('LLMProviderFactory', () => {
       );
       expect(mockCloudflareProvider.generateResponse).not.toHaveBeenCalled();
     });
+
+    it('skips vision-incapable providers in the fallback chain', async () => {
+      const visionFactory = new LLMProviderFactory({
+        cerebras: { apiKey: 'test-cerebras-key' },
+        groq: { apiKey: 'test-groq-key' },
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'cerebras',
+        costOptimization: false
+      });
+
+      await visionFactory.generateResponse({
+        ...testRequest,
+        images: [{ data: 'abc123', mimeType: 'image/jpeg' }]
+      });
+
+      expect(mockOpenAIProvider.generateResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          images: [{ data: 'abc123', mimeType: 'image/jpeg' }]
+        })
+      );
+    });
+
+    it('throws when no configured provider supports image input', async () => {
+      const visionFactory = new LLMProviderFactory({
+        cerebras: { apiKey: 'test-cerebras-key' },
+        groq: { apiKey: 'test-groq-key' },
+        defaultProvider: 'cerebras',
+        costOptimization: false
+      });
+
+      await expect(visionFactory.generateResponse({
+        ...testRequest,
+        images: [{ data: 'abc123', mimeType: 'image/jpeg' }]
+      })).rejects.toThrow(/No configured providers support image input/);
+    });
   });
 
   describe('Error Handling', () => {

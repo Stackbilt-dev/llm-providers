@@ -697,11 +697,15 @@ export class LLMProviderFactory {
     const providerModels = new Map<string, string>();
     const selectionHealth = this.getSelectionHealth();
     const useCase = this.resolveUseCase(request);
+    const requiresVision = (request.images?.length ?? 0) > 0;
+    const canUseProvider = (providerName: string): boolean => {
+      return !requiresVision || this.providerSupportsVision(providerName);
+    };
 
     // If specific provider requested, try it first
     if (request.model) {
       const providerForModel = this.getProviderForModel(request.model, request);
-      if (providerForModel && this.providers.has(providerForModel)) {
+      if (providerForModel && this.providers.has(providerForModel) && canUseProvider(providerForModel)) {
         chain.push(providerForModel);
         providerModels.set(providerForModel, request.model);
       }
@@ -710,7 +714,7 @@ export class LLMProviderFactory {
     // Add default provider if different from model provider
     const defaultProvider = this.config.preferredProvider ?? this.config.defaultProvider ?? 'auto';
     if (defaultProvider !== 'auto' && !chain.includes(defaultProvider)) {
-      if (this.providers.has(defaultProvider)) {
+      if (this.providers.has(defaultProvider) && canUseProvider(defaultProvider)) {
         chain.push(defaultProvider);
         if (!request.model) {
           providerModels.set(defaultProvider, getProviderDefaultModel(defaultProvider, request));
@@ -725,6 +729,7 @@ export class LLMProviderFactory {
     });
 
     for (const candidate of rankedModels) {
+      if (!canUseProvider(candidate.provider)) continue;
       if (!providerModels.has(candidate.provider)) {
         providerModels.set(candidate.provider, candidate.model);
       }
@@ -735,12 +740,17 @@ export class LLMProviderFactory {
 
     for (const provider of PROVIDER_FALLBACK_ORDER) {
       if (!this.providers.has(provider)) continue;
+      if (!canUseProvider(provider)) continue;
       if (!chain.includes(provider)) {
         chain.push(provider);
       }
       if (!providerModels.has(provider)) {
         providerModels.set(provider, getProviderDefaultModel(provider, request));
       }
+    }
+
+    if (requiresVision && chain.length === 0) {
+      throw new ConfigurationError('factory', 'No configured providers support image input');
     }
 
     return { chain, providerModels, useCase };

@@ -141,6 +141,7 @@ export class CerebrasProvider extends BaseProvider {
   supportsStreaming = true;
   supportsTools = true;
   supportsBatching = false;
+  supportsVision = false;
 
   private apiKey: string;
   private baseUrl: string;
