@@ -138,6 +138,21 @@ describe('ExhaustionRegistry', () => {
     expect(registry.getEntry('groq')).toBeUndefined();
   });
 
+  it('serializes and restores exhaustion state', () => {
+    registry.markExhausted('groq', 60_000);
+    registry.markExhausted('cerebras', 120_000);
+
+    const restored = ExhaustionRegistry.deserialize(registry.serialize());
+
+    expect(restored.getExhaustedProviders().sort()).toEqual(['cerebras', 'groq']);
+    expect(restored.getEntry('groq')).toMatchObject({ provider: 'groq' });
+
+    const target = new ExhaustionRegistry(1);
+    target.restore(registry.snapshot());
+    expect(target.defaultResetMs).toBe(registry.defaultResetMs);
+    expect(target.getExhaustedProviders().sort()).toEqual(['cerebras', 'groq']);
+  });
+
   it('reset clears all entries', () => {
     registry.markExhausted('groq');
     registry.markExhausted('cerebras');

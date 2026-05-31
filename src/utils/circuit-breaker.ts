@@ -18,6 +18,23 @@ type ResolvedCircuitBreakerConfig = {
   degradationCurve: number[];
 };
 
+export interface CircuitBreakerSnapshot {
+  version: 1;
+  name: string;
+  config: CircuitBreakerConfig;
+  state: {
+    consecutiveFailures: number;
+    totalFailures: number;
+    totalSuccesses: number;
+    totalRequests: number;
+    lastFailureAt?: number;
+    lastSuccessAt?: number;
+    lastRequestAt?: number;
+    lastDecayAt: number;
+    windowStart: number;
+  };
+}
+
 const DEFAULT_CONFIG: ResolvedCircuitBreakerConfig = {
   failureThreshold: DEFAULT_DEGRADATION_CURVE.length,
   resetTimeout: 60_000,
@@ -47,7 +64,7 @@ function normalizeConfig(config: Partial<CircuitBreakerConfig>): ResolvedCircuit
 }
 
 export class CircuitBreaker {
-  private readonly config: ResolvedCircuitBreakerConfig;
+  private config: ResolvedCircuitBreakerConfig;
   private readonly logger: Logger;
   private consecutiveFailures = 0;
   private totalFailures = 0;
@@ -180,6 +197,49 @@ export class CircuitBreaker {
   }
 
   /**
+   * Serialize breaker state for persistence in Workers KV, D1, Redis, etc.
+   */
+  serialize(): string {
+    this.syncState(Date.now());
+    return JSON.stringify(this.persistenceSnapshot());
+  }
+
+  /**
+   * Restore breaker state onto this instance.
+   */
+  restore(snapshot: CircuitBreakerSnapshot | string): void {
+    const parsed = typeof snapshot === 'string'
+      ? JSON.parse(snapshot) as CircuitBreakerSnapshot
+      : snapshot;
+
+    if (parsed.version !== 1) {
+      throw new Error(`Unsupported CircuitBreaker snapshot version: ${String(parsed.version)}`);
+    }
+
+    this.config = normalizeConfig(parsed.config ?? {});
+    this.consecutiveFailures = parsed.state.consecutiveFailures;
+    this.totalFailures = parsed.state.totalFailures;
+    this.totalSuccesses = parsed.state.totalSuccesses;
+    this.totalRequests = parsed.state.totalRequests;
+    this.lastFailureAt = parsed.state.lastFailureAt;
+    this.lastSuccessAt = parsed.state.lastSuccessAt;
+    this.lastRequestAt = parsed.state.lastRequestAt;
+    this.lastDecayAt = parsed.state.lastDecayAt;
+    this.windowStart = parsed.state.windowStart;
+  }
+
+  static deserialize(json: string, logger?: Logger): CircuitBreaker {
+    const snapshot = JSON.parse(json) as CircuitBreakerSnapshot;
+    if (snapshot.version !== 1) {
+      throw new Error(`Unsupported CircuitBreaker snapshot version: ${String(snapshot.version)}`);
+    }
+
+    const breaker = new CircuitBreaker(snapshot.name, snapshot.config, logger);
+    breaker.restore(snapshot);
+    return breaker;
+  }
+
+  /**
    * Manual reset for testing and operator intervention.
    */
   reset(): void {
@@ -275,6 +335,25 @@ export class CircuitBreaker {
       lastSuccess: this.lastSuccessAt,
       lastRequest: this.lastRequestAt,
       nextAttempt: this.retryAt(now)
+    };
+  }
+
+  private persistenceSnapshot(): CircuitBreakerSnapshot {
+    return {
+      version: 1,
+      name: this.name,
+      config: this.getConfig(),
+      state: {
+        consecutiveFailures: this.consecutiveFailures,
+        totalFailures: this.totalFailures,
+        totalSuccesses: this.totalSuccesses,
+        totalRequests: this.totalRequests,
+        lastFailureAt: this.lastFailureAt,
+        lastSuccessAt: this.lastSuccessAt,
+        lastRequestAt: this.lastRequestAt,
+        lastDecayAt: this.lastDecayAt,
+        windowStart: this.windowStart,
+      },
     };
   }
 

@@ -172,7 +172,7 @@ export type {
 
 // Exhaustion registry
 export { ExhaustionRegistry, defaultExhaustionRegistry } from './utils/exhaustion.js';
-export type { ExhaustionEntry } from './utils/exhaustion.js';
+export type { ExhaustionEntry, ExhaustionRegistrySnapshot } from './utils/exhaustion.js';
 
 // Latency histogram
 export { LatencyHistogram, defaultLatencyHistogram } from './utils/latency-histogram.js';
@@ -185,6 +185,7 @@ export {
   CircuitBreakerManager,
   defaultCircuitBreakerManager
 } from './utils/circuit-breaker.js';
+export type { CircuitBreakerSnapshot } from './utils/circuit-breaker.js';
 export {
   CostTracker,
   CostOptimizer,

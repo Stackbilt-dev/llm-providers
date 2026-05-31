@@ -158,4 +158,50 @@ describe('CircuitBreaker', () => {
       primaryTrafficPct: 1
     });
   });
+
+  it('serializes and restores breaker state for external persistence', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const breaker = new CircuitBreaker('openai', {
+      failureThreshold: 3,
+      resetTimeout: 60_000,
+      degradationCurve: [1, 0.5, 0.1]
+    });
+
+    await expect(breaker.execute(async () => {
+      throw new Error('boom');
+    })).rejects.toThrow('boom');
+    await expect(breaker.execute(async () => {
+      throw new Error('boom');
+    })).rejects.toThrow('boom');
+
+    const serialized = breaker.serialize();
+    const restored = CircuitBreaker.deserialize(serialized);
+
+    expect(restored.name).toBe('openai');
+    expect(restored.getConfig()).toMatchObject({
+      failureThreshold: 3,
+      resetTimeout: 60_000,
+      degradationCurve: [1, 0.5, 0.1]
+    });
+    expect(restored.getState()).toMatchObject({
+      state: 'DEGRADED',
+      consecutiveFailures: 2,
+      totalFailures: 2,
+      totalRequests: 2,
+      primaryTrafficPct: 0.1
+    });
+
+    const target = new CircuitBreaker('openai');
+    target.restore(serialized);
+    expect(target.getConfig()).toMatchObject({
+      failureThreshold: 3,
+      resetTimeout: 60_000,
+      degradationCurve: [1, 0.5, 0.1]
+    });
+    expect(target.getState()).toMatchObject({
+      consecutiveFailures: 2,
+      totalFailures: 2,
+      totalRequests: 2
+    });
+  });
 });

@@ -151,6 +151,53 @@ const breaker = manager.getBreaker('openai');
 console.log(breaker.getHealth());
 ```
 
+### Workers State Persistence
+
+The default circuit breaker manager, exhaustion registry, and `CreditLedger` keep state in memory. In Cloudflare Workers that state is per isolate and can reset between requests. Persist snapshots to KV, D1, Redis, Durable Objects, or another store when you need circuit state, quota exhaustion, or budget spend to survive across invocations.
+
+```typescript
+import {
+  CreditLedger,
+  defaultCircuitBreakerManager,
+  defaultExhaustionRegistry,
+} from '@stackbilt/llm-providers';
+
+interface Env {
+  LLM_STATE: KVNamespace;
+}
+
+const ledger = new CreditLedger();
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const breaker = defaultCircuitBreakerManager.getBreaker('openai');
+
+    const [breakerJson, exhaustionJson, ledgerJson] = await Promise.all([
+      env.LLM_STATE.get('breaker:openai'),
+      env.LLM_STATE.get('exhaustion'),
+      env.LLM_STATE.get('credit-ledger'),
+    ]);
+
+    if (breakerJson) breaker.restore(breakerJson);
+    if (exhaustionJson) defaultExhaustionRegistry.restore(exhaustionJson);
+    if (ledgerJson) ledger.restore(JSON.parse(ledgerJson));
+
+    try {
+      // Create/use LLMProviders here with { ledger, enableCircuitBreaker: true }.
+      return new Response('ok');
+    } finally {
+      await Promise.all([
+        env.LLM_STATE.put('breaker:openai', breaker.serialize()),
+        env.LLM_STATE.put('exhaustion', defaultExhaustionRegistry.serialize()),
+        env.LLM_STATE.put('credit-ledger', JSON.stringify(ledger.snapshot())),
+      ]);
+    }
+  },
+};
+```
+
+For standalone lower-level use, `CircuitBreaker.deserialize(json)` and `ExhaustionRegistry.deserialize(json)` reconstruct fresh instances from persisted JSON.
+
 ## Cost Tracking & Budget Management
 
 ```typescript
