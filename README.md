@@ -64,6 +64,42 @@ console.log(response.message);
 console.log(`Provider: ${response.provider}, Cost: $${response.usage.cost}`);
 ```
 
+## Canonical Provider Contract
+
+`llm-providers` now exposes an explicit canonical boundary for downstream gateways and coding-agent orchestrators:
+
+```typescript
+import {
+  canonicalToLLMRequest,
+  normalizeLLMRequest,
+  normalizeLLMResponse,
+  type CanonicalLLMRequest,
+} from '@stackbilt/llm-providers';
+```
+
+The intended architecture is:
+
+```text
+client protocol -> gateway adapter -> CanonicalLLMRequest -> llm-providers -> vendor API
+```
+
+Gateways should terminate Anthropic Messages, OpenAI Chat/Responses, Ollama-style local proxy calls, or other client protocols at their own boundary, then normalize into `CanonicalLLMRequest`. Provider selection and vendor translation remain inside this package.
+
+The canonical request is capability-oriented rather than vendor-oriented:
+
+- `messages` and `system` separate normalized chat history from system instructions
+- `sampling` carries `temperature`, `maxTokens`, and `seed`
+- `tools`, `toolMode`, and `builtInTools` describe requested tool behavior
+- `output` describes text, JSON-object, or JSON-schema structured output
+- `media` carries vision inputs independently of provider wire format
+- `workload` and `requirements` describe routing intent and required capabilities
+- `providerOptions` contains namespaced vendor-specific extensions such as Cloudflare `lora` or Cerebras `reasoning`
+- `metadata` carries request identity, tenancy, gateway metadata, cache hints, and custom caller metadata
+
+Existing `LLMRequest` fields are still supported as compatibility input. `normalizeLLMRequest()` maps legacy aliases such as `response_format`, `toolChoice`, `images`, `lora`, `topP`, `frequencyPenalty`, `reasoning`, and `prediction` into the canonical shape. `canonicalToLLMRequest()` converts canonical requests back into the existing adapter input while providers migrate internally.
+
+`normalizeLLMResponse()` provides a stable canonical response shape with normalized routing metadata (`selectedProvider`, `selectedModel`, fallback chain, and capability degradations) while preserving raw provider extras under `metadata`.
+
 ### Auto-Discovery from Environment
 
 ```typescript
