@@ -58,6 +58,30 @@ export type {
   BatchJob
 } from './types.js';
 
+// Canonical provider contract
+export {
+  canonicalToLLMRequest,
+  normalizeLLMRequest,
+  normalizeLLMResponse,
+} from './canonical.js';
+export type {
+  CanonicalDegradation,
+  CanonicalFallbackHop,
+  CanonicalLLMRequest,
+  CanonicalLLMResponse,
+  CanonicalMediaPart,
+  CanonicalMessage,
+  CanonicalOutputFormat,
+  CanonicalProviderOptions,
+  CanonicalRequestMetadata,
+  CanonicalRequirements,
+  CanonicalResponseError,
+  CanonicalRoutingMetadata,
+  CanonicalSamplingOptions,
+  CanonicalTool,
+  CanonicalToolMode,
+} from './canonical.js';
+
 // Provider implementations
 export { BaseProvider } from './providers/base.js';
 export { OpenAIProvider } from './providers/openai.js';
