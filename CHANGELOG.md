@@ -3,6 +3,17 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.12.0] — 2026-06-05
+
+Canonical provider contract hardening from issue #81 / PR #82. Additive only.
+
+### Added
+- **Canonical request/response contract exports** — new `CanonicalLLMRequest`, `CanonicalLLMResponse`, and related canonical types provide a provider-neutral boundary for gateways and coding-agent orchestrators.
+- **Canonical normalizers** — `normalizeLLMRequest()` maps compatibility `LLMRequest` fields such as `response_format`, `toolChoice`, `images`, `lora`, `topP`, `frequencyPenalty`, `reasoning`, and `prediction` into the canonical shape; `canonicalToLLMRequest()` converts canonical requests back into existing adapter input while providers migrate internally.
+- **Canonical response routing metadata helper** — `normalizeLLMResponse()` returns a stable response shape with selected provider/model, fallback chain, capability degradation, normalized error, and provider-extra metadata slots.
+- **Canonical contract tests** — one canonical fixture now exercises OpenAI-compatible, Anthropic-compatible, Groq/Cerebras, NVIDIA, and Cloudflare adapter preparation paths without live API calls.
+- **Gateway boundary documentation** — README now documents `client protocol -> gateway adapter -> CanonicalLLMRequest -> llm-providers -> vendor API`.
+
 ## [1.11.0] — 2026-05-31
 
 Reliability and gateway-routing hardening. Additive APIs plus bug fixes from issues #61, #62, #63, #64, #65, and #67.
