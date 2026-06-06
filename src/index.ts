@@ -25,6 +25,7 @@ export type {
   ProviderConfig,
   OpenAIConfig,
   AnthropicConfig,
+  CloudflareAIGatewayOptions,
   CloudflareConfig,
   CerebrasConfig,
   GroqConfig,

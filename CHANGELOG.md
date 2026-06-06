@@ -3,6 +3,15 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.13.0] — 2026-06-06
+
+Cloudflare Workers AI cache binding support from issue #84. Additive only.
+
+### Added
+- **Cloudflare Workers AI cache run options** — `CloudflareProvider` now translates `CacheHints.sessionId` into Workers AI binding `extraHeaders['x-session-affinity']` for `provider-prefix` / `both` cache strategies, including streaming and raw vision calls.
+- **Cloudflare AI Gateway binding config** — `CloudflareConfig.gateway` exposes typed Workers AI binding Gateway options and merges request cache metadata (`GatewayMetadata.cacheKey`, `cacheTtl`, and custom metadata) into the third `env.AI.run()` argument.
+- **Workers AI cached token usage** — Cloudflare usage parsing now normalizes cached input token counts into `TokenUsage.cachedInputTokens` when Workers AI returns them.
+
 ## [1.12.0] — 2026-06-05
 
 Canonical provider contract hardening from issue #81 / PR #82. Additive only.

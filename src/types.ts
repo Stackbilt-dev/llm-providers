@@ -259,9 +259,27 @@ export interface AnthropicConfig extends ProviderConfig {
   version?: string;
 }
 
+export interface CloudflareAIGatewayOptions {
+  /** AI Gateway id for Workers AI binding calls, e.g. "default" or a custom gateway id. */
+  id: string;
+  /** Workers AI binding Gateway response-cache key. */
+  cacheKey?: string;
+  /** Workers AI binding Gateway response-cache TTL in seconds. */
+  cacheTtl?: number;
+  /** Workers AI binding Gateway response-cache bypass flag. */
+  skipCache?: boolean;
+  /** Gateway metadata visible in AI Gateway logs. */
+  metadata?: Record<string, number | string | boolean | null | bigint>;
+  collectLog?: boolean;
+  eventId?: string;
+  requestTimeoutMs?: number;
+}
+
 export interface CloudflareConfig extends ProviderConfig {
   accountId?: string;
   ai?: Ai; // Cloudflare AI binding
+  /** Workers AI binding Gateway options passed as the third env.AI.run() argument. */
+  gateway?: CloudflareAIGatewayOptions;
 }
 
 export interface CerebrasConfig extends ProviderConfig {

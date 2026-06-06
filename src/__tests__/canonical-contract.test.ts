@@ -177,6 +177,37 @@ describe('canonical provider contract', () => {
     });
   });
 
+  it('round-trips cache and gateway metadata through the canonical boundary', () => {
+    const legacy = canonicalToLLMRequest(normalizeLLMRequest({
+      messages: [{ role: 'user', content: 'Use cached context' }],
+      requestId: 'req-cache',
+      tenantId: 'tenant-cache',
+      gatewayMetadata: {
+        requestId: 'gateway-req-cache',
+        cacheKey: 'planning-cache-key',
+        cacheTtl: 300,
+        customMetadata: { routeClass: 'planning' },
+      },
+      cache: {
+        strategy: 'both',
+        sessionId: 'agent-session-cache',
+        cacheablePrefix: 'auto',
+      },
+    }));
+
+    expect(legacy.gatewayMetadata).toEqual({
+      requestId: 'gateway-req-cache',
+      cacheKey: 'planning-cache-key',
+      cacheTtl: 300,
+      customMetadata: { routeClass: 'planning' },
+    });
+    expect(legacy.cache).toEqual({
+      strategy: 'both',
+      sessionId: 'agent-session-cache',
+      cacheablePrefix: 'auto',
+    });
+  });
+
   it('adds stable canonical response routing metadata', () => {
     const canonical = normalizeLLMResponse({
       id: 'res-1',

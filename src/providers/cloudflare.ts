@@ -8,6 +8,7 @@ import type {
   LLMResponse,
   LLMImageInput,
   CloudflareConfig,
+  CloudflareAIGatewayOptions,
   ModelCapabilities,
   TokenUsage,
   ToolCall
@@ -74,6 +75,11 @@ interface CloudflareRequest {
   frequency_penalty?: number;
 }
 
+interface CloudflareRunOptions {
+  gateway?: CloudflareAIGatewayOptions;
+  extraHeaders?: Record<string, string>;
+}
+
 /** Workers AI returns various response shapes depending on the model. */
 interface WorkersAIToolCall {
   id?: string;
@@ -107,6 +113,9 @@ interface WorkersAIUsage {
   completion_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  cached_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number };
+  input_tokens_details?: { cached_tokens?: number };
 }
 
 interface WorkersAIResult {
@@ -155,6 +164,7 @@ export class CloudflareProvider extends BaseProvider {
 
   private ai: Ai;
   private accountId?: string;
+  private gateway?: CloudflareAIGatewayOptions;
 
   constructor(config: CloudflareConfig) {
     super(config);
@@ -165,6 +175,7 @@ export class CloudflareProvider extends BaseProvider {
 
     this.ai = config.ai;
     this.accountId = config.accountId;
+    this.gateway = config.gateway;
   }
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
@@ -188,9 +199,7 @@ export class CloudflareProvider extends BaseProvider {
         }
 
         const cloudflareRequest = this.formatRequest(request, model);
-        // Workers AI binding uses branded model names; cast at API boundary
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
-        const result = await (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(model, cloudflareRequest);
+        const result = await this.runModel(model, cloudflareRequest, request);
 
         return this.formatResponse(result as WorkersAIResult, model, request, Date.now() - startTime);
       });
@@ -445,12 +454,60 @@ export class CloudflareProvider extends BaseProvider {
       }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
-    return (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(model, {
+    return this.runModel(model, {
       image: imageBytes,
       prompt: `${systemPrefix}${lastUserText}`,
       max_tokens: request.maxTokens ?? 512
-    }) as Promise<WorkersAIResult>;
+    }, request) as Promise<WorkersAIResult>;
+  }
+
+  private runModel(model: string, input: unknown, request: LLMRequest): Promise<unknown> {
+    const options = this.buildRunOptions(request);
+    const ai = this.ai as {
+      run(model: string, input: unknown, options?: CloudflareRunOptions): Promise<unknown>;
+    };
+
+    return options ? ai.run(model, input, options) : ai.run(model, input);
+  }
+
+  private buildRunOptions(request: LLMRequest): CloudflareRunOptions | undefined {
+    const options: CloudflareRunOptions = {};
+    const cacheStrategy = request.cache?.strategy;
+
+    if (
+      request.cache?.sessionId &&
+      (cacheStrategy === 'provider-prefix' || cacheStrategy === 'both')
+    ) {
+      options.extraHeaders = { 'x-session-affinity': request.cache.sessionId };
+    }
+
+    const gateway = this.buildGatewayOptions(request);
+    if (gateway) {
+      options.gateway = gateway;
+    }
+
+    return Object.keys(options).length > 0 ? options : undefined;
+  }
+
+  private buildGatewayOptions(request: LLMRequest): CloudflareAIGatewayOptions | undefined {
+    if (!this.gateway) {
+      return undefined;
+    }
+
+    const metadata: CloudflareAIGatewayOptions['metadata'] = {
+      ...(this.gateway.metadata ?? {}),
+      ...(request.gatewayMetadata?.customMetadata ?? {}),
+      ...(request.gatewayMetadata?.requestId ? { requestId: request.gatewayMetadata.requestId } : {}),
+      ...(request.requestId ? { llmRequestId: request.requestId } : {}),
+      ...(request.tenantId ? { tenantId: request.tenantId } : {}),
+    };
+
+    return {
+      ...this.gateway,
+      ...(request.gatewayMetadata?.cacheKey ? { cacheKey: request.gatewayMetadata.cacheKey } : {}),
+      ...(typeof request.gatewayMetadata?.cacheTtl === 'number' ? { cacheTtl: request.gatewayMetadata.cacheTtl } : {}),
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    };
   }
 
   private formatRequest(request: LLMRequest, model: string): CloudflareRequest {
@@ -764,12 +821,19 @@ export class CloudflareProvider extends BaseProvider {
           ? totalTokens
           : normalizedInputTokens + normalizedOutputTokens;
 
-      return {
+      const normalizedUsage: TokenUsage = {
         inputTokens: normalizedInputTokens,
         outputTokens: normalizedOutputTokens,
         totalTokens: normalizedTotalTokens,
         cost: this.calculateCost(normalizedInputTokens, normalizedOutputTokens, model)
       };
+
+      const cachedInputTokens = this.extractCachedInputTokens(usage);
+      if (typeof cachedInputTokens === 'number') {
+        normalizedUsage.cachedInputTokens = cachedInputTokens;
+      }
+
+      return normalizedUsage;
     }
 
     const estimatedInputTokens =
@@ -783,6 +847,19 @@ export class CloudflareProvider extends BaseProvider {
       totalTokens: estimatedInputTokens + estimatedOutputTokens,
       cost: this.calculateCost(estimatedInputTokens, estimatedOutputTokens, model)
     };
+  }
+
+  private extractCachedInputTokens(usage: WorkersAIUsage | undefined): number | undefined {
+    if (!usage) {
+      return undefined;
+    }
+
+    const cachedTokens =
+      usage.prompt_tokens_details?.cached_tokens ??
+      usage.input_tokens_details?.cached_tokens ??
+      usage.cached_tokens;
+
+    return typeof cachedTokens === 'number' ? cachedTokens : undefined;
   }
 
   private extractFinishReason(
@@ -844,9 +921,7 @@ export class CloudflareProvider extends BaseProvider {
     const stream = new ReadableStream<string>({
       start: async (controller) => {
         try {
-          // Cloudflare AI streaming support
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Ai.run() requires branded model types
-          const stream = await (this.ai as { run(model: string, input: unknown): Promise<unknown> }).run(model, cloudflareRequest);
+          const stream = await this.runModel(model, cloudflareRequest, request);
 
           if (stream instanceof ReadableStream) {
             const reader = stream.getReader();

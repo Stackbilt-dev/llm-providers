@@ -571,6 +571,34 @@ console.log(response.usage.cacheWriteInputTokens);   // Anthropic cache create/w
 console.log(response.usage.cachedInputTokens);       // OpenAI / Groq / Cerebras cache hit tokens
 ```
 
+Cloudflare Workers AI prefix caching uses the same `cache` hint. When `strategy` is `'provider-prefix'` or `'both'`, `sessionId` is sent to the Workers AI binding as `x-session-affinity` so repeated agent turns can route to the same model instance.
+
+```typescript
+const llm = new CloudflareProvider({
+  ai: env.AI,
+  gateway: {
+    id: 'default',
+    skipCache: false,
+  },
+});
+
+const response = await llm.generateResponse({
+  messages: [{ role: 'user', content: 'Summarize the next patch.' }],
+  systemPrompt: stableAgentInstructions,
+  model: '@cf/openai/gpt-oss-120b',
+  cache: {
+    strategy: 'both',
+    sessionId: 'agent:repo-123',
+  },
+  gatewayMetadata: {
+    cacheKey: 'summary:repo-123:patch-456',
+    cacheTtl: 300,
+  },
+});
+
+console.log(response.usage.cachedInputTokens);
+```
+
 | Strategy | Behavior |
 |----------|----------|
 | `'off'` | No caching hints sent |

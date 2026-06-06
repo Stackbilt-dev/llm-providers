@@ -145,6 +145,87 @@ describe('CloudflareProvider', () => {
       expect(response.usage.outputTokens).toBeGreaterThan(0);
     });
 
+    it('passes x-session-affinity in Workers AI run options for provider-prefix caching', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Cached prefix.' });
+
+      await provider.generateResponse({
+        ...testRequest,
+        cache: { strategy: 'provider-prefix', sessionId: 'agent-session-123' }
+      });
+
+      expect(mockAiRun).toHaveBeenCalledWith(
+        '@cf/meta/llama-3.1-8b-instruct',
+        expect.objectContaining({ messages: [{ role: 'user', content: 'Hello, world!' }] }),
+        { extraHeaders: { 'x-session-affinity': 'agent-session-123' } }
+      );
+    });
+
+    it('does not pass x-session-affinity for response-only cache strategy', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'Gateway cache only.' });
+
+      await provider.generateResponse({
+        ...testRequest,
+        cache: { strategy: 'response', sessionId: 'agent-session-123' }
+      });
+
+      expect(mockAiRun.mock.calls[0]).toHaveLength(2);
+    });
+
+    it('passes configured AI Gateway binding options with request cache metadata overrides', async () => {
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        gateway: {
+          id: 'default',
+          skipCache: true,
+          cacheKey: 'default-key',
+          metadata: { service: 'llm-providers' }
+        }
+      });
+      mockAiRun.mockResolvedValueOnce({ response: 'Gateway routed.' });
+
+      await provider.generateResponse({
+        ...testRequest,
+        requestId: 'req-123',
+        tenantId: 'tenant-a',
+        gatewayMetadata: {
+          cacheKey: 'request-key',
+          cacheTtl: 120,
+          customMetadata: { routeClass: 'planning' }
+        }
+      });
+
+      expect(mockAiRun.mock.calls[0][2]).toEqual({
+        gateway: {
+          id: 'default',
+          skipCache: true,
+          cacheKey: 'request-key',
+          cacheTtl: 120,
+          metadata: {
+            service: 'llm-providers',
+            routeClass: 'planning',
+            llmRequestId: 'req-123',
+            tenantId: 'tenant-a'
+          }
+        }
+      });
+    });
+
+    it('normalizes Workers AI cached input tokens when returned in usage details', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        response: 'Warm response.',
+        usage: {
+          prompt_tokens: 64,
+          completion_tokens: 6,
+          total_tokens: 70,
+          prompt_tokens_details: { cached_tokens: 48 }
+        }
+      });
+
+      const response = await provider.generateResponse(testRequest);
+
+      expect(response.usage.cachedInputTokens).toBe(48);
+    });
+
     it('should pass OpenAI-format tools and parse chat completions tool calls', async () => {
       mockAiRun.mockResolvedValueOnce({
         id: 'chatcmpl-cf-123',
@@ -332,6 +413,25 @@ describe('CloudflareProvider', () => {
       });
     });
 
+    it('passes x-session-affinity in Workers AI run options for streaming calls', async () => {
+      mockAiRun.mockResolvedValueOnce(new ReadableStream({
+        start(controller) {
+          controller.enqueue('streamed');
+          controller.close();
+        }
+      }));
+
+      const stream = await provider.streamResponse({
+        ...testRequest,
+        cache: { strategy: 'both', sessionId: 'stream-session-123' }
+      });
+
+      expect(await readStream(stream)).toBe('streamed');
+      expect(mockAiRun.mock.calls[0][2]).toEqual({
+        extraHeaders: { 'x-session-affinity': 'stream-session-123' }
+      });
+    });
+
     it('attaches non-zero estimated usage when stream chunks omit provider usage', async () => {
       mockAiRun.mockResolvedValueOnce(new ReadableStream({
         start(controller) {
@@ -427,6 +527,21 @@ describe('CloudflareProvider', () => {
       expect(body.messages).toBeUndefined();
       expect(result.content).toBe('A delicious pasta dish.');
       expect(result.message).toBe('A delicious pasta dish.');
+    });
+
+    it('passes Workers AI run options through the llama-3.2 raw binding path', async () => {
+      mockAiRun.mockResolvedValueOnce({ response: 'A cached image answer.' });
+
+      await provider.generateResponse({
+        model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        messages: [{ role: 'user', content: 'Describe this food image.' }],
+        images: [{ data: 'QUJD', mimeType: 'image/jpeg' }],
+        cache: { strategy: 'provider-prefix', sessionId: 'vision-session-123' }
+      });
+
+      expect(mockAiRun.mock.calls[0][2]).toEqual({
+        extraHeaders: { 'x-session-affinity': 'vision-session-123' }
+      });
     });
 
     it('prepends system prompt to raw binding prompt for llama-3.2', async () => {
