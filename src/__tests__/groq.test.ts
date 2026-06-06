@@ -380,6 +380,35 @@ describe('GroqProvider', () => {
       expect(body.tool_choice).toBe('auto');
     });
 
+    it('should handle tool-call-only responses with omitted content', async () => {
+      const { content: _content, ...messageWithoutContent } = toolCallResponse.choices[0].message;
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ...toolCallResponse,
+          choices: [{
+            ...toolCallResponse.choices[0],
+            message: messageWithoutContent
+          }]
+        }),
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+
+      const response = await provider.generateResponse({
+        ...toolRequest,
+        model: 'llama-3.3-70b-versatile'
+      });
+
+      expect(response.message).toBe('');
+      expect(response.content).toBe('');
+      expect(response.finishReason).toBe('tool_calls');
+      expect(response.toolCalls).toHaveLength(1);
+      expect(response.toolCalls![0].id).toBe('call_abc123');
+      expect(response.toolCalls![0].function.name).toBe('get_weather');
+      expect(response.toolCalls![0].function.arguments).toBe('{"location":"London"}');
+    });
+
     it('should handle multi-turn tool conversations', async () => {
       const multiTurnRequest: LLMRequest = {
         messages: [

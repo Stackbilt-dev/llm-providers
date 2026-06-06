@@ -3,6 +3,13 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.13.1] — 2026-06-06
+
+Patch fix for Groq tool-call-only responses from issue #86.
+
+### Fixed
+- **Groq omitted tool-call content** — `GroqProvider` now accepts assistant responses that omit `message.content` when `message.tool_calls` is present, normalizing the assistant text to empty string while preserving `finishReason: "tool_calls"` and populated `toolCalls`.
+
 ## [1.13.0] — 2026-06-06
 
 Cloudflare Workers AI cache binding support from issue #84. Additive only.

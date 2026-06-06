@@ -28,7 +28,7 @@ const GROQ_RESPONSE_SCHEMA: SchemaField[] = [
     items: {
       shape: [
         { path: 'message', type: 'object' },
-        { path: 'message.content', type: 'string-or-null' },
+        { path: 'message.content', type: 'string-or-null', optional: true },
         { path: 'finish_reason', type: 'string' },
         {
           path: 'message.tool_calls',
@@ -126,7 +126,7 @@ interface GroqResponse {
     index: number;
     message: {
       role: string;
-      content: string | null;
+      content?: string | null;
       // The model's internal reasoning (exposes built-in search queries).
       // Present on both compound and gpt-oss when built-in tools run.
       reasoning?: string;
