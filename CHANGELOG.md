@@ -3,7 +3,7 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.14.0] — 2026-06-07
 
 Gateway route-planning surface from issue #87. Additive only.
 
