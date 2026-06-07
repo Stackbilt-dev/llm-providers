@@ -3,6 +3,16 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Gateway route-planning surface from issue #87. Additive only.
+
+### Added
+- **Worker gateway route plan export** — `getGatewayRoutePlan()` packages canonical normalization, catalog routing, cache hints, capability checks, degradations, and warnings into one Worker-friendly object for use behind OpenAI-compatible, Ollama-style, or Anthropic-compatible API routers.
+- **Route plan types** — `GatewayRoutePlan`, `GatewayRouteRequirements`, `GatewayRouteCapabilityReport`, and `GatewayRouteCachePlan` describe the route-plan shape (storage-agnostic; consumers map `plan.cache` onto their own KV/Cache API/D1/R2 implementation).
+- **LoRA degradation reporting** — when a request carries `lora` and routing selects a non-Cloudflare provider, the plan reports a `stripped` degradation and warns that Cloudflare adapter ids are forwarded to Workers AI without validation.
+- **Route plan tests** — `src/__tests__/gateway-routing.test.ts` covers canonical→plan mapping, cache-hint handling, LoRA-on/off-Cloudflare paths, and built-in tool capability mismatches.
+
 ## [1.13.1] — 2026-06-06
 
 Patch fix for Groq tool-call-only responses from issue #86.

@@ -83,6 +83,15 @@ export type {
   CanonicalToolMode,
 } from './canonical.js';
 
+// Gateway / Worker route planning
+export { getGatewayRoutePlan } from './gateway-routing.js';
+export type {
+  GatewayRouteCachePlan,
+  GatewayRouteCapabilityReport,
+  GatewayRoutePlan,
+  GatewayRouteRequirements,
+} from './gateway-routing.js';
+
 // Provider implementations
 export { BaseProvider } from './providers/base.js';
 export { OpenAIProvider } from './providers/openai.js';

@@ -372,6 +372,28 @@ const annotatedRequest = {
 const response = await llm.generateResponse(annotatedRequest);
 ```
 
+### Worker Gateway Route Plans
+
+`getGatewayRoutePlan()` packages canonical normalization, catalog routing, cache hints, and capability checks into one Worker-friendly object. Use it behind OpenAI-compatible, Ollama-style, or Anthropic-compatible API routers before dispatching the request. The helper accepts either compatibility `LLMRequest` input, as shown below, or `CanonicalLLMRequest`.
+
+```typescript
+import { getGatewayRoutePlan } from '@stackbilt/llm-providers';
+
+const plan = getGatewayRoutePlan({
+  messages: [{ role: 'user', content: 'Call tools and return JSON.' }],
+  stream: true,
+  tools: [weatherTool],
+  response_format: { type: 'json_object' },
+  cache: { strategy: 'both', key: 'agent:weather:v1', ttl: 300 },
+}, ['cloudflare', 'groq', 'anthropic']);
+
+console.log(plan.selectedProvider, plan.selectedModel, plan.degradations);
+```
+
+The route plan intentionally does not read or write a cache. A Worker should map `plan.cache` onto its own storage implementation, such as KV, Cache API, D1, or R2. Provider prompt-cache hints and response-cache hints stay separate so gateways can decide which storage tier owns each policy.
+
+When `lora` is present, the route plan warns that the adapter id is forwarded to Workers AI without validation. If routing selects a non-Cloudflare provider, the plan reports a `lora` degradation so the gateway can fail, reroute, or explain the downgrade before dispatch.
+
 ### Deprecation warnings on responses
 
 When `generateResponse()` routes to a model on `compatibility` or `retired` lifecycle, the response includes a warning:
