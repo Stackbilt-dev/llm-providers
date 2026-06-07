@@ -361,6 +361,40 @@ describe('Tool call validation at provider boundary', () => {
       provider = new CerebrasProvider({ apiKey: 'test-key' });
     });
 
+    it('should pass Cerebras tool calls when message.content is omitted', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'chatcmpl-1',
+          model: 'zai-glm-4.7',
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              tool_calls: [{
+                id: 'call_ok',
+                type: 'function',
+                function: { name: 'lookup', arguments: '{}' }
+              }]
+            },
+            finish_reason: 'tool_calls'
+          }],
+          usage: baseUsage
+        }),
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+
+      const res = await provider.generateResponse({
+        messages: [{ role: 'user', content: 'hi' }],
+        model: 'zai-glm-4.7'
+      });
+
+      expect(res.content).toBe('');
+      expect(res.toolCalls).toHaveLength(1);
+      expect(res.toolCalls![0].id).toBe('call_ok');
+      expect(res.toolCalls![0].function.name).toBe('lookup');
+    });
+
     it('should drop Cerebras tool call with empty function.name', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

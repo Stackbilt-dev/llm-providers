@@ -27,7 +27,7 @@ const CEREBRAS_RESPONSE_SCHEMA: SchemaField[] = [
     items: {
       shape: [
         { path: 'message', type: 'object' },
-        { path: 'message.content', type: 'string-or-null' },
+        { path: 'message.content', type: 'string-or-null', optional: true },
         { path: 'finish_reason', type: 'string' },
         {
           path: 'message.tool_calls',
@@ -101,7 +101,7 @@ interface CerebrasResponse {
     index: number;
     message: {
       role: string;
-      content: string | null;
+      content?: string | null;
       tool_calls?: Array<{
         id: string;
         type: 'function';
