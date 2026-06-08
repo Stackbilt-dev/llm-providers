@@ -3,6 +3,13 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.14.1] — 2026-06-07
+
+Patch compatibility fix for Cerebras OpenAI-compatible tool-call responses.
+
+### Fixed
+- **Cerebras omitted tool-call content** — `CerebrasProvider` now accepts assistant tool-call responses that omit `message.content`, normalizing text content to an empty string while preserving valid `toolCalls`. This matches the tolerance already used for Groq and Cloudflare OpenAI-compatible adapters.
+
 ## [1.14.0] — 2026-06-07
 
 Gateway route-planning surface from issue #87. Additive only.
