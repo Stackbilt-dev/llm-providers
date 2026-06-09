@@ -328,6 +328,36 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.0000008,
     description: 'Workers AI GPT-OSS 120B'
   }, { speed: 4, quality: 5, cost: 4 }),
+  entry('cloudflare', '@cf/moonshotai/kimi-k2.6', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION', 'BALANCED'], {
+    maxContextLength: 262100,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI Kimi K2.6 — frontier-scale agent model with multi-turn tools, vision, structured outputs, and 262K context'
+  }, { speed: 3, quality: 5, cost: 5 }),
+  entry('cloudflare', '@cf/zai-org/glm-4.7-flash', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI GLM-4.7-Flash — fast multilingual model with multi-turn tool calling and 131K context'
+  }, { speed: 5, quality: 4, cost: 5 }),
+  entry('cloudflare', 'deepseek/deepseek-v4-pro', 'active', ['HIGH_PERFORMANCE', 'BALANCED'], {
+    maxContextLength: 128000,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI DeepSeek V4 Pro - high-capability reasoning and coding model'
+  }, { speed: 3, quality: 5, cost: 5 }),
   entry('cloudflare', '@cf/tinyllama/tinyllama-1.1b-chat-v1.0', 'compatibility', ['COST_EFFECTIVE'], {
     maxContextLength: 2048,
     supportsStreaming: true,

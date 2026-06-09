@@ -3,6 +3,15 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.14.2] — 2026-06-09
+
+Workers AI catalog expansion for Cloudflare credit-backed gateway routing.
+
+### Added
+- **Cloudflare Kimi K2.6** — adds `@cf/moonshotai/kimi-k2.6` as an active Workers AI catalog entry with long context, tool calling, vision, and structured-agent workload metadata.
+- **Cloudflare GLM-4.7-Flash** — adds `@cf/zai-org/glm-4.7-flash` as an active fast/balanced Workers AI catalog entry with long context and tool-calling metadata.
+- **Cloudflare DeepSeek V4 Pro** — adds the dashboard model slug `deepseek/deepseek-v4-pro` as an active high-performance Workers AI catalog entry for reasoning and coding routes.
+
 ## [1.14.1] — 2026-06-07
 
 Patch compatibility fix for Cerebras OpenAI-compatible tool-call responses.

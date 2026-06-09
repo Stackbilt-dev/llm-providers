@@ -148,6 +148,9 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/mistral/mistral-7b-instruct-v0.1',
     '@cf/openchat/openchat-3.5-0106',
     '@cf/openai/gpt-oss-120b',
+    '@cf/moonshotai/kimi-k2.6',
+    '@cf/zai-org/glm-4.7-flash',
+    'deepseek/deepseek-v4-pro',
     '@cf/tinyllama/tinyllama-1.1b-chat-v1.0',
     '@cf/qwen/qwen1.5-0.5b-chat',
     '@cf/qwen/qwen1.5-1.8b-chat',
@@ -333,6 +336,36 @@ export class CloudflareProvider extends BaseProvider {
         inputTokenCost: 0.00035,  // $0.35/MTok — matches workers-ai-chat.ts GPT_OSS_RATES
         outputTokenCost: 0.00075, // $0.75/MTok
         description: 'GPT-OSS 120B - OpenAI-format tool calling on Workers AI'
+      },
+      '@cf/moonshotai/kimi-k2.6': {
+        maxContextLength: 262100,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Kimi K2.6 — multi-turn tools, vision, structured outputs, 262K context'
+      },
+      '@cf/zai-org/glm-4.7-flash': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'GLM-4.7-Flash — fast multilingual text generation with multi-turn tools'
+      },
+      'deepseek/deepseek-v4-pro': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'DeepSeek V4 Pro - high-capability reasoning and coding model on Workers AI'
       },
       '@cf/tinyllama/tinyllama-1.1b-chat-v1.0': {
         maxContextLength: 2048,
