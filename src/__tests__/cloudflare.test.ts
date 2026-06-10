@@ -481,6 +481,42 @@ describe('CloudflareProvider', () => {
       expect(usage?.outputTokens).toBeGreaterThan(0);
       expect(usage?.totalTokens).toBe((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0));
     });
+
+    it('normalizes chat-completion text when local REST shim returns JSON for a stream request', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        id: 'chatcmpl-cf-kimi',
+        model: '@cf/moonshotai/kimi-k2.6',
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: 'cf-stream-ok'
+            },
+            finish_reason: 'stop'
+          }
+        ],
+        usage: {
+          prompt_tokens: 18,
+          completion_tokens: 4,
+          total_tokens: 22
+        }
+      });
+
+      const stream = await provider.streamResponse({
+        ...testRequest,
+        model: '@cf/moonshotai/kimi-k2.6',
+        stream: true
+      });
+      const usagePromise = getStreamUsage(stream);
+
+      expect(await readStream(stream)).toBe('cf-stream-ok');
+      await expect(usagePromise).resolves.toMatchObject({
+        inputTokens: 18,
+        outputTokens: 4,
+        totalTokens: 22
+      });
+    });
   });
 
   describe('vision', () => {

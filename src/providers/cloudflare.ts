@@ -989,7 +989,7 @@ export class CloudflareProvider extends BaseProvider {
             }
           } else {
             // Non-streaming response, send all at once
-            const content = typeof stream === 'string' ? stream : (stream as WorkersAIResult)?.response || '';
+            const content = typeof stream === 'string' ? stream : this.extractText(stream as WorkersAIResult);
             if (typeof stream === 'object' && stream !== null && !Array.isArray(stream)) {
               const result = stream as WorkersAIResult;
               if (result.usage) {

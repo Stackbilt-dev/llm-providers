@@ -3,6 +3,13 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.14.4] — 2026-06-10
+
+Patch compatibility fix for Cloudflare local gateway streaming.
+
+### Fixed
+- **Cloudflare JSON-to-stream normalization** — `CloudflareProvider.streamResponse()` now normalizes non-streaming chat-completion JSON responses through the same parser used by `generateResponse()`. This supports local gateway shims that request JSON from Cloudflare and synthesize Claude/Codex client streams.
+
 ## [1.14.3] — 2026-06-10
 
 Patch compatibility fix for Cloudflare reasoning model responses.
