@@ -3,6 +3,13 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.14.5] — 2026-06-10
+
+Patch error-classification fix for Cloudflare bad-input failures (issue #91).
+
+### Fixed
+- **Cloudflare `InvalidRequestError` wrapping** — `CloudflareProvider` now catches Workers AI `AiError: Bad input` responses (CF schema validation failures) and re-throws them as `InvalidRequestError` instead of propagating the raw `AiError`. This lets callers and gateways distinguish non-retryable bad-input failures from transient infrastructure errors without parsing raw message strings.
+
 ## [1.14.4] — 2026-06-10
 
 Patch compatibility fix for Cloudflare local gateway streaming.

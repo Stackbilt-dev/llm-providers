@@ -767,6 +767,36 @@ describe('CloudflareProvider', () => {
     });
   });
 
+  describe('AiError wrapping', () => {
+    it('wraps CF Bad-input AiError as InvalidRequestError', async () => {
+      const aiErr = new Error('Bad input: Error: oneOf at \'/\' not met, 0 matches: Type mismatch of \'/messages/0/content\', \'array\' not in \'string\'');
+      aiErr.name = 'AiError';
+      mockAiRun.mockRejectedValueOnce(aiErr);
+
+      const { InvalidRequestError } = await import('../errors');
+      await expect(
+        provider.generateResponse({
+          model: '@cf/openai/gpt-oss-120b',
+          messages: [{ role: 'user', content: 'test' }]
+        })
+      ).rejects.toThrow(InvalidRequestError);
+    });
+
+    it('does not wrap non-bad-input errors as InvalidRequestError', async () => {
+      const serverErr = new Error('Workers AI: internal server error');
+      serverErr.name = 'AiError';
+      mockAiRun.mockRejectedValueOnce(serverErr);
+
+      const { InvalidRequestError } = await import('../errors');
+      await expect(
+        provider.generateResponse({
+          model: '@cf/openai/gpt-oss-120b',
+          messages: [{ role: 'user', content: 'test' }]
+        })
+      ).rejects.not.toThrow(InvalidRequestError);
+    });
+  });
+
   describe('response envelope schema validation', () => {
     it('accepts a valid choices-based response', async () => {
       mockAiRun.mockResolvedValueOnce({

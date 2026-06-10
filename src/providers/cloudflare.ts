@@ -16,6 +16,7 @@ import type {
 import { BaseProvider } from './base.js';
 import {
   ConfigurationError,
+  InvalidRequestError,
   ModelNotFoundError
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
@@ -216,7 +217,7 @@ export class CloudflareProvider extends BaseProvider {
       const responseTime = Date.now() - startTime;
       this.updateMetrics(responseTime, false);
       this.logRequest(request, undefined, error as Error);
-      throw error;
+      throw this.wrapCFError(error);
     }
   }
 
@@ -939,6 +940,16 @@ export class CloudflareProvider extends BaseProvider {
     return result;
   }
 
+  // CF's Workers AI binding throws AiError with "Bad input: ..." for schema validation
+  // failures. Wrapping these as InvalidRequestError lets callers distinguish bad-input
+  // (non-retryable) from transient failures without parsing raw error messages.
+  private wrapCFError(error: unknown): unknown {
+    if (error instanceof Error && error.message.includes('Bad input')) {
+      return new InvalidRequestError(this.name, error.message);
+    }
+    return error;
+  }
+
   /**
    * Stream response support
    */
@@ -1003,7 +1014,7 @@ export class CloudflareProvider extends BaseProvider {
           controller.close();
         } catch (error) {
           usageTracker.resolve(undefined);
-          controller.error(error);
+          controller.error(this.wrapCFError(error));
         }
       }
     });
