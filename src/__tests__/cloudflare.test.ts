@@ -280,6 +280,37 @@ describe('CloudflareProvider', () => {
       expect(response.usage.totalTokens).toBe(32);
     });
 
+    it('normalizes Cloudflare reasoning_content when content is null', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        id: 'chatcmpl-cf-kimi',
+        model: '@cf/moonshotai/kimi-k2.6',
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: null,
+              reasoning_content: 'Interim Kimi reasoning text'
+            },
+            finish_reason: 'length'
+          }
+        ],
+        usage: {
+          prompt_tokens: 17,
+          completion_tokens: 32,
+          total_tokens: 49
+        }
+      });
+
+      const response = await provider.generateResponse({
+        ...testRequest,
+        model: '@cf/moonshotai/kimi-k2.6'
+      });
+
+      expect(response.message).toBe('Interim Kimi reasoning text');
+      expect(response.content).toBe('Interim Kimi reasoning text');
+    });
+
     it('should normalize Responses API output items into text and tool calls', async () => {
       mockAiRun.mockResolvedValueOnce({
         id: 'resp_123',

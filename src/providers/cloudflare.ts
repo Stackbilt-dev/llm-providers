@@ -92,6 +92,7 @@ interface WorkersAIChoice {
   message?: {
     role?: string;
     content?: string | null | Array<{ type?: string; text?: string }>;
+    reasoning_content?: string;
     tool_calls?: WorkersAIToolCall[];
   };
   finish_reason?: string;
@@ -755,6 +756,11 @@ export class CloudflareProvider extends BaseProvider {
     const chatContent = payload?.choices?.[0]?.message?.content;
     if (typeof chatContent === 'string') {
       return chatContent;
+    }
+
+    const reasoningContent = payload?.choices?.[0]?.message?.reasoning_content;
+    if (typeof reasoningContent === 'string' && reasoningContent.length > 0) {
+      return reasoningContent;
     }
 
     if (chatContent === null) {

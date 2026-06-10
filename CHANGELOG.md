@@ -3,6 +3,13 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.14.3] — 2026-06-10
+
+Patch compatibility fix for Cloudflare reasoning model responses.
+
+### Fixed
+- **Cloudflare reasoning-only content** — `CloudflareProvider` now normalizes `choices[0].message.reasoning_content` when Cloudflare returns `message.content: null`, preventing Kimi/other reasoning models from surfacing as empty successful outputs when the response is truncated before final content.
+
 ## [1.14.2] — 2026-06-09
 
 Workers AI catalog expansion for Cloudflare credit-backed gateway routing.
