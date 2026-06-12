@@ -3,6 +3,24 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.15.0] — 2026-06-12
+
+Expand Cloudflare Workers AI model catalog with 8 new models and fix glm-4.7-flash misclassification.
+
+### Added
+- **8 new Cloudflare Workers AI models** in `model-catalog.ts` and `cloudflare.ts`:
+  - `@cf/meta/llama-3.3-70b-instruct-fp8-fast` — primary `COST_EFFECTIVE`/`BALANCED`/`HIGH_PERFORMANCE`/`TOOL_CALLING` choice; fast FP8 inference with full tool calling
+  - `@cf/openai/gpt-oss-20b` — `COST_EFFECTIVE`/`TOOL_CALLING`; OpenAI-compatible 20B model
+  - `@cf/qwen/qwen2.5-coder-32b-instruct` — `COST_EFFECTIVE`/`BALANCED`/`TOOL_CALLING`; code-specialized 32B
+  - `@cf/mistralai/mistral-small-3.1-24b-instruct` — `BALANCED`/`TOOL_CALLING`; vision-capable 24B
+  - `@cf/qwen/qwen3-30b-a3b-fp8` — `BALANCED`/`HIGH_PERFORMANCE`; Qwen3 MoE 30B FP8
+  - `@cf/meta/llama-3.2-1b-instruct` — `COST_EFFECTIVE`; ultra-fast 1B for simple classification
+  - `@cf/meta/llama-3.2-3b-instruct` — `COST_EFFECTIVE`; 3B for lightweight tasks
+  - `@cf/moonshotai/kimi-k2.7-code` — `BALANCED`/`TOOL_CALLING`; code-specialized Kimi K2
+
+### Fixed
+- **`@cf/zai-org/glm-4.7-flash` misclassification** (issue #93) — demoted from `COST_EFFECTIVE` to `LONG_CONTEXT` only; this is a chain-of-thought/thinking model that outputs reasoning traces unsuitable for direct-response routing
+
 ## [1.14.5] — 2026-06-10
 
 Patch error-classification fix for Cloudflare bad-input failures (issue #91).

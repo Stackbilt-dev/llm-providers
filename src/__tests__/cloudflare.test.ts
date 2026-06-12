@@ -103,7 +103,7 @@ describe('CloudflareProvider', () => {
       expect(provider.getRecommendedModel({
         messages: [{ role: 'user', content: 'Hello' }],
         maxTokens: 200
-      })).toBe('@cf/zai-org/glm-4.7-flash');
+      })).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
 
       expect(provider.getRecommendedModel({
         messages: [{ role: 'user', content: 'Use the weather tool' }],
@@ -116,7 +116,7 @@ describe('CloudflareProvider', () => {
             parameters: { type: 'object' }
           }
         }]
-      })).toBe('@cf/openai/gpt-oss-120b');
+      })).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
     });
   });
 

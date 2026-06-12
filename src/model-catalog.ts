@@ -339,7 +339,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0,
     description: 'Workers AI Kimi K2.6 — frontier-scale agent model with multi-turn tools, vision, structured outputs, and 262K context'
   }, { speed: 3, quality: 5, cost: 5 }),
-  entry('cloudflare', '@cf/zai-org/glm-4.7-flash', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+  entry('cloudflare', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', 'active', ['COST_EFFECTIVE', 'BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING'], {
     maxContextLength: 131072,
     supportsStreaming: true,
     supportsTools: true,
@@ -347,7 +347,86 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: true,
     inputTokenCost: 0,
     outputTokenCost: 0,
-    description: 'Workers AI GLM-4.7-Flash — fast multilingual model with multi-turn tool calling and 131K context'
+    description: 'Workers AI Llama 3.3 70B FP8 Fast — primary COST_EFFECTIVE choice; fast FP8 inference, full tool calling'
+  }, { speed: 5, quality: 5, cost: 5 }),
+  entry('cloudflare', '@cf/openai/gpt-oss-20b', 'active', ['COST_EFFECTIVE', 'TOOL_CALLING'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI GPT-OSS 20B — lightweight tool-calling model; cost-effective complement to gpt-oss-120b'
+  }, { speed: 5, quality: 4, cost: 5 }),
+  entry('cloudflare', '@cf/qwen/qwen2.5-coder-32b-instruct', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING'], {
+    maxContextLength: 32768,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI Qwen 2.5 Coder 32B — purpose-built for code generation and completion'
+  }, { speed: 4, quality: 5, cost: 5 }),
+  entry('cloudflare', '@cf/mistralai/mistral-small-3.1-24b-instruct', 'active', ['BALANCED', 'TOOL_CALLING'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI Mistral Small 3.1 24B — strong balanced model with vision and tool calling'
+  }, { speed: 4, quality: 4, cost: 5 }),
+  entry('cloudflare', '@cf/qwen/qwen3-30b-a3b-fp8', 'active', ['BALANCED', 'HIGH_PERFORMANCE'], {
+    maxContextLength: 40960,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI Qwen3 30B FP8 — state-of-the-art Qwen3 for balanced/high-performance tasks'
+  }, { speed: 4, quality: 5, cost: 5 }),
+  entry('cloudflare', '@cf/meta/llama-3.2-1b-instruct', 'active', ['COST_EFFECTIVE'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI Llama 3.2 1B — ultra-cheap tiny model for simple classification and summary'
+  }, { speed: 5, quality: 2, cost: 5 }),
+  entry('cloudflare', '@cf/meta/llama-3.2-3b-instruct', 'active', ['COST_EFFECTIVE'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI Llama 3.2 3B — cheap small model, step up from 1B'
+  }, { speed: 5, quality: 3, cost: 5 }),
+  entry('cloudflare', '@cf/moonshotai/kimi-k2.7-code', 'active', ['BALANCED', 'TOOL_CALLING'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI Kimi K2.7 Code — code-focused variant of Kimi K2.6'
+  }, { speed: 3, quality: 5, cost: 5 }),
+  entry('cloudflare', '@cf/zai-org/glm-4.7-flash', 'active', ['LONG_CONTEXT'], {
+    maxContextLength: 131072,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI GLM-4.7-Flash — chain-of-thought model; outputs reasoning traces, not suitable for direct-response routing'
   }, { speed: 5, quality: 4, cost: 5 }),
   entry('cloudflare', 'deepseek/deepseek-v4-pro', 'active', ['HIGH_PERFORMANCE', 'BALANCED'], {
     maxContextLength: 128000,

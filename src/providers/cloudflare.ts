@@ -159,6 +159,14 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/qwen/qwen1.5-14b-chat-awq',
     '@cf/qwen/qwen1.5-7b-chat-awq',
     '@cf/google/gemma-4-26b-a4b-it',
+    '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    '@cf/meta/llama-3.2-1b-instruct',
+    '@cf/meta/llama-3.2-3b-instruct',
+    '@cf/openai/gpt-oss-20b',
+    '@cf/qwen/qwen2.5-coder-32b-instruct',
+    '@cf/qwen/qwen3-30b-a3b-fp8',
+    '@cf/mistralai/mistral-small-3.1-24b-instruct',
+    '@cf/moonshotai/kimi-k2.7-code',
     '@cf/meta/llama-4-scout-17b-16e-instruct',
     '@cf/meta/llama-3.2-11b-vision-instruct'
   ];
@@ -445,6 +453,85 @@ export class CloudflareProvider extends BaseProvider {
         inputTokenCost: 0.0000005,
         outputTokenCost: 0.0000005,
         description: 'Llama 3.2 11B Vision — image understanding'
+      },
+      '@cf/meta/llama-3.3-70b-instruct-fp8-fast': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Llama 3.3 70B FP8 Fast — best quality/cost on Workers AI, primary COST_EFFECTIVE choice'
+      },
+      '@cf/openai/gpt-oss-20b': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'GPT-OSS 20B — lightweight tool-calling model'
+      },
+      '@cf/qwen/qwen2.5-coder-32b-instruct': {
+        maxContextLength: 32768,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Qwen 2.5 Coder 32B — purpose-built for code generation'
+      },
+      '@cf/mistralai/mistral-small-3.1-24b-instruct': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Mistral Small 3.1 24B — vision + tool-calling, strong balanced model'
+      },
+      '@cf/qwen/qwen3-30b-a3b-fp8': {
+        maxContextLength: 40960,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Qwen3 30B FP8 — state-of-the-art Qwen3 generation'
+      },
+      '@cf/meta/llama-3.2-1b-instruct': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Llama 3.2 1B — ultra-cheap tiny model'
+      },
+      '@cf/meta/llama-3.2-3b-instruct': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Llama 3.2 3B — cheap small model'
+      },
+      '@cf/moonshotai/kimi-k2.7-code': {
+        maxContextLength: 131072,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Kimi K2.7 Code — code-focused variant of Kimi K2.6'
       }
     };
   }
