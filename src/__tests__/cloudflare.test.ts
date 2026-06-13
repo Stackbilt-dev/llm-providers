@@ -145,6 +145,21 @@ describe('CloudflareProvider', () => {
       expect(response.usage.outputTokens).toBeGreaterThan(0);
     });
 
+    it('stringifies numeric response field — CF returns bare numbers for short numeric answers', async () => {
+      // Regression: CF Workers AI returns {"response": 4} (not "4") when the model
+      // produces a short numeric answer. Previously threw SCHEMA_DRIFT; now coerced.
+      mockAiRun.mockResolvedValueOnce({ response: 4 });
+
+      const response = await provider.generateResponse({
+        ...testRequest,
+        messages: [{ role: 'user', content: 'What is 2+2? Answer with only the number.' }]
+      });
+
+      expect(response.message).toBe('4');
+      expect(response.content).toBe('4');
+      expect(response.provider).toBe('cloudflare');
+    });
+
     it('passes x-session-affinity in Workers AI run options for provider-prefix caching', async () => {
       mockAiRun.mockResolvedValueOnce({ response: 'Cached prefix.' });
 

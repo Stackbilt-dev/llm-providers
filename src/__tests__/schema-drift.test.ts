@@ -121,6 +121,17 @@ describe('validateSchema', () => {
       .toThrow(SchemaDriftError);
   });
 
+  it('supports string-or-number type for CF response field (returns number for numeric answers)', () => {
+    // Regression: CF Workers AI returns {"response": 4} for short numeric answers.
+    // Before the fix this threw SCHEMA_DRIFT; now both string and number are accepted.
+    const schema: SchemaField[] = [{ path: 'response', type: 'string-or-number' }];
+    expect(() => validateSchema('cloudflare', { response: 'hello' }, schema)).not.toThrow();
+    expect(() => validateSchema('cloudflare', { response: 4 }, schema)).not.toThrow();
+    expect(() => validateSchema('cloudflare', { response: 0 }, schema)).not.toThrow();
+    expect(() => validateSchema('cloudflare', { response: null }, schema))
+      .toThrow(SchemaDriftError);
+  });
+
   it('fails fast on first drift (does not keep walking)', () => {
     const schema: SchemaField[] = [
       { path: 'first', type: 'string' },
