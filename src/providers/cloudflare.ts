@@ -47,6 +47,9 @@ const CLOUDFLARE_RESPONSE_SCHEMA: SchemaField[] = [
     }
   },
   { path: 'output', type: 'array', optional: true },
+  // Anthropic-via-CF format: top-level content array and stop_reason
+  { path: 'content', type: 'array', optional: true },
+  { path: 'stop_reason', type: 'string', optional: true },
   { path: 'usage', type: 'object', optional: true },
 ];
 
@@ -74,6 +77,8 @@ interface CloudflareRequest {
   lora?: string;
   top_p?: number;
   frequency_penalty?: number;
+  /** Anthropic-format models served via the CF binding use a top-level system field. */
+  system?: string;
 }
 
 interface CloudflareRunOptions {
@@ -129,6 +134,11 @@ interface WorkersAIResult {
   output_text?: string;
   usage?: WorkersAIUsage;
   result?: WorkersAIResult; // wrapped responses
+  // Anthropic-via-CF format fields
+  content?: Array<{ type?: string; text?: string }> | string;
+  stop_reason?: string;
+  type?: string;
+  role?: string;
 }
 
 // Models that require the raw { image, prompt } binding format rather than chat/image_url.
@@ -137,6 +147,13 @@ interface WorkersAIResult {
 // silently producing "".)
 const LLAMA_VISION_RAW_MODELS = new Set([
   '@cf/meta/llama-3.2-11b-vision-instruct'
+]);
+
+// Cloudflare-managed third-party models that use the Anthropic messages API format
+// rather than the standard Workers AI chat format. These expect { messages, system?,
+// max_tokens } and return { id, type, role, content[], stop_reason, usage }.
+const ANTHROPIC_VIA_CF_MODELS = new Set([
+  'anthropic/claude-opus-4.8',
 ]);
 
 export class CloudflareProvider extends BaseProvider {
@@ -168,7 +185,11 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/mistralai/mistral-small-3.1-24b-instruct',
     '@cf/moonshotai/kimi-k2.7-code',
     '@cf/meta/llama-4-scout-17b-16e-instruct',
-    '@cf/meta/llama-3.2-11b-vision-instruct'
+    '@cf/meta/llama-3.2-11b-vision-instruct',
+    '@cf/nvidia/nemotron-3-120b-a12b',
+    '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+    '@cf/qwen/qwq-32b',
+    'anthropic/claude-opus-4.8',
   ];
   supportsStreaming = true;
   supportsTools = true;
@@ -366,7 +387,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsBatching: true,
         inputTokenCost: 0,
         outputTokenCost: 0,
-        description: 'GLM-4.7-Flash — fast multilingual text generation with multi-turn tools'
+        thinkingModel: true,
+        description: 'GLM-4.7-Flash — chain-of-thought reasoning model; outputs thinking traces, not suitable for direct-response routing'
       },
       'deepseek/deepseek-v4-pro': {
         maxContextLength: 128000,
@@ -532,7 +554,46 @@ export class CloudflareProvider extends BaseProvider {
         inputTokenCost: 0,
         outputTokenCost: 0,
         description: 'Kimi K2.7 Code — code-focused variant of Kimi K2.6'
-      }
+      },
+      '@cf/nvidia/nemotron-3-120b-a12b': {
+        maxContextLength: 256000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'NVIDIA Nemotron-3 120B — hybrid MoE, parallel function calling, 256K context, multi-agent focus'
+      },
+      '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b': {
+        maxContextLength: 80000,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        thinkingModel: true,
+        description: 'DeepSeek-R1-Distill-Qwen-32B — chain-of-thought reasoning model distilled from DeepSeek-R1; outputs thinking traces'
+      },
+      '@cf/qwen/qwq-32b': {
+        maxContextLength: 24000,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: true,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        thinkingModel: true,
+        description: 'QwQ-32B — native thinking/reasoning model; outputs chain-of-thought traces; competes with o1-mini on hard reasoning tasks'
+      },
+      'anthropic/claude-opus-4.8': {
+        maxContextLength: 1000000,
+        supportsStreaming: false,
+        supportsTools: false,
+        supportsBatching: false,
+        inputTokenCost: 0,
+        outputTokenCost: 0,
+        description: 'Cloudflare-managed Anthropic Claude Opus 4.8 — 1M context frontier model; billing via Cloudflare dashboard'
+      },
     };
   }
 
@@ -633,6 +694,13 @@ export class CloudflareProvider extends BaseProvider {
   }
 
   private formatRequest(request: LLMRequest, model: string): CloudflareRequest {
+    // Anthropic-via-CF models use a different wire format: system is a top-level
+    // field, messages must not contain a system role, and tool calling is not
+    // yet verified. Route these through a dedicated formatter.
+    if (ANTHROPIC_VIA_CF_MODELS.has(model)) {
+      return this.formatAnthropicViaCloudflareRequest(request, model);
+    }
+
     const capabilities = this.getModelCapabilities()[model];
     const usesTools =
       (request.tools?.length ?? 0) > 0 ||
@@ -747,6 +815,49 @@ export class CloudflareProvider extends BaseProvider {
     return cloudflareRequest;
   }
 
+  private formatAnthropicViaCloudflareRequest(request: LLMRequest, model: string): CloudflareRequest {
+    const capabilities = this.getModelCapabilities()[model];
+
+    if ((request.tools?.length ?? 0) > 0) {
+      throw new ConfigurationError(
+        this.name,
+        `Tool calling for '${model}' via the Cloudflare binding has not been verified — ` +
+        `use the direct Anthropic provider for tool-enabled requests.`
+      );
+    }
+
+    if ((request.images?.length ?? 0) > 0 && !capabilities?.supportsVision) {
+      throw new ConfigurationError(
+        this.name,
+        `'${model}' vision support via the Cloudflare binding has not been verified.`
+      );
+    }
+
+    // Anthropic format: system is a top-level field, not a role in messages.
+    const messages: CloudflareMessage[] = request.messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({
+        role: m.role as CloudflareMessage['role'],
+        content: m.content,
+      }));
+
+    const cfRequest: CloudflareRequest = {
+      messages,
+      max_tokens: request.maxTokens,
+    };
+
+    const systemParts: string[] = [];
+    const systemMessage = request.messages.find(m => m.role === 'system');
+    if (systemMessage) systemParts.push(systemMessage.content as string);
+    if (request.systemPrompt) systemParts.push(request.systemPrompt);
+    if (systemParts.length > 0) cfRequest.system = systemParts.join('\n\n');
+
+    if (request.temperature !== undefined) cfRequest.temperature = request.temperature;
+    if (request.topP !== undefined) cfRequest.top_p = request.topP;
+
+    return cfRequest;
+  }
+
   private attachImagesToLastUserMessage(
     messages: CloudflareMessage[],
     images: NonNullable<LLMRequest['images']>,
@@ -857,6 +968,17 @@ export class CloudflareProvider extends BaseProvider {
 
     if (chatContent === null) {
       return '';
+    }
+
+    // Anthropic-via-CF format: top-level content array (e.g. anthropic/claude-opus-4.8)
+    if (Array.isArray(payload?.content)) {
+      return (payload.content as Array<{ type?: string; text?: string }>)
+        .filter(p => p?.type === 'text' && typeof p.text === 'string')
+        .map(p => p.text ?? '')
+        .join('');
+    }
+    if (typeof payload?.content === 'string') {
+      return payload.content;
     }
 
     if (Array.isArray(chatContent)) {
@@ -1007,6 +1129,12 @@ export class CloudflareProvider extends BaseProvider {
     ) {
       return finishReason;
     }
+
+    // Anthropic-via-CF format: stop_reason field
+    const stopReason = payload?.stop_reason;
+    if (stopReason === 'end_turn') return 'stop';
+    if (stopReason === 'max_tokens') return 'length';
+    if (stopReason === 'tool_use') return 'tool_calls';
 
     if (toolCalls.length > 0) {
       return 'tool_calls';

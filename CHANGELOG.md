@@ -3,6 +3,22 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.16.0] — 2026-06-13
+
+Full Cloudflare Workers AI model integration: 4 new models, Anthropic-via-CF response format, `thinkingModel` routing guard.
+
+### Added
+- **`@cf/nvidia/nemotron-3-120b-a12b`** — NVIDIA hybrid MoE 120B, 256K context, parallel function calling; tagged `HIGH_PERFORMANCE`, `TOOL_CALLING`, `LONG_CONTEXT`
+- **`@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`** — DeepSeek-R1 distilled reasoning model, 80K context; tagged `RESEARCH`, `thinkingModel: true`
+- **`@cf/qwen/qwq-32b`** — QwQ native thinking/reasoning model, 24K context; tagged `RESEARCH`, `thinkingModel: true`
+- **`anthropic/claude-opus-4.8`** — Cloudflare-managed Anthropic Claude Opus 4.8, 1M context frontier model; tagged `HIGH_PERFORMANCE`, `LONG_CONTEXT`. Uses Anthropic message format via the CF binding (system as top-level field, Anthropic `content[]` + `stop_reason` response shape)
+- **`ModelCapabilities.thinkingModel?: boolean`** — new optional flag on `ModelCapabilities` that marks models outputting chain-of-thought reasoning traces. Routers and routing consumers should filter these out for direct-response use cases
+- **Thinking model routing guard** — `rankModels()` now filters any `thinkingModel: true` catalog entry out of all use-case pools except `RESEARCH`. This prevents reasoning models from winning `COST_EFFECTIVE`/`BALANCED`/`TOOL_CALLING` routes where callers expect clean direct responses
+- **Anthropic-via-CF response normalizer** — `CloudflareProvider` now recognizes the Anthropic `content[]: [{type, text}]` response shape and `stop_reason` finish reason from Cloudflare-managed third-party models, normalizing them through the same `LLMResponse` contract as all other Workers AI models
+
+### Fixed
+- **`@cf/zai-org/glm-4.7-flash` catalog use cases** — demoted from `LONG_CONTEXT` to `RESEARCH` and marked `thinkingModel: true`, completing the fix started in v1.15.0. The model is now fully excluded from non-RESEARCH routing pools rather than just deprioritized
+
 ## [1.15.0] — 2026-06-12
 
 Expand Cloudflare Workers AI model catalog with 8 new models and fix glm-4.7-flash misclassification.

@@ -418,7 +418,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0,
     description: 'Workers AI Kimi K2.7 Code — code-focused variant of Kimi K2.6'
   }, { speed: 3, quality: 5, cost: 5 }),
-  entry('cloudflare', '@cf/zai-org/glm-4.7-flash', 'active', ['LONG_CONTEXT'], {
+  entry('cloudflare', '@cf/zai-org/glm-4.7-flash', 'active', ['RESEARCH'], {
     maxContextLength: 131072,
     supportsStreaming: true,
     supportsTools: true,
@@ -426,7 +426,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: true,
     inputTokenCost: 0,
     outputTokenCost: 0,
-    description: 'Workers AI GLM-4.7-Flash — chain-of-thought model; outputs reasoning traces, not suitable for direct-response routing'
+    thinkingModel: true,
+    description: 'Workers AI GLM-4.7-Flash — chain-of-thought reasoning model; outputs thinking traces, not suitable for direct-response routing'
   }, { speed: 5, quality: 4, cost: 5 }),
   entry('cloudflare', 'deepseek/deepseek-v4-pro', 'active', ['HIGH_PERFORMANCE', 'BALANCED'], {
     maxContextLength: 128000,
@@ -514,6 +515,45 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.0000005,
     description: 'Workers AI Llama 3.2 Vision'
   }, { speed: 4, quality: 3, cost: 4 }),
+  entry('cloudflare', '@cf/nvidia/nemotron-3-120b-a12b', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 256000,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Workers AI NVIDIA Nemotron-3 120B — hybrid MoE, parallel function calling, 256K context'
+  }, { speed: 3, quality: 5, cost: 5 }),
+  entry('cloudflare', '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', 'active', ['RESEARCH'], {
+    maxContextLength: 80000,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    thinkingModel: true,
+    description: 'Workers AI DeepSeek-R1-Distill-Qwen-32B — chain-of-thought reasoning model; outputs thinking traces'
+  }, { speed: 3, quality: 5, cost: 5 }),
+  entry('cloudflare', '@cf/qwen/qwq-32b', 'active', ['RESEARCH'], {
+    maxContextLength: 24000,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: true,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    thinkingModel: true,
+    description: 'Workers AI QwQ-32B — native thinking/reasoning model; outputs chain-of-thought traces'
+  }, { speed: 4, quality: 5, cost: 5 }),
+  entry('cloudflare', 'anthropic/claude-opus-4.8', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
+    maxContextLength: 1000000,
+    supportsStreaming: false,
+    supportsTools: false,
+    supportsBatching: false,
+    inputTokenCost: 0,
+    outputTokenCost: 0,
+    description: 'Cloudflare-managed Anthropic Claude Opus 4.8 — 1M context frontier model; billing via CF dashboard'
+  }, { speed: 2, quality: 5, cost: 3 }),
 
   entry('cerebras', 'llama-3.1-8b', 'compatibility', ['COST_EFFECTIVE', 'BALANCED'], {
     maxContextLength: 128000,
@@ -815,10 +855,16 @@ function scoreLedger(entry: ModelCatalogEntry, context: ModelSelectionContext): 
   return score;
 }
 
-function isCompatible(entry: ModelCatalogEntry, context: ModelSelectionContext): boolean {
+function isCompatible(entry: ModelCatalogEntry, context: ModelSelectionContext, useCase?: ModelRecommendationUseCase): boolean {
   const request = context.request;
 
   if (entry.lifecycle === 'retired') return false;
+
+  // Thinking/reasoning models output chain-of-thought traces rather than direct
+  // responses. Exclude them from every pool except RESEARCH, where the caller
+  // explicitly handles raw reasoning output.
+  if (entry.capabilities.thinkingModel && useCase !== 'RESEARCH') return false;
+
   if (!request) return true;
 
   if (usesVision(request) && !entry.capabilities.supportsVision) return false;
@@ -853,7 +899,7 @@ export function rankModels(
 
   return MODEL_CATALOG
     .filter(entry => allowedProviders.has(entry.provider))
-    .filter(entry => isCompatible(entry, context))
+    .filter(entry => isCompatible(entry, context, useCase))
     .map(entry => ({
       entry,
       score:

@@ -375,6 +375,14 @@ export interface ModelCapabilities {
    * Drives capability-aware routing and boundary gating for `LLMRequest.builtInTools`.
    */
   supportsBuiltInTools?: BuiltInToolType[];
+  /**
+   * True for models that output chain-of-thought reasoning traces as part of their
+   * response (e.g. QwQ, DeepSeek-R1, GLM-4.7-Flash). These models are unsuitable
+   * for direct-response routing (summary, classification, chat) unless the caller
+   * explicitly handles reasoning traces. Routers must exclude thinking models from
+   * all non-RESEARCH use-case pools.
+   */
+  thinkingModel?: boolean;
 }
 
 export interface ProviderCapabilities {

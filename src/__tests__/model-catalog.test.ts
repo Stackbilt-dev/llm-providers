@@ -350,3 +350,102 @@ describe('groq/compound catalog entries (S3)', () => {
     expect(inferUseCaseFromRequest(request)).not.toBe('RESEARCH');
   });
 });
+
+describe('thinking model routing isolation', () => {
+  const THINKING_MODELS = [
+    '@cf/zai-org/glm-4.7-flash',
+    '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+    '@cf/qwen/qwq-32b',
+  ];
+
+  it('thinking models are in the catalog with thinkingModel: true', () => {
+    for (const model of THINKING_MODELS) {
+      const entry = getCatalogEntry(model);
+      expect(entry).toBeDefined();
+      expect(entry?.capabilities.thinkingModel).toBe(true);
+    }
+  });
+
+  it('thinking models are tagged RESEARCH-only and not general use cases', () => {
+    for (const model of THINKING_MODELS) {
+      const entry = getCatalogEntry(model);
+      expect(entry?.useCases).toContain('RESEARCH');
+      expect(entry?.useCases).not.toContain('COST_EFFECTIVE');
+      expect(entry?.useCases).not.toContain('BALANCED');
+      expect(entry?.useCases).not.toContain('HIGH_PERFORMANCE');
+      expect(entry?.useCases).not.toContain('TOOL_CALLING');
+    }
+  });
+
+  it('thinking models are excluded from all non-RESEARCH recommendation pools', () => {
+    const nonResearchPools = [
+      'COST_EFFECTIVE',
+      'BALANCED',
+      'HIGH_PERFORMANCE',
+      'TOOL_CALLING',
+      'LONG_CONTEXT',
+      'VISION',
+    ] as const;
+
+    for (const useCase of nonResearchPools) {
+      const ranked = rankModels(useCase, ['cloudflare']);
+      const models = ranked.map(e => e.model);
+      for (const thinkingModel of THINKING_MODELS) {
+        expect(models).not.toContain(thinkingModel);
+      }
+    }
+  });
+
+  it('thinking models ARE eligible for the RESEARCH pool', () => {
+    const ranked = rankModels('RESEARCH', ['cloudflare']);
+    const models = ranked.map(e => e.model);
+    // At least one thinking model should appear in the RESEARCH pool
+    expect(THINKING_MODELS.some(m => models.includes(m))).toBe(true);
+  });
+
+  it('non-thinking models are not filtered from standard pools', () => {
+    const ranked = rankModels('BALANCED', ['cloudflare']);
+    const models = ranked.map(e => e.model);
+    expect(models).toContain('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
+  });
+});
+
+describe('new CF Workers AI models (v1.16.0)', () => {
+  it('nemotron-3-120b-a12b is in the catalog with tool calling and large context', () => {
+    const entry = getCatalogEntry('@cf/nvidia/nemotron-3-120b-a12b');
+    expect(entry).toBeDefined();
+    expect(entry?.provider).toBe('cloudflare');
+    expect(entry?.capabilities.supportsTools).toBe(true);
+    expect(entry?.capabilities.maxContextLength).toBe(256000);
+    expect(entry?.useCases).toContain('HIGH_PERFORMANCE');
+    expect(entry?.useCases).toContain('TOOL_CALLING');
+    expect(entry?.useCases).toContain('LONG_CONTEXT');
+  });
+
+  it('anthropic/claude-opus-4.8 is catalogued under cloudflare with 1M context', () => {
+    const entry = getCatalogEntry('anthropic/claude-opus-4.8');
+    expect(entry).toBeDefined();
+    expect(entry?.provider).toBe('cloudflare');
+    expect(entry?.capabilities.maxContextLength).toBe(1_000_000);
+    expect(entry?.useCases).toContain('HIGH_PERFORMANCE');
+    expect(entry?.useCases).toContain('LONG_CONTEXT');
+    expect(entry?.capabilities.thinkingModel).toBeFalsy();
+  });
+
+  it('deepseek-r1-distill and qwq-32b are tagged RESEARCH with thinkingModel flag', () => {
+    for (const model of ['@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', '@cf/qwen/qwq-32b']) {
+      const entry = getCatalogEntry(model);
+      expect(entry?.lifecycle).toBe('active');
+      expect(entry?.useCases).toContain('RESEARCH');
+      expect(entry?.capabilities.thinkingModel).toBe(true);
+    }
+  });
+
+  it('nemotron wins cloudflare LONG_CONTEXT rankings due to 256K context', () => {
+    const ranked = rankModels('LONG_CONTEXT', ['cloudflare']);
+    const nemotronPos = ranked.findIndex(e => e.model === '@cf/nvidia/nemotron-3-120b-a12b');
+    expect(nemotronPos).toBeGreaterThanOrEqual(0);
+    // Nemotron should be near the top of LONG_CONTEXT due to 256K window
+    expect(nemotronPos).toBeLessThan(5);
+  });
+});

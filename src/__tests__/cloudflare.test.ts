@@ -866,4 +866,160 @@ describe('CloudflareProvider', () => {
       ).rejects.toThrow(SchemaDriftError);
     });
   });
+
+  describe('anthropic/claude-opus-4.8 via Cloudflare binding', () => {
+    it('normalizes the Anthropic content[] response format', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        id: 'msg_01abc',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'The answer is 42.' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 12, output_tokens: 6 }
+      });
+
+      const result = await provider.generateResponse({
+        model: 'anthropic/claude-opus-4.8',
+        messages: [{ role: 'user', content: 'What is the answer?' }],
+        maxTokens: 256
+      });
+
+      expect(result.message).toBe('The answer is 42.');
+      expect(result.finishReason).toBe('stop');
+      expect(result.usage.inputTokens).toBe(12);
+      expect(result.usage.outputTokens).toBe(6);
+      expect(result.usage.totalTokens).toBe(18);
+    });
+
+    it('maps stop_reason: max_tokens to finishReason: length', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        id: 'msg_02def',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Truncated…' }],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 10, output_tokens: 100 }
+      });
+
+      const result = await provider.generateResponse({
+        model: 'anthropic/claude-opus-4.8',
+        messages: [{ role: 'user', content: 'Write a very long essay.' }],
+        maxTokens: 100
+      });
+
+      expect(result.finishReason).toBe('length');
+    });
+
+    it('puts systemPrompt into the top-level system field (not messages array)', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        id: 'msg_03ghi',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Hi!' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 5, output_tokens: 2 }
+      });
+
+      await provider.generateResponse({
+        model: 'anthropic/claude-opus-4.8',
+        messages: [{ role: 'user', content: 'Hello' }],
+        systemPrompt: 'You are a concise assistant.',
+        maxTokens: 64
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.system).toBe('You are a concise assistant.');
+      expect(body.messages.every((m: { role: string }) => m.role !== 'system')).toBe(true);
+    });
+
+    it('rejects tool calls for claude-opus-4.8 (unverified on CF binding)', async () => {
+      await expect(
+        provider.generateResponse({
+          model: 'anthropic/claude-opus-4.8',
+          messages: [{ role: 'user', content: 'Call the weather tool.' }],
+          tools: [{
+            type: 'function',
+            function: { name: 'get_weather', description: 'Get weather', parameters: { type: 'object' } }
+          }]
+        })
+      ).rejects.toThrow(/Tool calling for 'anthropic\/claude-opus-4.8'.*not been verified/);
+    });
+
+    it('handles Anthropic content array with multiple text parts', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        id: 'msg_04jkl',
+        type: 'message',
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Part one. ' },
+          { type: 'text', text: 'Part two.' }
+        ],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 8, output_tokens: 10 }
+      });
+
+      const result = await provider.generateResponse({
+        model: 'anthropic/claude-opus-4.8',
+        messages: [{ role: 'user', content: 'Tell me two things.' }],
+        maxTokens: 128
+      });
+
+      expect(result.message).toBe('Part one. Part two.');
+    });
+  });
+
+  describe('thinking / reasoning model catalog entries', () => {
+    it('marks glm-4.7-flash, deepseek-r1, and qwq-32b as thinkingModel', () => {
+      const caps = provider.exposeModelCapabilities();
+      expect(caps['@cf/zai-org/glm-4.7-flash'].thinkingModel).toBe(true);
+      expect(caps['@cf/deepseek-ai/deepseek-r1-distill-qwen-32b'].thinkingModel).toBe(true);
+      expect(caps['@cf/qwen/qwq-32b'].thinkingModel).toBe(true);
+    });
+
+    it('does NOT mark non-reasoning models as thinkingModel', () => {
+      const caps = provider.exposeModelCapabilities();
+      expect(caps['@cf/meta/llama-3.3-70b-instruct-fp8-fast'].thinkingModel).toBeFalsy();
+      expect(caps['@cf/openai/gpt-oss-120b'].thinkingModel).toBeFalsy();
+      expect(caps['anthropic/claude-opus-4.8'].thinkingModel).toBeFalsy();
+    });
+  });
+
+  describe('NVIDIA Nemotron-3 120B', () => {
+    it('is registered in the models list with tool calling support', () => {
+      const caps = provider.exposeModelCapabilities();
+      expect(provider.models).toContain('@cf/nvidia/nemotron-3-120b-a12b');
+      expect(caps['@cf/nvidia/nemotron-3-120b-a12b'].supportsTools).toBe(true);
+      expect(caps['@cf/nvidia/nemotron-3-120b-a12b'].maxContextLength).toBe(256000);
+    });
+
+    it('forwards tool definitions to Nemotron via standard chat format', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'search', arguments: '{}' } }]
+            },
+            finish_reason: 'tool_calls'
+          }
+        ],
+        usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }
+      });
+
+      const result = await provider.generateResponse({
+        model: '@cf/nvidia/nemotron-3-120b-a12b',
+        messages: [{ role: 'user', content: 'Search for news.' }],
+        tools: [{
+          type: 'function',
+          function: { name: 'search', description: 'Web search', parameters: { type: 'object' } }
+        }],
+        maxTokens: 256
+      });
+
+      expect(result.finishReason).toBe('tool_calls');
+      expect(result.toolCalls).toHaveLength(1);
+      expect(result.toolCalls![0].function.name).toBe('search');
+    });
+  });
 });

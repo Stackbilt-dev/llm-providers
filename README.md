@@ -119,7 +119,7 @@ const llm = LLMProviders.fromEnv(env, {
 |----------|--------|-----------|-------|-------|
 | **OpenAI** | GPT-4o Mini, GPT-4 Turbo, GPT-4, GPT-3.5 Turbo | Yes | Yes | Default: `gpt-4o-mini` |
 | **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Sonnet 4, Haiku 4.5, 3.7 Sonnet, 3.5 Sonnet/Haiku, 3 Opus/Sonnet | Yes | Yes | Default: `claude-haiku-4-5-20251001` |
-| **Cloudflare** | Kimi K2.6, GLM-4.7-Flash, DeepSeek V4 Pro, Gemma 4 26B, Llama 4 Scout, GPT-OSS 120B, LLaMA 3.x, Mistral 7B, Qwen 1.5, TinyLlama, and more | Yes | Kimi, GLM, GPT-OSS, Gemma 4, Llama 4 Scout | Default is request-aware and catalog-driven |
+| **Cloudflare** | Nemotron-3 120B, Claude Opus 4.8 (CF-managed), Kimi K2.6/K2.7, DeepSeek-R1-Distill, QwQ-32B, GLM-4.7-Flash, DeepSeek V4 Pro, Gemma 4 26B, Llama 4 Scout, GPT-OSS 120B/20B, LLaMA 3.x, Mistral Small 3.1, Qwen 2.5/3, and more | Yes | Nemotron, Kimi, GLM, GPT-OSS, Gemma 4, Llama 4 Scout, Mistral Small | Default is request-aware and catalog-driven; thinking models (DeepSeek-R1, QwQ, GLM) are RESEARCH-only |
 | **Cerebras** | GPT-OSS 120B, ZAI-GLM 4.7, LLaMA 3.1 8B *(deprecated 2026-05-27)*, Qwen 3 235B *(deprecated 2026-05-27)* | Yes | GLM, Qwen, GPT-OSS | ~2,200 tok/s |
 | **Groq** | LLaMA 3.3 70B Versatile, LLaMA 3.1 8B Instant, GPT-OSS 120B, Compound, Compound Mini | Yes | LLaMA 3.3 70B, GPT-OSS 120B | Ultra-fast inference; Compound systems run built-in tools |
 | **NVIDIA NIM** | Llama 3.3/3.1 70B, Llama 4 Maverick, Nemotron 70B/49B/253B, Mistral Large 2, DeepSeek V4 Flash/Pro | Yes | Llama, Nemotron, Mistral Large 2 | Costs $0 placeholder — dev-tier credits; set real rates in `CreditLedger` |
