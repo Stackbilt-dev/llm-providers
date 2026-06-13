@@ -31,7 +31,7 @@ import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usa
  * any particular shape.
  */
 const CLOUDFLARE_RESPONSE_SCHEMA: SchemaField[] = [
-  { path: 'response', type: 'string', optional: true },
+  { path: 'response', type: 'string-or-number', optional: true },
   { path: 'id', type: 'string', optional: true },
   { path: 'model', type: 'string', optional: true },
   { path: 'output_text', type: 'string', optional: true },
@@ -839,6 +839,10 @@ export class CloudflareProvider extends BaseProvider {
 
     if (typeof payload?.response === 'string') {
       return payload.response;
+    }
+    // CF sometimes returns numeric responses (e.g. "4" for "2+2") as a bare number.
+    if (typeof payload?.response === 'number') {
+      return String(payload.response);
     }
 
     const chatContent = payload?.choices?.[0]?.message?.content;

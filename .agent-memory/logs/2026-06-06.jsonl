@@ -1,0 +1,8 @@
+{"ts":"2026-06-06T09:38:12.339Z","type":"error","command":"archive-raw-session","error":"Missing required env var: MINDSPRING_INGEST_TOKEN"}
+{"ts":"2026-06-06T09:44:22.614Z","type":"error","command":"archive-raw-session","error":"Missing required env var: MINDSPRING_INGEST_TOKEN"}
+{"ts":"2026-06-06T09:50:44.377Z","type":"error","command":"archive-raw-session","error":"Missing required env var: MINDSPRING_INGEST_TOKEN"}
+{"ts":"2026-06-06T10:48:57.619Z","type":"error","command":"archive-raw-session","error":"Missing required env var: MINDSPRING_INGEST_TOKEN"}
+{"ts":"2026-06-06T10:50:12.925Z","type":"error","command":"archive-raw-session","error":"Missing required env var: MINDSPRING_INGEST_TOKEN"}
+{"ts":"2026-06-06T10:52:12.306Z","type":"error","command":"archive-raw-session","error":"Missing required env var: MINDSPRING_INGEST_TOKEN"}
+{"ts":"2026-06-06T10:53:23.531Z","type":"error","command":"archive-raw-session","error":"Missing required env var: MINDSPRING_INGEST_TOKEN"}
+{"ts":"2026-06-06T11:00:37.168Z","type":"error","command":"archive-raw-session","error":"Missing required env var: MINDSPRING_INGEST_TOKEN"}

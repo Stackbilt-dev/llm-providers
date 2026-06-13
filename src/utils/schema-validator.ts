@@ -32,7 +32,8 @@ export type SchemaFieldType =
   | 'boolean'
   | 'array'
   | 'object'
-  | 'string-or-null'; // anthropic/openai sometimes null content fields
+  | 'string-or-null'    // anthropic/openai sometimes null content fields
+  | 'string-or-number'; // CF Workers AI returns numeric responses for short numeric answers
 
 export interface SchemaField {
   /**
@@ -109,6 +110,8 @@ function matchesType(value: unknown, type: SchemaFieldType): boolean {
       return value !== null && typeof value === 'object' && !Array.isArray(value);
     case 'string-or-null':
       return value === null || typeof value === 'string';
+    case 'string-or-number':
+      return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
   }
 }
 

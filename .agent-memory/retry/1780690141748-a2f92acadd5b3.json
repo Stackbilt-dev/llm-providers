@@ -1,0 +1,8 @@
+{
+  "command": "archive-raw-session",
+  "options": {
+    "_": []
+  },
+  "error": "Missing required env var: MINDSPRING_INGEST_TOKEN",
+  "createdAt": "2026-06-05T20:09:01.748Z"
+}
