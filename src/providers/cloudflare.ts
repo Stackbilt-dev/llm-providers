@@ -169,6 +169,7 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/openai/gpt-oss-120b',
     '@cf/moonshotai/kimi-k2.6',
     '@cf/zai-org/glm-4.7-flash',
+    '@cf/zai-org/glm-5.2',
     'deepseek/deepseek-v4-pro',
     '@cf/tinyllama/tinyllama-1.1b-chat-v1.0',
     '@cf/qwen/qwen1.5-0.5b-chat',
@@ -389,6 +390,16 @@ export class CloudflareProvider extends BaseProvider {
         outputTokenCost: 0,
         thinkingModel: true,
         description: 'GLM-4.7-Flash — chain-of-thought reasoning model; outputs thinking traces, not suitable for direct-response routing'
+      },
+      '@cf/zai-org/glm-5.2': {
+        maxContextLength: 262144,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0.0000014,
+        outputTokenCost: 0.0000044,
+        description: 'GLM-5.2 — Z.ai flagship agentic coder; 262K ctx, direct-response (not CoT), function calling'
       },
       'deepseek/deepseek-v4-pro': {
         maxContextLength: 128000,

@@ -3,6 +3,11 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.17.2] — 2026-06-17
+
+### Fixed
+- **`@cf/zai-org/glm-5.2` added to Cloudflare provider allowlist** — model was in `model-catalog.ts` but missing from the `cloudflare.ts` provider `models[]` array and `getModelCapabilities()`, causing `ModelNotFoundError` on every call. 262K ctx, tool calling, $0.0014/$0.0044 per MT input/output.
+
 ## [1.17.1] — 2026-06-17
 
 Remove `anthropic/claude-opus-4.8` from standard routing tags.
