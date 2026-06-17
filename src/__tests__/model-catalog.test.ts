@@ -428,7 +428,9 @@ describe('new CF Workers AI models (v1.16.0)', () => {
     expect(entry).toBeDefined();
     expect(entry?.provider).toBe('cloudflare');
     expect(entry?.capabilities.maxContextLength).toBe(1_000_000);
-    expect(entry?.useCases).toContain('HIGH_PERFORMANCE');
+    // HIGH_PERFORMANCE intentionally removed — this is a CF-managed third-party model
+    // with external Anthropic billing. Excluded from auto-routing; reachable by explicit model name only.
+    expect(entry?.useCases).not.toContain('HIGH_PERFORMANCE');
     expect(entry?.useCases).toContain('LONG_CONTEXT');
     expect(entry?.capabilities.thinkingModel).toBeFalsy();
   });

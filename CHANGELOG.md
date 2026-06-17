@@ -3,6 +3,13 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.17.1] — 2026-06-17
+
+Remove `anthropic/claude-opus-4.8` from standard routing tags.
+
+### Fixed
+- **`anthropic/claude-opus-4.8` removed from `HIGH_PERFORMANCE` use case** — this is a CF-managed third-party model requiring external Anthropic billing via the Cloudflare dashboard, not a native Workers AI model. Removing `HIGH_PERFORMANCE` prevents it from winning auto-routing and being invoked unexpectedly. The model remains catalogued and reachable by explicit model name. `HIGH_PERFORMANCE` on `cloudflare` now correctly routes to `@cf/openai/gpt-oss-120b` (quality:6, native, free inference tier).
+
 ## [1.17.0] — 2026-06-17
 
 Quality score scale extended and recalibrated; new CF Workers AI models added.

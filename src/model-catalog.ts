@@ -554,14 +554,17 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     thinkingModel: true,
     description: 'Workers AI QwQ-32B — native thinking/reasoning model; outputs chain-of-thought traces'
   }, { speed: 4, quality: 5, cost: 5 }),
-  entry('cloudflare', 'anthropic/claude-opus-4.8', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
+  // Third-party model via CF binding — requires external Anthropic billing through CF dashboard,
+  // NOT a native CF Workers AI model. Excluded from standard routing tags (no HIGH_PERFORMANCE)
+  // so auto-routing never selects it. Only reached by explicit model name request.
+  entry('cloudflare', 'anthropic/claude-opus-4.8', 'active', ['LONG_CONTEXT'], {
     maxContextLength: 1000000,
     supportsStreaming: false,
     supportsTools: false,
     supportsBatching: false,
     inputTokenCost: 0,
     outputTokenCost: 0,
-    description: 'Cloudflare-managed Anthropic Claude Opus 4.8 — 1M context frontier model; billing via CF dashboard'
+    description: 'Cloudflare-managed Anthropic Claude Opus 4.8 — 1M context, external billing via CF dashboard; not a native CF model'
   }, { speed: 2, quality: 7, cost: 3 }),
   entry('cloudflare', '@cf/zai-org/glm-5.2', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 262144,
