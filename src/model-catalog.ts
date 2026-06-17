@@ -83,6 +83,15 @@ export const PROVIDER_FALLBACK_ORDER: ProviderName[] = [
   'openai',
 ];
 
+// Quality score scale (1–7):
+//   7 = True frontier        (Claude Opus 4.6, top-tier proprietary)
+//   6 = Near-frontier MoE    (gpt-oss-120b ≈ o4-mini, kimi-k2.6/k2.7, deepseek-v4-pro, full GLM-4.7)
+//   5 = Strong large/MoE     (llama-3.3-70b, qwen3-30b-a3b, qwen2.5-coder-32b, glm-4.7-flash)
+//   4 = Capable mid          (llama-4-scout, gpt-oss-20b, haiku-class)
+//   3 = Capable small        (mistral-small-24b, llama 8B class)
+//   2 = Limited small        (llama 3B class)
+//   1 = Toy                  (<2B params)
+// Speed/cost also 1–5 (5=fastest/cheapest). Scores inform rankModels() weighted selection.
 function entry(
   provider: ProviderName,
   model: string,
@@ -170,7 +179,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.015,
     outputTokenCost: 0.075,
     description: 'Claude Opus 4.6'
-  }, { speed: 2, quality: 5, cost: 1 }),
+  }, { speed: 2, quality: 7, cost: 1 }),
   entry('anthropic', 'claude-sonnet-4-6-20250618', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING', 'BALANCED'], {
     maxContextLength: 200000,
     supportsStreaming: true,
@@ -180,7 +189,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.003,
     outputTokenCost: 0.015,
     description: 'Claude Sonnet 4.6'
-  }, { speed: 3, quality: 5, cost: 3 }),
+  }, { speed: 3, quality: 6, cost: 3 }),
   entry('anthropic', 'claude-opus-4-20250618', 'compatibility', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
     supportsStreaming: true,
@@ -189,7 +198,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.015,
     outputTokenCost: 0.075,
     description: 'Claude Opus 4'
-  }, { speed: 2, quality: 5, cost: 1 }),
+  }, { speed: 2, quality: 7, cost: 1 }),
   entry('anthropic', 'claude-sonnet-4-20250514', 'active', ['HIGH_PERFORMANCE', 'BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
     supportsStreaming: true,
@@ -326,8 +335,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: true,
     inputTokenCost: 0.0000008,
     outputTokenCost: 0.0000008,
-    description: 'Workers AI GPT-OSS 120B'
-  }, { speed: 4, quality: 5, cost: 4 }),
+    description: 'Workers AI GPT-OSS 120B — OpenAI open-weight 117B/5.1B-active MoE, near o4-mini class (not Phi-4)'
+  }, { speed: 4, quality: 6, cost: 4 }),
   entry('cloudflare', '@cf/moonshotai/kimi-k2.6', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION', 'BALANCED'], {
     maxContextLength: 262100,
     supportsStreaming: true,
@@ -337,8 +346,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: true,
     inputTokenCost: 0,
     outputTokenCost: 0,
-    description: 'Workers AI Kimi K2.6 — frontier-scale agent model with multi-turn tools, vision, structured outputs, and 262K context'
-  }, { speed: 3, quality: 5, cost: 5 }),
+    description: 'Workers AI Kimi K2.6 — 1T/32B-active MoE, frontier-scale agent model; vision, 262K context, tool calling (Moonshot self-reported benchmarks)'
+  }, { speed: 3, quality: 6, cost: 5 }),
   entry('cloudflare', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', 'active', ['COST_EFFECTIVE', 'BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING'], {
     maxContextLength: 131072,
     supportsStreaming: true,
@@ -378,8 +387,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: true,
     inputTokenCost: 0,
     outputTokenCost: 0,
-    description: 'Workers AI Mistral Small 3.1 24B — strong balanced model with vision and tool calling'
-  }, { speed: 4, quality: 4, cost: 5 }),
+    description: 'Workers AI Mistral Small 3.1 24B — vision + tool calling; weakest of the active CF set'
+  }, { speed: 4, quality: 3, cost: 5 }),
   entry('cloudflare', '@cf/qwen/qwen3-30b-a3b-fp8', 'active', ['BALANCED', 'HIGH_PERFORMANCE'], {
     maxContextLength: 40960,
     supportsStreaming: true,
@@ -416,8 +425,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0,
     outputTokenCost: 0,
-    description: 'Workers AI Kimi K2.7 Code — code-focused variant of Kimi K2.6'
-  }, { speed: 3, quality: 5, cost: 5 }),
+    description: 'Workers AI Kimi K2.7 Code — K2.6 retuned for code, 30% fewer thinking tokens; SWE-bench 78.2 (Moonshot self-reported)'
+  }, { speed: 3, quality: 6, cost: 5 }),
   entry('cloudflare', '@cf/zai-org/glm-4.7-flash', 'active', ['RESEARCH'], {
     maxContextLength: 131072,
     supportsStreaming: true,
@@ -427,8 +436,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0,
     outputTokenCost: 0,
     thinkingModel: true,
-    description: 'Workers AI GLM-4.7-Flash — chain-of-thought reasoning model; outputs thinking traces, not suitable for direct-response routing'
-  }, { speed: 5, quality: 4, cost: 5 }),
+    description: 'Workers AI GLM-4.7-Flash — 30B/3B-active MoE CoT model; emits <think> reasoning traces, RESEARCH-only routing'
+  }, { speed: 5, quality: 5, cost: 5 }),
   entry('cloudflare', 'deepseek/deepseek-v4-pro', 'active', ['HIGH_PERFORMANCE', 'BALANCED'], {
     maxContextLength: 128000,
     supportsStreaming: true,
@@ -436,8 +445,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: true,
     inputTokenCost: 0,
     outputTokenCost: 0,
-    description: 'Workers AI DeepSeek V4 Pro - high-capability reasoning and coding model'
-  }, { speed: 3, quality: 5, cost: 5 }),
+    description: 'Workers AI DeepSeek V4 Pro — frontier-class reasoning and coding, near gpt-oss-120b tier'
+  }, { speed: 3, quality: 6, cost: 5 }),
   entry('cloudflare', '@cf/tinyllama/tinyllama-1.1b-chat-v1.0', 'compatibility', ['COST_EFFECTIVE'], {
     maxContextLength: 2048,
     supportsStreaming: true,
@@ -503,8 +512,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: true,
     inputTokenCost: 0.0000003,
     outputTokenCost: 0.0000009,
-    description: 'Workers AI Llama 4 Scout'
-  }, { speed: 4, quality: 5, cost: 4 }),
+    description: 'Workers AI Llama 4 Scout — 109B/17B-active MoE; multimodal + 10M ctx, capability ≈ Llama 3.3 70B dense'
+  }, { speed: 4, quality: 4, cost: 4 }),
   entry('cloudflare', '@cf/meta/llama-3.2-11b-vision-instruct', 'active', ['VISION'], {
     maxContextLength: 128000,
     supportsStreaming: true,
@@ -553,7 +562,38 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0,
     outputTokenCost: 0,
     description: 'Cloudflare-managed Anthropic Claude Opus 4.8 — 1M context frontier model; billing via CF dashboard'
-  }, { speed: 2, quality: 5, cost: 3 }),
+  }, { speed: 2, quality: 7, cost: 3 }),
+  entry('cloudflare', '@cf/zai-org/glm-5.2', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 262144,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0.0000014,
+    outputTokenCost: 0.0000044,
+    description: 'Workers AI GLM-5.2 — Z.ai flagship agentic coder; 262K ctx, direct-response (not CoT), function calling'
+  }, { speed: 4, quality: 6, cost: 3 }),
+  entry('cloudflare', '@cf/moonshotai/kimi-k2.5', 'retired', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
+    maxContextLength: 256000,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: true,
+    inputTokenCost: 0.0000006,
+    outputTokenCost: 0.000003,
+    description: 'Workers AI Kimi K2.5 — EOL 2026-05-30; predecessor to K2.6, 256K ctx, vision + tool calling'
+  }, { speed: 3, quality: 5, cost: 4 }),
+  entry('cloudflare', '@cf/google/gemma-3-12b-it', 'retired', ['COST_EFFECTIVE', 'VISION', 'LONG_CONTEXT'], {
+    maxContextLength: 80000,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsVision: true,
+    supportsBatching: true,
+    inputTokenCost: 0.00000035,
+    outputTokenCost: 0.00000056,
+    description: 'Workers AI Gemma 3 12B IT — EOL 2026-05-30; multimodal, 140+ languages, LoRA support'
+  }, { speed: 4, quality: 3, cost: 4 }),
 
   entry('cerebras', 'llama-3.1-8b', 'compatibility', ['COST_EFFECTIVE', 'BALANCED'], {
     maxContextLength: 128000,
@@ -581,8 +621,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsPromptCache: true,
     inputTokenCost: 0.00225,
     outputTokenCost: 0.00275,
-    description: 'Cerebras ZAI-GLM 4.7 — reasoning, tool calling, predicted outputs'
-  }, { speed: 4, quality: 5, cost: 2 }),
+    description: 'Cerebras ZAI-GLM 4.7 — full (non-flash) GLM-4.7; reasoning, tool calling, predicted outputs; patch task default'
+  }, { speed: 4, quality: 6, cost: 2 }),
   entry('cerebras', 'qwen-3-235b-a22b-instruct-2507', 'compatibility', ['TOOL_CALLING', 'BALANCED', 'HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
     maxContextLength: 131072,
     supportsStreaming: true,
@@ -601,8 +641,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsPromptCache: true,
     inputTokenCost: 0.00015,
     outputTokenCost: 0.0006,
-    description: 'Cerebras GPT-OSS 120B — tool calling, predicted outputs'
-  }, { speed: 5, quality: 4, cost: 4 }),
+    description: 'Cerebras GPT-OSS 120B — OpenAI open-weight 117B/5.1B-active MoE; tool calling, predicted outputs'
+  }, { speed: 5, quality: 6, cost: 4 }),
 
   entry('groq', 'llama-3.3-70b-versatile', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'BALANCED'], {
     maxContextLength: 128000,

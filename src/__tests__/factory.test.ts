@@ -728,7 +728,8 @@ describe('LLMProviderFactory', () => {
       expect(mockAnthropicProvider.generateResponse).toHaveBeenCalledWith(
         expect.objectContaining({
           images: [{ data: 'abc123', mimeType: 'image/jpeg' }],
-          model: 'claude-haiku-4-5-20251001'
+          // claude-sonnet-4-6 (quality:6) wins vision routing over haiku (quality:4) after score recalibration
+          model: 'claude-sonnet-4-6-20250618'
         })
       );
       expect(mockCloudflareProvider.generateResponse).not.toHaveBeenCalled();

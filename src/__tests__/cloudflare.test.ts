@@ -116,7 +116,8 @@ describe('CloudflareProvider', () => {
             parameters: { type: 'object' }
           }
         }]
-      })).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
+      // gpt-oss-120b (quality:6) ties llama-3.3-70b (quality:5) on TOOL_CALLING score and wins on catalog order
+      })).toBe('@cf/openai/gpt-oss-120b');
     });
   });
 

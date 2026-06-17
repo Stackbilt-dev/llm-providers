@@ -3,6 +3,25 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [1.17.0] — 2026-06-17
+
+Quality score scale extended and recalibrated; new CF Workers AI models added.
+
+### Added
+- **`@cf/zai-org/glm-5.2`** (active) — Z.ai flagship agentic coding model; 262K context, direct-response (not CoT), function calling. `HIGH_PERFORMANCE`, `TOOL_CALLING`, `LONG_CONTEXT`. Quality 6, speed 4, cost 3 ($1.40/$4.40 per 1M)
+- **`@cf/moonshotai/kimi-k2.5`** (retired, EOL 2026-05-30) — predecessor to K2.6; 256K ctx, vision + tool calling. Catalogued for reference; excluded from routing
+- **`@cf/google/gemma-3-12b-it`** (retired, EOL 2026-05-30) — Google 12B multimodal, 140+ languages. Catalogued for reference; excluded from routing
+
+### Changed
+- **Quality score scale extended from 1–5 to 1–7** — added documented tiers: 7 = true frontier, 6 = near-frontier MoE, 5 = strong large/MoE. Previous max-5 scale had no headroom to rank near-frontier MoE models above strong 70B dense models. A scale comment block is included in `model-catalog.ts` for future contributors
+- **Anthropic models recalibrated**: `claude-opus-4.6`, `claude-opus-4`, `anthropic/claude-opus-4.8` (CF): 5 → 7; `claude-sonnet-4-6`: 5 → 6
+- **CF models recalibrated**: `@cf/openai/gpt-oss-120b`: 5 → 6 (description corrected — this is OpenAI open-weight 117B/5.1B-active MoE ≈ o4-mini, not Phi-4); `kimi-k2.6`: 5 → 6; `kimi-k2.7-code`: 5 → 6; `deepseek-v4-pro`: 5 → 6; `glm-4.7-flash`: 4 → 5; `llama-4-scout`: 5 → 4; `mistral-small-3.1-24b`: 4 → 3
+- **Cerebras models recalibrated**: `zai-glm-4.7` (full GLM-4.7): 5 → 6; `openai/gpt-oss-120b`: 4 → 6 (was inconsistent with CF entry for same model)
+- **Routing effect**: `gpt-oss-120b` now correctly outscores `llama-3.3-70b` for `HIGH_PERFORMANCE` and `TOOL_CALLING` tasks where quality weight is dominant
+
+### Fixed
+- `@cf/openai/gpt-oss-120b` description was misleading (implied Phi-4). Now correctly documents it as OpenAI's open-weight 117B/5.1B-active MoE
+
 ## [1.16.0] — 2026-06-13
 
 Full Cloudflare Workers AI model integration: 4 new models, Anthropic-via-CF response format, `thinkingModel` routing guard.
