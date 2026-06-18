@@ -434,6 +434,67 @@ describe('CloudflareProvider', () => {
         }
       ]);
     });
+
+    it('should serialize prior multi-turn tool history for CF chat completions', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        response: 'I found file1 and file2.'
+      });
+
+      await provider.generateResponse({
+        messages: [
+          { role: 'user', content: 'list files' },
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              {
+                id: 'c1',
+                type: 'function',
+                function: { name: 'bash', arguments: '{"command":"ls"}' }
+              }
+            ]
+          },
+          {
+            role: 'user',
+            content: 'file1\nfile2',
+            toolResults: [{ id: 'c1', output: 'file1\nfile2' }]
+          }
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'bash',
+              description: 'run shell',
+              parameters: {
+                type: 'object',
+                properties: { command: { type: 'string' } },
+                required: ['command']
+              }
+            }
+          }
+        ],
+        model: '@cf/openai/gpt-oss-120b'
+      });
+
+      const [, body] = mockAiRun.mock.calls[0];
+      expect(body.messages).toEqual([
+        { role: 'user', content: 'list files' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'c1',
+              type: 'function',
+              function: { name: 'bash', arguments: '{"command":"ls"}' }
+            }
+          ]
+        },
+        { role: 'user', content: 'file1\nfile2' },
+        { role: 'tool', content: 'file1\nfile2', tool_call_id: 'c1' }
+      ]);
+    });
   });
 
   describe('streamResponse', () => {
