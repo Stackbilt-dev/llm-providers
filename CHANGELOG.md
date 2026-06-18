@@ -3,6 +3,12 @@
 All notable changes to `@stackbilt/llm-providers` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Cache observability contract (#83)** — `LLMResponse.cache` and `ObservabilityHooks.onCache` expose normalized provider-prefix, AI Gateway response-cache, and factory response-cache state without forcing consumers to parse provider-specific payloads. `RequestEndEvent.cache` carries the same shape for request lifecycle logging.
+- **Cold/warm cache canary guidance** — README now documents separate Workers AI prefix-cache and AI Gateway exact-response-cache canaries, including stable-prefix prompt structure for coding-agent workloads.
+
 ## [1.17.2] — 2026-06-17
 
 ### Fixed

@@ -9,6 +9,7 @@ import type {
   LLMImageInput,
   CloudflareConfig,
   CloudflareAIGatewayOptions,
+  CacheObservability,
   ModelCapabilities,
   TokenUsage,
   ToolCall
@@ -929,6 +930,7 @@ export class CloudflareProvider extends BaseProvider {
     const content = this.extractText(result);
     const toolCalls = this.extractToolCalls(result);
     const usage = this.extractUsage(result, model, request, content);
+    const cache = this.extractCacheObservability(result, request, usage);
 
     const response: LLMResponse = {
       id: payload?.id,
@@ -939,9 +941,11 @@ export class CloudflareProvider extends BaseProvider {
       provider: this.name,
       responseTime,
       finishReason: this.extractFinishReason(result, toolCalls),
+      cache,
       metadata: {
         cloudflareAI: true,
-        accountId: this.accountId
+        accountId: this.accountId,
+        ...(cache ? { cache } : {})
       }
     };
 
@@ -1053,6 +1057,75 @@ export class CloudflareProvider extends BaseProvider {
     }
 
     return [];
+  }
+
+  private extractCacheObservability(
+    result: WorkersAIResult,
+    request: LLMRequest,
+    usage: TokenUsage
+  ): CacheObservability | undefined {
+    const cache: CacheObservability = {};
+    const providerCacheRequested =
+      request.cache?.strategy === 'provider-prefix' ||
+      request.cache?.strategy === 'both';
+    const aiGatewayRequested =
+      request.cache?.strategy === 'response' ||
+      request.cache?.strategy === 'both' ||
+      request.gatewayMetadata?.cacheKey !== undefined ||
+      request.gatewayMetadata?.cacheTtl !== undefined;
+
+    if (
+      providerCacheRequested ||
+      usage.cachedInputTokens !== undefined ||
+      usage.cacheReadInputTokens !== undefined ||
+      usage.cacheWriteInputTokens !== undefined ||
+      usage.cacheCreationInputTokens !== undefined
+    ) {
+      cache.providerPrefix = {
+        requested: providerCacheRequested,
+        strategy: request.cache?.strategy,
+        sessionId: request.cache?.sessionId,
+        cachedInputTokens: usage.cachedInputTokens,
+        cacheReadInputTokens: usage.cacheReadInputTokens,
+        cacheWriteInputTokens: usage.cacheWriteInputTokens,
+        cacheCreationInputTokens: usage.cacheCreationInputTokens,
+        hit: (usage.cachedInputTokens ?? 0) > 0 || (usage.cacheReadInputTokens ?? 0) > 0,
+        write: (usage.cacheWriteInputTokens ?? usage.cacheCreationInputTokens ?? 0) > 0,
+      };
+    }
+
+    const gatewayStatus = this.extractAIGatewayCacheStatus(result);
+    if (aiGatewayRequested || gatewayStatus !== undefined) {
+      cache.aiGateway = {
+        requested: aiGatewayRequested,
+        status: gatewayStatus,
+        cacheKey: request.gatewayMetadata?.cacheKey,
+        cacheTtl: request.gatewayMetadata?.cacheTtl,
+      };
+    }
+
+    return Object.keys(cache).length > 0 ? cache : undefined;
+  }
+
+  private extractAIGatewayCacheStatus(result: WorkersAIResult): string | undefined {
+    const payload = this.unwrapResult(result) as Record<string, unknown> | undefined;
+    const metadata = payload?.metadata as Record<string, unknown> | undefined;
+    const gateway = payload?.gateway as Record<string, unknown> | undefined;
+    const headers = payload?.headers as Record<string, unknown> | undefined;
+    const candidates = [
+      payload?.['cf-aig-cache-status'],
+      payload?.cf_aig_cache_status,
+      payload?.cfAigCacheStatus,
+      metadata?.['cf-aig-cache-status'],
+      metadata?.cf_aig_cache_status,
+      metadata?.cfAigCacheStatus,
+      gateway?.cache_status,
+      gateway?.cacheStatus,
+      headers?.['cf-aig-cache-status'],
+    ];
+
+    const status = candidates.find((candidate): candidate is string => typeof candidate === 'string');
+    return status?.toUpperCase();
   }
 
   private extractUsage(

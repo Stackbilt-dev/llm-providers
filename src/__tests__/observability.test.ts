@@ -42,6 +42,23 @@ describe('ObservabilityHooks', () => {
     expect(log2).toEqual(['groq']);
   });
 
+  it('composeHooks calls cache handlers', () => {
+    const events: string[] = [];
+    const composed = composeHooks(
+      { onCache: event => events.push(`a:${event.layer}:${event.status}`) },
+      { onCache: event => events.push(`b:${event.layer}:${event.status}`) },
+    );
+
+    composed.onCache!({
+      layer: 'factory-response',
+      status: 'hit',
+      cache: { factory: { status: 'hit' } },
+      timestamp: Date.now(),
+    });
+
+    expect(events).toEqual(['a:factory-response:hit', 'b:factory-response:hit']);
+  });
+
   it('composeHooks skips methods not implemented by any hook', () => {
     const hooks1: ObservabilityHooks = {
       onRequestStart: () => {},

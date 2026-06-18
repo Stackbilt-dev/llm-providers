@@ -10,6 +10,7 @@
  */
 
 import type {
+  CacheObservability,
   CircuitBreakerState,
   ProviderBalance,
   ProviderMetrics,
@@ -36,6 +37,18 @@ export interface RequestEndEvent {
   durationMs: number;
   usage: TokenUsage;
   finishReason?: string;
+  cache?: CacheObservability;
+  timestamp: number;
+}
+
+export interface CacheEvent {
+  provider?: string;
+  model?: string;
+  requestId?: string;
+  tenantId?: string;
+  layer: 'provider-prefix' | 'ai-gateway-response' | 'factory-response';
+  status: string;
+  cache: CacheObservability;
   timestamp: number;
 }
 
@@ -127,6 +140,7 @@ export interface SchemaDriftEvent {
 export interface ObservabilityHooks {
   onRequestStart?(event: RequestStartEvent): void;
   onRequestEnd?(event: RequestEndEvent): void;
+  onCache?(event: CacheEvent): void;
   onRequestError?(event: RequestErrorEvent): void;
   onRetry?(event: RetryEvent): void;
   onFallback?(event: FallbackEvent): void;
@@ -148,7 +162,7 @@ export const noopHooks: ObservabilityHooks = {};
  */
 export function composeHooks(...implementations: ObservabilityHooks[]): ObservabilityHooks {
   const methods = [
-    'onRequestStart', 'onRequestEnd', 'onRequestError',
+    'onRequestStart', 'onRequestEnd', 'onCache', 'onRequestError',
     'onRetry', 'onFallback', 'onCircuitStateChange',
     'onQuotaExhausted', 'onBudgetThreshold', 'onQuotaCheck',
     'onQuotaDenied', 'onProviderBalance', 'onSchemaDrift',

@@ -242,6 +242,29 @@ describe('CloudflareProvider', () => {
       expect(response.usage.cachedInputTokens).toBe(48);
     });
 
+    it('normalizes AI Gateway cache status when returned by the binding', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        response: 'Cached gateway response.',
+        metadata: {
+          'cf-aig-cache-status': 'hit'
+        }
+      });
+
+      const response = await provider.generateResponse({
+        ...testRequest,
+        cache: { strategy: 'response' },
+        gatewayMetadata: { cacheKey: 'summary:test', cacheTtl: 300 }
+      });
+
+      expect(response.cache?.aiGateway).toEqual({
+        requested: true,
+        status: 'HIT',
+        cacheKey: 'summary:test',
+        cacheTtl: 300
+      });
+      expect(response.metadata?.cache).toEqual(response.cache);
+    });
+
     it('should pass OpenAI-format tools and parse chat completions tool calls', async () => {
       mockAiRun.mockResolvedValueOnce({
         id: 'chatcmpl-cf-123',

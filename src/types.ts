@@ -61,6 +61,35 @@ export interface CacheHints {
   cacheablePrefix?: 'auto' | 'system' | 'tools' | 'messages';
 }
 
+export interface CacheObservability {
+  /** Provider-side prompt/prefix cache behavior, normalized from TokenUsage fields. */
+  providerPrefix?: {
+    requested?: boolean;
+    strategy?: CacheHints['strategy'];
+    sessionId?: string;
+    cachedInputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    hit?: boolean;
+    write?: boolean;
+  };
+  /** Cloudflare AI Gateway exact-response cache behavior when the provider exposes it. */
+  aiGateway?: {
+    requested?: boolean;
+    status?: string;
+    cacheKey?: string;
+    cacheTtl?: number;
+  };
+  /** Factory/local response cache behavior through ResponseCacheAdapter. */
+  factory?: {
+    status: 'hit' | 'miss' | 'write' | 'error' | 'bypass';
+    key?: string;
+    ttlSeconds?: number;
+    error?: string;
+  };
+}
+
 export interface ToolCall {
   id: string;
   type: 'function';
@@ -185,6 +214,7 @@ export interface LLMResponse {
   responseTime: number;
   finishReason?: 'stop' | 'length' | 'tool_calls' | 'content_filter';
   toolCalls?: ToolCall[];
+  cache?: CacheObservability;
   metadata?: Record<string, unknown>;
 }
 

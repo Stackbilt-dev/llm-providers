@@ -591,6 +591,7 @@ const response = await llm.generateResponse({
 console.log(response.usage.cacheReadInputTokens);    // Anthropic cache hit tokens
 console.log(response.usage.cacheWriteInputTokens);   // Anthropic cache create/write tokens
 console.log(response.usage.cachedInputTokens);       // OpenAI / Groq / Cerebras cache hit tokens
+console.log(response.cache?.providerPrefix);         // Normalized cache observability
 ```
 
 Cloudflare Workers AI prefix caching uses the same `cache` hint. When `strategy` is `'provider-prefix'` or `'both'`, `sessionId` is sent to the Workers AI binding as `x-session-affinity` so repeated agent turns can route to the same model instance.
@@ -619,6 +620,7 @@ const response = await llm.generateResponse({
 });
 
 console.log(response.usage.cachedInputTokens);
+console.log(response.cache?.aiGateway?.status);      // HIT / MISS when the binding exposes it
 ```
 
 | Strategy | Behavior |
@@ -627,6 +629,62 @@ console.log(response.usage.cachedInputTokens);
 | `'provider-prefix'` | Mark stable prefix for provider-side caching |
 | `'response'` | Enable AI Gateway response caching (via `GatewayMetadata`) |
 | `'both'` | Both prefix and response caching |
+
+### Cache Observability and Cold/Warm Canaries
+
+Every `LLMResponse` can carry `response.cache`, and factory-managed calls also pass the same object to observability hooks:
+
+```typescript
+const llm = new LLMProviderFactory({
+  cloudflare: { ai: env.AI, gateway: { id: 'default' } },
+  responseCache: kvBackedResponseCache,
+  hooks: {
+    onCache: event => console.log(event.layer, event.status, event.cache),
+    onRequestEnd: event => console.log(event.cache),
+  },
+});
+```
+
+Use separate canaries for the two Cloudflare cache layers:
+
+```typescript
+// Workers AI prefix-cache canary: same static prefix, same sessionId, new user tail.
+const prefixCold = await llm.generateResponse({
+  systemPrompt: stableAgentInstructions,   // no timestamps or per-request IDs
+  tools: stableToolDefinitions,            // keep tool schemas byte-stable
+  messages: [{ role: 'user', content: 'Summarize patch A.' }],
+  model: '@cf/openai/gpt-oss-120b',
+  cache: { strategy: 'provider-prefix', sessionId: 'agent:repo-123' },
+});
+
+const prefixWarm = await llm.generateResponse({
+  systemPrompt: stableAgentInstructions,
+  tools: stableToolDefinitions,
+  messages: [{ role: 'user', content: 'Summarize patch B.' }],
+  model: '@cf/openai/gpt-oss-120b',
+  cache: { strategy: 'provider-prefix', sessionId: 'agent:repo-123' },
+});
+
+console.log(prefixCold.cache?.providerPrefix, prefixWarm.cache?.providerPrefix);
+```
+
+```typescript
+// AI Gateway response-cache canary: repeat the exact request and cache key.
+const gatewayRequest = {
+  systemPrompt: stableAgentInstructions,
+  messages: [{ role: 'user', content: 'Summarize this exact patch.' }],
+  model: '@cf/openai/gpt-oss-120b',
+  cache: { strategy: 'response' as const },
+  gatewayMetadata: { cacheKey: 'summary:repo-123:patch-456', cacheTtl: 300 },
+};
+
+const responseCold = await llm.generateResponse(gatewayRequest);
+const responseWarm = await llm.generateResponse(gatewayRequest);
+
+console.log(responseCold.cache?.aiGateway?.status, responseWarm.cache?.aiGateway?.status);
+```
+
+For prefix caching, keep static content first: system instructions, tool schemas, and long reusable context. Do not put timestamps, request IDs, or dynamic user content in the cacheable prefix; append per-request content at the end. For response caching, repeat the exact request and `gatewayMetadata.cacheKey`; this is a full-response cache, not a prefix optimization.
 
 ## Schema Drift Canary
 

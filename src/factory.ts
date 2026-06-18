@@ -28,7 +28,8 @@ import type {
   ToolExecutor,
   ToolLoopOptions,
   ToolLoopState,
-  ResponseCacheAdapter
+  ResponseCacheAdapter,
+  CacheObservability
 } from './types.js';
 
 import type { Logger } from './utils/logger.js';
@@ -135,6 +136,86 @@ function deriveResponseCacheKey(request: LLMRequest): string {
   });
 }
 
+function mergeCacheObservability(
+  ...entries: Array<CacheObservability | undefined>
+): CacheObservability | undefined {
+  const merged: CacheObservability = {};
+
+  for (const entry of entries) {
+    if (!entry) continue;
+    if (entry.providerPrefix) {
+      merged.providerPrefix = { ...merged.providerPrefix, ...entry.providerPrefix };
+    }
+    if (entry.aiGateway) {
+      merged.aiGateway = { ...merged.aiGateway, ...entry.aiGateway };
+    }
+    if (entry.factory) {
+      merged.factory = { ...merged.factory, ...entry.factory };
+    }
+  }
+
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function responseCacheMetadata(response: LLMResponse, cache: CacheObservability | undefined): LLMResponse {
+  if (!cache) return response;
+  return {
+    ...response,
+    cache,
+    metadata: {
+      ...response.metadata,
+      cache
+    }
+  };
+}
+
+function cacheObservabilityForResponse(
+  request: LLMRequest,
+  response: LLMResponse
+): CacheObservability | undefined {
+  const usage = response.usage;
+  const hasProviderCacheUsage =
+    usage.cachedInputTokens !== undefined ||
+    usage.cacheReadInputTokens !== undefined ||
+    usage.cacheWriteInputTokens !== undefined ||
+    usage.cacheCreationInputTokens !== undefined;
+  const providerCacheRequested =
+    request.cache?.strategy === 'provider-prefix' ||
+    request.cache?.strategy === 'both';
+  const aiGatewayRequested =
+    request.cache?.strategy === 'response' ||
+    request.cache?.strategy === 'both' ||
+    request.gatewayMetadata?.cacheKey !== undefined ||
+    request.gatewayMetadata?.cacheTtl !== undefined;
+
+  const cache: CacheObservability = {};
+
+  if (providerCacheRequested || hasProviderCacheUsage) {
+    cache.providerPrefix = {
+      requested: providerCacheRequested,
+      strategy: request.cache?.strategy,
+      sessionId: request.cache?.sessionId,
+      cachedInputTokens: usage.cachedInputTokens,
+      cacheReadInputTokens: usage.cacheReadInputTokens,
+      cacheWriteInputTokens: usage.cacheWriteInputTokens,
+      cacheCreationInputTokens: usage.cacheCreationInputTokens,
+      hit: (usage.cachedInputTokens ?? 0) > 0 || (usage.cacheReadInputTokens ?? 0) > 0,
+      write: (usage.cacheWriteInputTokens ?? usage.cacheCreationInputTokens ?? 0) > 0,
+    };
+  }
+
+  if (aiGatewayRequested || response.cache?.aiGateway) {
+    cache.aiGateway = {
+      requested: aiGatewayRequested,
+      cacheKey: request.gatewayMetadata?.cacheKey,
+      cacheTtl: request.gatewayMetadata?.cacheTtl,
+      ...response.cache?.aiGateway,
+    };
+  }
+
+  return Object.keys(cache).length > 0 ? cache : undefined;
+}
+
 export class LLMProviderFactory {
   private providers: Map<string, LLMProvider> = new Map();
   private config: ProviderFactoryConfig;
@@ -201,14 +282,44 @@ export class LLMProviderFactory {
    * Generate response with intelligent provider selection and fallback
    */
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+    const responseCacheKey = this.config.responseCache ? deriveResponseCacheKey(request) : undefined;
+
     if (this.config.responseCache) {
-      const cacheKey = deriveResponseCacheKey(request);
       try {
-        const cached = await this.config.responseCache.get(cacheKey);
+        const cached = await this.config.responseCache.get(responseCacheKey!);
         if (cached !== null) {
-          return JSON.parse(cached) as LLMResponse;
+          const parsed = JSON.parse(cached) as LLMResponse;
+          const cache = mergeCacheObservability(parsed.cache, {
+            factory: { status: 'hit', key: responseCacheKey }
+          });
+          const response = responseCacheMetadata(parsed, cache);
+          this.hooks.onCache?.({
+            provider: response.provider,
+            model: response.model,
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            layer: 'factory-response',
+            status: 'hit',
+            cache: response.cache!,
+            timestamp: Date.now(),
+          });
+          return response;
         }
       } catch (err) {
+        this.hooks.onCache?.({
+          requestId: request.requestId,
+          tenantId: request.tenantId,
+          layer: 'factory-response',
+          status: 'error',
+          cache: {
+            factory: {
+              status: 'error',
+              key: responseCacheKey,
+              error: (err as Error).message,
+            }
+          },
+          timestamp: Date.now(),
+        });
         this.logger.warn('[LLMProviderFactory] Response cache get failed, proceeding without cache:', (err as Error).message);
       }
     }
@@ -274,6 +385,18 @@ export class LLMProviderFactory {
         const startTime = Date.now();
         let response = await provider.generateResponse(providerRequest);
         const durationMs = Date.now() - startTime;
+        const providerCache = cacheObservabilityForResponse(providerRequest, response);
+        const factoryCache: CacheObservability | undefined = this.config.responseCache
+          ? {
+              factory: {
+                status: 'miss',
+                key: responseCacheKey,
+                ttlSeconds: this.config.responseCacheDefaultTtl,
+              }
+            }
+          : undefined;
+        const cache = mergeCacheObservability(response.cache, providerCache, factoryCache);
+        response = responseCacheMetadata(response, cache);
 
         this.hooks.onRequestEnd?.({
           provider: providerName,
@@ -283,8 +406,48 @@ export class LLMProviderFactory {
           durationMs,
           usage: response.usage,
           finishReason: response.finishReason,
+          cache: response.cache,
           timestamp: Date.now(),
         });
+
+        if (response.cache?.providerPrefix) {
+          this.hooks.onCache?.({
+            provider: providerName,
+            model: response.model,
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            layer: 'provider-prefix',
+            status: response.cache.providerPrefix.hit ? 'hit' : response.cache.providerPrefix.write ? 'write' : 'miss',
+            cache: response.cache,
+            timestamp: Date.now(),
+          });
+        }
+
+        if (response.cache?.aiGateway?.status) {
+          this.hooks.onCache?.({
+            provider: providerName,
+            model: response.model,
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            layer: 'ai-gateway-response',
+            status: response.cache.aiGateway.status,
+            cache: response.cache,
+            timestamp: Date.now(),
+          });
+        }
+
+        if (factoryCache) {
+          this.hooks.onCache?.({
+            provider: providerName,
+            model: response.model,
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            layer: 'factory-response',
+            status: 'miss',
+            cache: response.cache!,
+            timestamp: Date.now(),
+          });
+        }
 
         // Track spend whenever analytics or ledger accounting is configured.
         if (this.config.costOptimization || this.config.ledger) {
@@ -305,9 +468,8 @@ export class LLMProviderFactory {
         }
 
         if (this.config.responseCache) {
-          const cacheKey = deriveResponseCacheKey(request);
           this.config.responseCache.put(
-            cacheKey,
+            responseCacheKey!,
             JSON.stringify(response),
             this.config.responseCacheDefaultTtl
           ).catch((err: unknown) => {
