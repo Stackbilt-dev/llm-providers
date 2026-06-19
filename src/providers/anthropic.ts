@@ -25,6 +25,7 @@ import {
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
+import { joinReasoning } from '../utils/reasoning.js';
 
 /**
  * Minimum envelope fields the Anthropic response parser reads. Changing this
@@ -44,6 +45,9 @@ const ANTHROPIC_RESPONSE_SCHEMA: SchemaField[] = [
       variants: {
         text: [
           { path: 'text', type: 'string' },
+        ],
+        thinking: [
+          { path: 'thinking', type: 'string' },
         ],
         tool_use: [
           { path: 'id', type: 'string' },
@@ -112,8 +116,9 @@ interface AnthropicRequest {
 }
 
 interface AnthropicResponseContentBlock {
-  type: 'text' | 'tool_use';
+  type: 'text' | 'tool_use' | 'thinking';
   text?: string;
+  thinking?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -530,6 +535,9 @@ export class AnthropicProvider extends BaseProvider {
       .filter(block => block.type === 'text')
       .map(block => block.text)
       .join('');
+    const reasoning = joinReasoning(data.content
+      .filter(block => block.type === 'thinking')
+      .map(block => block.thinking));
 
     const usage: TokenUsage = {
       inputTokens: data.usage.input_tokens,
@@ -551,6 +559,7 @@ export class AnthropicProvider extends BaseProvider {
 
     const response: LLMResponse = {
       id: data.id,
+      reasoning,
       message: textContent,
       content: textContent,
       usage,
@@ -559,6 +568,7 @@ export class AnthropicProvider extends BaseProvider {
       responseTime,
       finishReason: this.mapStopReason(data.stop_reason),
       metadata: {
+        ...(reasoning ? { reasoning } : {}),
         stopSequence: data.stop_sequence ?? undefined
       }
     };

@@ -563,8 +563,8 @@ Notes:
 - **Provenance.** The Compound systems are tagged `RESEARCH`-only in the catalog and are not auto-selected for generic use cases — pin the model (or request the `RESEARCH` use case) to use them, since selecting a Compound model can incur per-search surcharges.
 - **Cost.** Built-in tool surcharges (e.g. web search ~$5/1k requests) are billed by the provider and are **not** attributed per-call in `TokenUsage`; track them via `CreditLedger` if needed.
 - **Citations.** Structured search results surface on `LLMResponse.metadata.builtInToolResults` — `Array<{ type, name?, arguments?, results: [{ title, url, content, score }] }>`. Only executions that ran a web search appear (e.g. `code_interpreter` runs, which carry no citations, are omitted); the field is absent when no search ran. The model often runs **several** searches in one call, so `builtInToolResults` is an array of executions — iterate all of them (don't read only `[0]`) to get the full citation set. Citation sub-fields are passed through as the provider returns them — treat them as best-effort and validate URLs before use. `score` is the provider's **retrieval-relevance** score, not an authority/quality ranking. Note also that the response `content` is the model's synthesized answer (it may cite a curated subset), while `builtInToolResults` holds the raw retrieved hits — they are different sets.
-- **Reasoning.** When the model exposes its internal reasoning (the queries it searched), it surfaces on `LLMResponse.metadata.reasoning` as a string. Absent when the model doesn't emit it.
-- **Streaming.** `builtInTools` is accepted on streaming requests and the search still runs server-side, but the streaming path emits content deltas only — structured `metadata.builtInToolResults` and `metadata.reasoning` are **not** surfaced while streaming. Use non-streaming `generateResponse` when you need the structured citations.
+- **Reasoning.** When the model exposes internal reasoning or thinking text, it surfaces on `LLMResponse.reasoning` as a string and is removed from `LLMResponse.message`. `metadata.reasoning` remains as a compatibility mirror where providers already exposed it. Absent when the model doesn't emit it.
+- **Streaming.** `builtInTools` is accepted on streaming requests and the search still runs server-side, but the streaming path emits content deltas only — structured `metadata.builtInToolResults` and `reasoning` are **not** surfaced while streaming. Use non-streaming `generateResponse` when you need the structured citations.
 
 ```typescript
 // Flatten across all executions — the model may run several searches per call.
@@ -768,7 +768,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | Type | Description |
 |------|-------------|
 | `LLMRequest` | Unified request: messages, model, temperature, tools, builtInTools, response_format, cache, lora |
-| `LLMResponse` | Unified response: message, usage (with cost), provider, tool calls, metadata (builtInToolResults, reasoning) |
+| `LLMResponse` | Unified response: message, optional reasoning, usage (with cost), provider, tool calls, metadata (builtInToolResults) |
 | `BuiltInTool` / `BuiltInToolType` | Server-side tool request: `{ type }` where type is `web_search` \| `visit_website` \| `browser_automation` \| `code_interpreter` \| `wolfram_alpha` |
 | `BuiltInToolResult` | A surfaced built-in execution: `{ type, name?, arguments?, results: [{ title, url, content, score }] }` on `metadata.builtInToolResults` |
 | `TokenUsage` | Token counts, cost, and cached token fields (cachedInputTokens, cacheReadInputTokens, cacheCreationInputTokens, cacheWriteInputTokens) |

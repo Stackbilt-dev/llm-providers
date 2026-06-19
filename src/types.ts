@@ -206,6 +206,8 @@ export interface BuiltInToolResult {
 
 export interface LLMResponse {
   id?: string;
+  /** Chain-of-thought / thinking trace when the provider exposes it separately. */
+  reasoning?: string;
   message: string;
   content?: string; // Alternative to message for consistency
   usage: TokenUsage;

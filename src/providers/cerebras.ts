@@ -14,6 +14,7 @@ import {
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
+import { joinReasoning } from '../utils/reasoning.js';
 
 // Cerebras serves the OpenAI /chat/completions contract. See groq.ts for the
 // rationale on keeping each OpenAI-compat provider's schema as its own
@@ -28,6 +29,9 @@ const CEREBRAS_RESPONSE_SCHEMA: SchemaField[] = [
       shape: [
         { path: 'message', type: 'object' },
         { path: 'message.content', type: 'string-or-null', optional: true },
+        { path: 'message.reasoning', type: 'string', optional: true },
+        { path: 'message.reasoning_content', type: 'string', optional: true },
+        { path: 'message.thinking_content', type: 'string', optional: true },
         { path: 'finish_reason', type: 'string' },
         {
           path: 'message.tool_calls',
@@ -102,6 +106,9 @@ interface CerebrasResponse {
     message: {
       role: string;
       content?: string | null;
+      reasoning?: string;
+      reasoning_content?: string;
+      thinking_content?: string;
       tool_calls?: Array<{
         id: string;
         type: 'function';
@@ -533,6 +540,11 @@ export class CerebrasProvider extends BaseProvider {
     }
 
     const content = choice.message.content || '';
+    const reasoning = joinReasoning([
+      choice.message.thinking_content,
+      choice.message.reasoning_content,
+      choice.message.reasoning,
+    ]);
     const usage: TokenUsage = {
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
@@ -565,6 +577,7 @@ export class CerebrasProvider extends BaseProvider {
 
     return {
       id: data.id,
+      reasoning,
       message: content,
       content,
       usage,
@@ -575,7 +588,8 @@ export class CerebrasProvider extends BaseProvider {
       toolCalls,
       metadata: {
         systemFingerprint: data.system_fingerprint,
-        created: data.created
+        created: data.created,
+        ...(reasoning ? { reasoning } : {})
       }
     };
   }

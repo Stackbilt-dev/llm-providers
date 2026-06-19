@@ -17,7 +17,11 @@ const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 /** Helper that returns a standard OpenAI-shaped chat completion mock response */
-function openAIChatCompletion(model: string, content: string = '{"ok":true}') {
+function openAIChatCompletion(
+  model: string,
+  content: string | null = '{"ok":true}',
+  messageExtras: Record<string, unknown> = {}
+) {
   return {
     ok: true,
     json: async () => ({
@@ -27,7 +31,7 @@ function openAIChatCompletion(model: string, content: string = '{"ok":true}') {
       model,
       choices: [{
         index: 0,
-        message: { role: 'assistant', content },
+        message: { role: 'assistant', content, ...messageExtras },
         finish_reason: 'stop'
       }],
       usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
@@ -83,6 +87,21 @@ describe('OpenAI response_format', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.response_format).toEqual({ type: 'text' });
   });
+
+  it('surfaces provider reasoning separately from message content', async () => {
+    mockFetch.mockResolvedValueOnce(openAIChatCompletion('gpt-4o-mini', 'Final answer.', {
+      reasoning: 'Hidden reasoning trace.'
+    }));
+
+    const response = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'Think first' }],
+      model: 'gpt-4o-mini'
+    });
+
+    expect(response.message).toBe('Final answer.');
+    expect(response.reasoning).toBe('Hidden reasoning trace.');
+    expect(response.metadata?.reasoning).toBe('Hidden reasoning trace.');
+  });
 });
 
 // ---------- Groq ----------
@@ -118,6 +137,21 @@ describe('Groq response_format', () => {
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.response_format).toBeUndefined();
+  });
+
+  it('surfaces Groq reasoning at the top level and preserves the metadata mirror', async () => {
+    mockFetch.mockResolvedValueOnce(openAIChatCompletion('openai/gpt-oss-120b', 'Use this patch.', {
+      reasoning: 'Searched and compared options.'
+    }));
+
+    const response = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'Patch this' }],
+      model: 'openai/gpt-oss-120b'
+    });
+
+    expect(response.message).toBe('Use this patch.');
+    expect(response.reasoning).toBe('Searched and compared options.');
+    expect(response.metadata?.reasoning).toBe('Searched and compared options.');
   });
 });
 
@@ -266,6 +300,34 @@ describe('Anthropic response_format', () => {
     expect(originalMessages).toHaveLength(1);
     expect(originalMessages[0].role).toBe('user');
   });
+
+  it('surfaces Anthropic thinking blocks separately from text blocks', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'msg-thinking',
+        type: 'message',
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Private thinking trace.' },
+          { type: 'text', text: 'Final answer.' }
+        ],
+        model: 'claude-3-7-sonnet-20250219',
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 6 }
+      }),
+      headers: new Headers({ 'content-type': 'application/json' })
+    });
+
+    const response = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'Think first' }],
+      model: 'claude-3-7-sonnet-20250219'
+    });
+
+    expect(response.message).toBe('Final answer.');
+    expect(response.reasoning).toBe('Private thinking trace.');
+    expect(response.metadata?.reasoning).toBe('Private thinking trace.');
+  });
 });
 
 // ---------- Cloudflare ----------
@@ -332,6 +394,7 @@ describe('Cloudflare response_format', () => {
     const systemMsg = body.messages.find((m: any) => m.role === 'system');
     expect(systemMsg).toBeUndefined();
   });
+
 });
 
 // ---------- Cerebras ----------
@@ -387,5 +450,21 @@ describe('Cerebras response_format', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     const systemMsg = body.messages.find((m: any) => m.role === 'system');
     expect(systemMsg).toBeUndefined();
+  });
+
+  it('surfaces Cerebras parsed thinking content separately from message content', async () => {
+    mockFetch.mockResolvedValueOnce(openAIChatCompletion('zai-glm-4.7', 'Final answer.', {
+      thinking_content: 'Parsed thinking trace.'
+    }));
+
+    const response = await provider.generateResponse({
+      messages: [{ role: 'user', content: 'Think first' }],
+      model: 'zai-glm-4.7',
+      reasoning: { format: 'parsed' }
+    });
+
+    expect(response.message).toBe('Final answer.');
+    expect(response.reasoning).toBe('Parsed thinking trace.');
+    expect(response.metadata?.reasoning).toBe('Parsed thinking trace.');
   });
 });

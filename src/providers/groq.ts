@@ -14,6 +14,7 @@ import {
 import { getProviderDefaultModel, getCatalogEntry, modelSupportsBuiltInTools } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
+import { joinReasoning } from '../utils/reasoning.js';
 
 // Groq serves the OpenAI /chat/completions contract — same envelope shape as
 // OpenAI. Kept as a separate constant (not imported from openai.ts) because
@@ -29,6 +30,8 @@ const GROQ_RESPONSE_SCHEMA: SchemaField[] = [
       shape: [
         { path: 'message', type: 'object' },
         { path: 'message.content', type: 'string-or-null', optional: true },
+        { path: 'message.reasoning', type: 'string', optional: true },
+        { path: 'message.reasoning_content', type: 'string', optional: true },
         { path: 'finish_reason', type: 'string' },
         {
           path: 'message.tool_calls',
@@ -130,6 +133,7 @@ interface GroqResponse {
       // The model's internal reasoning (exposes built-in search queries).
       // Present on both compound and gpt-oss when built-in tools run.
       reasoning?: string;
+      reasoning_content?: string;
       tool_calls?: Array<{
         id: string;
         type: 'function';
@@ -636,6 +640,7 @@ export class GroqProvider extends BaseProvider {
     }
 
     const content = choice.message.content || '';
+    const reasoning = joinReasoning([choice.message.reasoning, choice.message.reasoning_content]);
     const usage: TokenUsage = {
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
@@ -673,6 +678,7 @@ export class GroqProvider extends BaseProvider {
 
     return {
       id: data.id,
+      reasoning,
       message: content,
       content,
       usage,
@@ -686,7 +692,7 @@ export class GroqProvider extends BaseProvider {
         created: data.created,
         // Surface only when present, to keep metadata clean for plain responses.
         ...(builtInToolResults ? { builtInToolResults } : {}),
-        ...(choice.message.reasoning ? { reasoning: choice.message.reasoning } : {}),
+        ...(reasoning ? { reasoning } : {}),
       }
     };
   }

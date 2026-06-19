@@ -23,6 +23,7 @@ import {
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
+import { extractThinkBlocks, joinReasoning } from '../utils/reasoning.js';
 
 /**
  * Minimum structural fields the Cloudflare Workers AI parser reads.
@@ -44,6 +45,8 @@ const CLOUDFLARE_RESPONSE_SCHEMA: SchemaField[] = [
       shape: [
         { path: 'message', type: 'object' },
         { path: 'message.content', type: 'string-or-null', optional: true },
+        { path: 'message.reasoning', type: 'string', optional: true },
+        { path: 'message.reasoning_content', type: 'string', optional: true },
       ]
     }
   },
@@ -99,6 +102,7 @@ interface WorkersAIChoice {
   message?: {
     role?: string;
     content?: string | null | Array<{ type?: string; text?: string }>;
+    reasoning?: string;
     reasoning_content?: string;
     tool_calls?: WorkersAIToolCall[];
   };
@@ -927,13 +931,15 @@ export class CloudflareProvider extends BaseProvider {
     if (payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
       validateSchema('cloudflare', payload, CLOUDFLARE_RESPONSE_SCHEMA);
     }
-    const content = this.extractText(result);
+    const extraction = this.extractResponseContent(result);
+    const content = extraction.message;
     const toolCalls = this.extractToolCalls(result);
     const usage = this.extractUsage(result, model, request, content);
     const cache = this.extractCacheObservability(result, request, usage);
 
     const response: LLMResponse = {
       id: payload?.id,
+      reasoning: extraction.reasoning,
       message: content,
       content,
       usage,
@@ -945,6 +951,7 @@ export class CloudflareProvider extends BaseProvider {
       metadata: {
         cloudflareAI: true,
         accountId: this.accountId,
+        ...(extraction.reasoning ? { reasoning: extraction.reasoning } : {}),
         ...(cache ? { cache } : {})
       }
     };
@@ -954,6 +961,22 @@ export class CloudflareProvider extends BaseProvider {
     }
 
     return response;
+  }
+
+  private extractResponseContent(result: WorkersAIResult): { message: string; reasoning?: string } {
+    const payload = this.unwrapResult(result);
+    const text = this.extractText(result);
+    const thinkExtraction = extractThinkBlocks(text);
+    const nativeReasoning = joinReasoning([
+      payload?.choices?.[0]?.message?.reasoning,
+      payload?.choices?.[0]?.message?.reasoning_content,
+      thinkExtraction.reasoning,
+    ]);
+
+    return {
+      message: thinkExtraction.message,
+      reasoning: nativeReasoning,
+    };
   }
 
   private extractText(result: WorkersAIResult): string {
@@ -978,7 +1001,7 @@ export class CloudflareProvider extends BaseProvider {
 
     const reasoningContent = payload?.choices?.[0]?.message?.reasoning_content;
     if (typeof reasoningContent === 'string' && reasoningContent.length > 0) {
-      return reasoningContent;
+      return '';
     }
 
     if (chatContent === null) {

@@ -319,7 +319,7 @@ describe('CloudflareProvider', () => {
       expect(response.usage.totalTokens).toBe(32);
     });
 
-    it('normalizes Cloudflare reasoning_content when content is null', async () => {
+    it('surfaces Cloudflare reasoning_content separately when content is null', async () => {
       mockAiRun.mockResolvedValueOnce({
         id: 'chatcmpl-cf-kimi',
         model: '@cf/moonshotai/kimi-k2.6',
@@ -346,8 +346,26 @@ describe('CloudflareProvider', () => {
         model: '@cf/moonshotai/kimi-k2.6'
       });
 
-      expect(response.message).toBe('Interim Kimi reasoning text');
-      expect(response.content).toBe('Interim Kimi reasoning text');
+      expect(response.message).toBe('');
+      expect(response.content).toBe('');
+      expect(response.reasoning).toBe('Interim Kimi reasoning text');
+      expect(response.metadata?.reasoning).toBe('Interim Kimi reasoning text');
+    });
+
+    it('extracts Cloudflare think blocks from raw completion text', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        response: '<think>Compare likely edits first.</think>\nFinal patch summary.'
+      });
+
+      const response = await provider.generateResponse({
+        ...testRequest,
+        model: '@cf/zai-org/glm-5.2'
+      });
+
+      expect(response.message).toBe('Final patch summary.');
+      expect(response.content).toBe('Final patch summary.');
+      expect(response.reasoning).toBe('Compare likely edits first.');
+      expect(response.metadata?.reasoning).toBe('Compare likely edits first.');
     });
 
     it('should normalize Responses API output items into text and tool calls', async () => {

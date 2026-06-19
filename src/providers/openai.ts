@@ -15,6 +15,7 @@ import {
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
+import { joinReasoning } from '../utils/reasoning.js';
 
 // Minimum envelope `formatResponse` reads. `tool_calls` uses a discriminated
 // union (single `function` variant today) so an additive new tool type upstream
@@ -30,7 +31,9 @@ const OPENAI_RESPONSE_SCHEMA: SchemaField[] = [
     items: {
       shape: [
         { path: 'message', type: 'object' },
-        { path: 'message.content', type: 'string-or-null' },
+        { path: 'message.content', type: 'string-or-null', optional: true },
+        { path: 'message.reasoning', type: 'string', optional: true },
+        { path: 'message.reasoning_content', type: 'string', optional: true },
         { path: 'finish_reason', type: 'string' },
         {
           path: 'message.tool_calls',
@@ -111,7 +114,9 @@ interface OpenAIResponse {
     index: number;
     message: {
       role: string;
-      content: string | null;
+      content?: string | null;
+      reasoning?: string;
+      reasoning_content?: string;
       tool_calls?: OpenAIToolCall[];
     };
     finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter';
@@ -413,6 +418,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     const content = choice.message.content || '';
+    const reasoning = joinReasoning([choice.message.reasoning, choice.message.reasoning_content]);
     const usage: TokenUsage = {
       inputTokens: data.usage.prompt_tokens,
       outputTokens: data.usage.completion_tokens,
@@ -430,6 +436,7 @@ export class OpenAIProvider extends BaseProvider {
 
     const response: LLMResponse = {
       id: data.id,
+      reasoning,
       message: content,
       content,
       usage,
@@ -439,7 +446,8 @@ export class OpenAIProvider extends BaseProvider {
       finishReason: choice.finish_reason,
       metadata: {
         systemFingerprint: data.system_fingerprint,
-        created: data.created
+        created: data.created,
+        ...(reasoning ? { reasoning } : {})
       }
     };
 

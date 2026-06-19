@@ -127,6 +127,7 @@ export interface CanonicalResponseError {
 
 export interface CanonicalLLMResponse {
   id?: string;
+  reasoning?: string;
   message: string;
   model: string;
   provider: ProviderName;
@@ -243,6 +244,7 @@ export function normalizeLLMResponse(
 ): CanonicalLLMResponse {
   return {
     id: response.id,
+    reasoning: response.reasoning,
     message: response.message,
     model: response.model,
     provider: response.provider as ProviderName,

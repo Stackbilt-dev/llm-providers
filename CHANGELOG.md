@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ## [Unreleased]
 
 ### Added
+- **Reasoning response contract (#95)** — `LLMResponse.reasoning` and `CanonicalLLMResponse.reasoning` carry provider-exposed thinking traces separately from `message`, with provider normalization for Cloudflare, Cerebras, Anthropic, Groq, and OpenAI-compatible reasoning fields.
 - **Cache observability contract (#83)** — `LLMResponse.cache` and `ObservabilityHooks.onCache` expose normalized provider-prefix, AI Gateway response-cache, and factory response-cache state without forcing consumers to parse provider-specific payloads. `RequestEndEvent.cache` carries the same shape for request lifecycle logging.
 - **Cold/warm cache canary guidance** — README now documents separate Workers AI prefix-cache and AI Gateway exact-response-cache canaries, including stable-prefix prompt structure for coding-agent workloads.
 

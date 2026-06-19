@@ -211,6 +211,7 @@ describe('canonical provider contract', () => {
   it('adds stable canonical response routing metadata', () => {
     const canonical = normalizeLLMResponse({
       id: 'res-1',
+      reasoning: 'Provider reasoning trace',
       message: 'ok',
       model: 'llama-3.3-70b-versatile',
       provider: 'groq',
@@ -239,6 +240,7 @@ describe('canonical provider contract', () => {
     });
     expect(canonical.routing?.fallbackChain).toHaveLength(1);
     expect(canonical.routing?.degradations?.[0].action).toBe('emulated');
+    expect(canonical.reasoning).toBe('Provider reasoning trace');
     expect(canonical.metadata).toEqual({ providerRaw: true });
   });
 
