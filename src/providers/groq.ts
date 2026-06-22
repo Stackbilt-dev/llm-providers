@@ -4,7 +4,7 @@
  */
 
 import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage, BuiltInTool, BuiltInToolType, BuiltInToolResult } from '../types.js';
-import { BaseProvider } from './base.js';
+import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
   AuthenticationError,
@@ -212,7 +212,15 @@ export class GroqProvider extends BaseProvider {
     }
 
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl || 'https://api.groq.com/openai/v1';
+    const resolved = resolveCfGateway({
+      provider: 'groq',
+      baseUrl: config.baseUrl,
+      cfGateway: config.cfGateway,
+      suffix: 'groq/openai/v1',
+      defaultBaseUrl: 'https://api.groq.com/openai/v1',
+    });
+    this.baseUrl = resolved.resolvedBaseUrl;
+    this.cfGatewayActive = resolved.cfGatewayActive;
   }
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
@@ -463,7 +471,8 @@ export class GroqProvider extends BaseProvider {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.apiKey}`,
       'Content-Type': 'application/json',
-      ...this.getAIGatewayHeaders(request)
+      ...this.getAIGatewayHeaders(request),
+      ...this.getCfGatewayHeaders(request)
     };
 
     const options: RequestInit = {

@@ -27,7 +27,26 @@ export interface GatewayMetadata {
   cacheKey?: string;
   /** cf-aig-cache-ttl: Cloudflare AI Gateway response cache TTL in seconds. */
   cacheTtl?: number;
+  /** cf-aig-skip-cache: bypass the Cloudflare AI Gateway response cache for this request. */
+  skipCache?: boolean;
   customMetadata?: Record<string, string>;
+}
+
+/**
+ * First-class Cloudflare AI Gateway passthrough config attached to an HTTP
+ * provider via `cfGateway`. When set (and no explicit `baseUrl` override is
+ * present), the provider derives its base URL as
+ * `https://gateway.ai.cloudflare.com/v1/{accountId}/{gatewayId}/{suffix}` and
+ * injects `cf-aig-*` headers from `LLMRequest.gatewayMetadata`.
+ *
+ * Both fields are required; an empty string for either throws synchronously in
+ * the provider constructor (CF_GATEWAY_INVALID_CONFIG).
+ */
+export interface CfGatewayConfig {
+  /** Cloudflare account ID. Must be non-empty. */
+  accountId: string;
+  /** AI Gateway ID (the named gateway within the account). Must be non-empty. */
+  gatewayId: string;
 }
 
 /**
@@ -285,10 +304,14 @@ export interface ProviderConfig {
 export interface OpenAIConfig extends ProviderConfig {
   organization?: string;
   project?: string;
+  /** Route through Cloudflare AI Gateway. Ignored when `baseUrl` is set. */
+  cfGateway?: CfGatewayConfig;
 }
 
 export interface AnthropicConfig extends ProviderConfig {
   version?: string;
+  /** Route through Cloudflare AI Gateway. Ignored when `baseUrl` is set. */
+  cfGateway?: CfGatewayConfig;
 }
 
 export interface CloudflareAIGatewayOptions {
@@ -316,14 +339,20 @@ export interface CloudflareConfig extends ProviderConfig {
 
 export interface CerebrasConfig extends ProviderConfig {
   // Cerebras uses OpenAI-compatible API; no extra fields needed beyond ProviderConfig
+  /** Route through Cloudflare AI Gateway. Ignored when `baseUrl` is set. */
+  cfGateway?: CfGatewayConfig;
 }
 
 export interface GroqConfig extends ProviderConfig {
   // Groq uses OpenAI-compatible API; no extra fields needed beyond ProviderConfig
+  /** Route through Cloudflare AI Gateway. Ignored when `baseUrl` is set. */
+  cfGateway?: CfGatewayConfig;
 }
 
 export interface NvidiaConfig extends ProviderConfig {
   // NVIDIA NIM uses OpenAI-compatible API; no extra fields needed beyond ProviderConfig
+  /** Route through Cloudflare AI Gateway. Ignored when `baseUrl` is set. */
+  cfGateway?: CfGatewayConfig;
 }
 
 export interface LLMError extends Error {

@@ -14,13 +14,65 @@ import type {
   ToolCall,
   TokenUsage
 } from '../types.js';
+import type { CfGatewayConfig } from '../types.js';
 import type { Logger } from '../utils/logger.js';
 import { noopLogger } from '../utils/logger.js';
 import { RetryManager } from '../utils/retry.js';
 import { CircuitBreaker, defaultCircuitBreakerManager } from '../utils/circuit-breaker.js';
 import { CostTracker } from '../utils/cost-tracker.js';
 import { defaultLatencyHistogram } from '../utils/latency-histogram.js';
-import { ConfigurationError, TimeoutError, InvalidRequestError } from '../errors.js';
+import { ConfigurationError, TimeoutError, InvalidRequestError, CfGatewayInvalidConfigError } from '../errors.js';
+
+/** Per-provider path suffix on the Cloudflare AI Gateway base URL. */
+export type CfGatewayProviderSuffix =
+  | 'openai/v1'
+  | 'anthropic'
+  | 'cerebras/v1'
+  | 'groq/openai/v1'
+  | 'nvidia-nim/v1';
+
+export interface CfGatewayResolvedState {
+  resolvedBaseUrl: string;
+  cfGatewayActive: boolean;
+}
+
+/**
+ * Resolve a provider base URL from explicit override / cfGateway / default.
+ * Precedence: explicit `baseUrl` wins (cfGatewayActive=false); else derive from
+ * `cfGateway`; else fall back to `defaultBaseUrl`. Throws synchronously when
+ * `cfGateway` is supplied with an empty `accountId` or `gatewayId`.
+ */
+export function resolveCfGateway(args: {
+  provider: string;
+  baseUrl?: string;
+  cfGateway?: CfGatewayConfig;
+  suffix: CfGatewayProviderSuffix;
+  defaultBaseUrl: string;
+}): CfGatewayResolvedState {
+  const { provider, baseUrl, cfGateway, suffix, defaultBaseUrl } = args;
+
+  if (cfGateway) {
+    if (!cfGateway.accountId) {
+      throw new CfGatewayInvalidConfigError(provider, 'accountId');
+    }
+    if (!cfGateway.gatewayId) {
+      throw new CfGatewayInvalidConfigError(provider, 'gatewayId');
+    }
+  }
+
+  if (baseUrl) {
+    return { resolvedBaseUrl: baseUrl, cfGatewayActive: false };
+  }
+
+  if (cfGateway) {
+    return {
+      resolvedBaseUrl: `https://gateway.ai.cloudflare.com/v1/${cfGateway.accountId}/${cfGateway.gatewayId}/${suffix}`,
+      cfGatewayActive: true,
+    };
+  }
+
+  return { resolvedBaseUrl: defaultBaseUrl, cfGatewayActive: false };
+}
 
 export abstract class BaseProvider implements LLMProvider {
   abstract name: string;
@@ -31,6 +83,12 @@ export abstract class BaseProvider implements LLMProvider {
   abstract supportsVision?: boolean;
 
   protected config: ProviderConfig;
+  /**
+   * True when this provider derived its base URL from `cfGateway` (no explicit
+   * `baseUrl` override). Gates injection of cf-aig-* headers in makeRequest.
+   * Set by each provider constructor via {@link resolveCfGateway}.
+   */
+  protected cfGatewayActive = false;
   protected logger: Logger;
   protected retryManager: RetryManager;
   protected circuitBreaker: CircuitBreaker;
@@ -323,6 +381,32 @@ export abstract class BaseProvider implements LLMProvider {
     }
     if (typeof request.gatewayMetadata.cacheTtl === 'number') {
       headers['cf-aig-cache-ttl'] = String(request.gatewayMetadata.cacheTtl);
+    }
+
+    return headers;
+  }
+
+  /**
+   * cf-aig-* headers injected when this provider was configured via `cfGateway`
+   * (cfGatewayActive). Derived from `request.gatewayMetadata`; each header is
+   * only present when its source field is defined.
+   */
+  protected getCfGatewayHeaders(request?: LLMRequest): Record<string, string> {
+    if (!this.cfGatewayActive || !request?.gatewayMetadata) {
+      return {};
+    }
+
+    const headers: Record<string, string> = {};
+    const { cacheTtl, cacheKey, skipCache } = request.gatewayMetadata;
+
+    if (typeof cacheTtl === 'number') {
+      headers['cf-aig-cache-ttl'] = String(cacheTtl);
+    }
+    if (typeof cacheKey === 'string') {
+      headers['cf-aig-cache-key'] = cacheKey;
+    }
+    if (typeof skipCache === 'boolean') {
+      headers['cf-aig-skip-cache'] = String(skipCache);
     }
 
     return headers;

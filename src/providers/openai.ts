@@ -4,7 +4,7 @@
  */
 
 import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool, TokenUsage } from '../types.js';
-import { BaseProvider } from './base.js';
+import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
   AuthenticationError,
@@ -161,7 +161,15 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl || 'https://api.openai.com/v1';
+    const resolved = resolveCfGateway({
+      provider: 'openai',
+      baseUrl: config.baseUrl,
+      cfGateway: config.cfGateway,
+      suffix: 'openai/v1',
+      defaultBaseUrl: 'https://api.openai.com/v1',
+    });
+    this.baseUrl = resolved.resolvedBaseUrl;
+    this.cfGatewayActive = resolved.cfGatewayActive;
     this.organization = config.organization;
     this.project = config.project;
   }
@@ -289,7 +297,8 @@ export class OpenAIProvider extends BaseProvider {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.apiKey}`,
       'Content-Type': 'application/json',
-      ...this.getAIGatewayHeaders(request)
+      ...this.getAIGatewayHeaders(request),
+      ...this.getCfGatewayHeaders(request)
     };
 
     if (this.organization) {
