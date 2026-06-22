@@ -13,7 +13,7 @@ import type {
   ToolCall,
   TokenUsage
 } from '../types.js';
-import { BaseProvider } from './base.js';
+import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
   AuthenticationError,
@@ -173,7 +173,15 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     this.apiKey = config.apiKey;
-    this.baseUrl = config.baseUrl || 'https://api.anthropic.com';
+    const resolved = resolveCfGateway({
+      provider: 'anthropic',
+      baseUrl: config.baseUrl,
+      cfGateway: config.cfGateway,
+      suffix: 'anthropic',
+      defaultBaseUrl: 'https://api.anthropic.com',
+    });
+    this.baseUrl = resolved.resolvedBaseUrl;
+    this.cfGatewayActive = resolved.cfGatewayActive;
     this.version = config.version || '2023-06-01';
   }
 
@@ -373,7 +381,8 @@ export class AnthropicProvider extends BaseProvider {
       'x-api-key': this.apiKey,
       'anthropic-version': this.version,
       'Content-Type': 'application/json',
-      ...this.getAIGatewayHeaders(request)
+      ...this.getAIGatewayHeaders(request),
+      ...this.getCfGatewayHeaders(request)
     };
 
     const options: RequestInit = {

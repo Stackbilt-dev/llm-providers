@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- **First-class `cfGateway` config (#97)** — `OpenAIConfig`, `AnthropicConfig`, `CerebrasConfig`, `GroqConfig`, and `NvidiaConfig` accept `cfGateway?: { accountId, gatewayId }`. When set (and no explicit `baseUrl` override is present), the provider derives its base URL as `https://gateway.ai.cloudflare.com/v1/{accountId}/{gatewayId}/{suffix}` per provider (`openai/v1`, `anthropic`, `cerebras/v1`, `groq/openai/v1`, `nvidia-nim/v1`) and injects `cf-aig-cache-ttl`, `cf-aig-cache-key`, and `cf-aig-skip-cache` headers from `LLMRequest.gatewayMetadata` (each header only when its field is defined). An explicit `baseUrl` always wins and disables gateway-active header injection. Empty `accountId`/`gatewayId` throws `CfGatewayInvalidConfigError` (`CF_GATEWAY_INVALID_CONFIG`) synchronously in the constructor. New `GatewayMetadata.skipCache?: boolean` field and exported `CfGatewayConfig` type.
+
 ## [1.18.0] — 2026-06-19
 
 ### Added

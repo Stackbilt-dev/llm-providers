@@ -146,6 +146,48 @@ const llm = LLMProviders.fromEnv(env, {
 { apiKey: 'nvapi-...' }
 ```
 
+## Cloudflare AI Gateway Passthrough
+
+Each HTTP provider (OpenAI, Anthropic, Cerebras, Groq, NVIDIA) accepts a `cfGateway`
+option that routes requests through a [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/)
+without you hand-building the gateway URL:
+
+```typescript
+const provider = new OpenAIProvider({
+  apiKey: 'sk-...',
+  cfGateway: { accountId: 'YOUR_ACCOUNT_ID', gatewayId: 'my-gateway' },
+});
+// baseUrl is derived as:
+//   https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/my-gateway/openai/v1
+```
+
+Per-provider gateway suffixes: `openai/v1`, `anthropic`, `cerebras/v1`,
+`groq/openai/v1`, `nvidia-nim/v1`.
+
+When `cfGateway` is active, the provider injects `cf-aig-*` headers from
+`request.gatewayMetadata` on each call (each header only when its field is set):
+
+| `gatewayMetadata` field | Header             | Wire value        |
+| ----------------------- | ------------------ | ----------------- |
+| `cacheTtl` (number)     | `cf-aig-cache-ttl` | `"300"`           |
+| `cacheKey` (string)     | `cf-aig-cache-key` | passthrough       |
+| `skipCache` (boolean)   | `cf-aig-skip-cache`| `"true"`/`"false"`|
+
+An explicit `baseUrl` always wins: if you set both `baseUrl` and `cfGateway`, the
+`baseUrl` is used verbatim and no `cf-aig-*` headers are injected. Empty
+`accountId` or `gatewayId` throws `CfGatewayInvalidConfigError`
+(`CF_GATEWAY_INVALID_CONFIG`) synchronously in the constructor.
+
+### Composable with semantic routing
+
+`cfGateway` is network-layer infrastructure and composes with this package's
+application-layer concerns rather than replacing them. Use **llm-providers** for
+semantic routing (use-case → model selection) and per-provider circuit breakers;
+use **Cloudflare AI Gateway** for network-layer load balancing, response caching,
+and upstream 429 interception. The factory still picks the provider/model and
+trips its breaker on failures; the gateway sits underneath each provider's
+outbound HTTP and handles caching and rate-limit absorption transparently.
+
 ## Vision Inputs
 
 Vision requests use `request.images`. The factory routes image inputs only to providers that advertise `supportsVision === true`; providers that cannot see images reject the request instead of silently dropping image content.

@@ -97,6 +97,21 @@ export class ConfigurationError extends LLMProviderError {
   }
 }
 
+export class CfGatewayInvalidConfigError extends LLMProviderError {
+  /** The specific cfGateway field that was empty or missing. */
+  field: 'accountId' | 'gatewayId';
+
+  constructor(provider: string, field: 'accountId' | 'gatewayId') {
+    super(
+      `cfGateway.${field} must be a non-empty string for the ${provider} provider`,
+      'CF_GATEWAY_INVALID_CONFIG',
+      provider,
+      false
+    );
+    this.field = field;
+  }
+}
+
 export class CircuitBreakerOpenError extends LLMProviderError {
   retryAfterSec: number;
   consecutiveFailures: number;
