@@ -7,6 +7,12 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/__tests__/**/*.ts'],
     exclude: ['node_modules', 'dist'],
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        execArgv: ['--experimental-wasm-modules'],
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json'],
