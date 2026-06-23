@@ -5,8 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.19.0] — 2026-06-23
+
 ### Added
-- **First-class `cfGateway` config (#97)** — `OpenAIConfig`, `AnthropicConfig`, `CerebrasConfig`, `GroqConfig`, and `NvidiaConfig` accept `cfGateway?: { accountId, gatewayId }`. When set (and no explicit `baseUrl` override is present), the provider derives its base URL as `https://gateway.ai.cloudflare.com/v1/{accountId}/{gatewayId}/{suffix}` per provider (`openai/v1`, `anthropic`, `cerebras/v1`, `groq/openai/v1`, `nvidia-nim/v1`) and injects `cf-aig-cache-ttl`, `cf-aig-cache-key`, and `cf-aig-skip-cache` headers from `LLMRequest.gatewayMetadata` (each header only when its field is defined). An explicit `baseUrl` always wins and disables gateway-active header injection. Empty `accountId`/`gatewayId` throws `CfGatewayInvalidConfigError` (`CF_GATEWAY_INVALID_CONFIG`) synchronously in the constructor. New `GatewayMetadata.skipCache?: boolean` field and exported `CfGatewayConfig` type.
+- **First-class `cfGateway` config (#97)** — All five HTTP providers (`OpenAIConfig`, `AnthropicConfig`, `CerebrasConfig`, `GroqConfig`, `NvidiaConfig`) accept `cfGateway?: { accountId, gatewayId }`.
+  - When set (and no explicit `baseUrl` override), the provider derives its base URL as `https://gateway.ai.cloudflare.com/v1/{accountId}/{gatewayId}/{suffix}` — suffixes: `openai/v1`, `anthropic`, `cerebras/v1`, `groq/openai/v1`, `nvidia-nim/v1`.
+  - `cf-aig-cache-ttl`, `cf-aig-cache-key`, and `cf-aig-skip-cache` headers are injected per-call from `LLMRequest.gatewayMetadata` (each header only when its field is set).
+  - An explicit `baseUrl` always wins and suppresses gateway header injection.
+  - Empty `accountId` or `gatewayId` throws `CfGatewayInvalidConfigError` (`CF_GATEWAY_INVALID_CONFIG`) synchronously in the constructor.
+- **`GatewayMetadata.skipCache?: boolean`** — new field; maps to `cf-aig-skip-cache` when `cfGateway` is active.
+- **`CfGatewayConfig`** — exported type for the `cfGateway` option shape.
 
 ## [1.18.0] — 2026-06-19
 
