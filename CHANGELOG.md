@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Performance
+- **`LatencyHistogram` backed by WASM (#96)** — `LatencyHistogram` is now a thin adapter over `@stackbilt/wasm-core` (Phase 0). The Rust implementation uses a sorted `Vec` with binary search insertion (O(log N) insert, O(1) percentile read) and a circular eviction index (O(1)) in place of `Array.shift()`. No public API change; existing tests pass unchanged. Requires `--experimental-wasm-modules` in Node.js test environments (added to `vitest.config.ts`).
+
 ## [1.19.0] — 2026-06-23
 
 ### Added

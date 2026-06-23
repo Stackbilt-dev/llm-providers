@@ -57,5 +57,8 @@
   "publishConfig": {
     "access": "public",
     "provenance": false
+  },
+  "dependencies": {
+    "@stackbilt/wasm-core": "^0.1.0"
   }
 }
