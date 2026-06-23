@@ -1,0 +1,8 @@
+# Normalize line endings to LF on commit across all platforms
+* text=auto eol=lf
+*.ts text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
