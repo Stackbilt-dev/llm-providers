@@ -51,6 +51,10 @@ export function resolveCfGateway(args: {
 }): CfGatewayResolvedState {
   const { provider, baseUrl, cfGateway, suffix, defaultBaseUrl } = args;
 
+  if (baseUrl) {
+    return { resolvedBaseUrl: baseUrl, cfGatewayActive: false };
+  }
+
   if (cfGateway) {
     if (!cfGateway.accountId) {
       throw new CfGatewayInvalidConfigError(provider, 'accountId');
@@ -58,13 +62,6 @@ export function resolveCfGateway(args: {
     if (!cfGateway.gatewayId) {
       throw new CfGatewayInvalidConfigError(provider, 'gatewayId');
     }
-  }
-
-  if (baseUrl) {
-    return { resolvedBaseUrl: baseUrl, cfGatewayActive: false };
-  }
-
-  if (cfGateway) {
     return {
       resolvedBaseUrl: `https://gateway.ai.cloudflare.com/v1/${cfGateway.accountId}/${cfGateway.gatewayId}/${suffix}`,
       cfGatewayActive: true,
@@ -160,7 +157,7 @@ export abstract class BaseProvider implements LLMProvider {
     timeoutMs?: number
   ): Promise<Response> {
     const timeout = timeoutMs || this.config.timeout || 30000;
-    
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -179,11 +176,11 @@ export abstract class BaseProvider implements LLMProvider {
       return response;
     } catch (error) {
       clearTimeout(timeoutId);
-      
+
       if (error instanceof Error && error.name === 'AbortError') {
         throw new TimeoutError(this.name, `Request timeout after ${timeout}ms`);
       }
-      
+
       throw error;
     }
   }
@@ -260,8 +257,8 @@ export abstract class BaseProvider implements LLMProvider {
     lastError?: number;
   } {
     const circuitState = this.getCircuitBreaker().getState();
-    const successRate = this.metrics.requestCount > 0 
-      ? this.metrics.successCount / this.metrics.requestCount 
+    const successRate = this.metrics.requestCount > 0
+      ? this.metrics.successCount / this.metrics.requestCount
       : 1;
 
     return {
@@ -361,7 +358,8 @@ export abstract class BaseProvider implements LLMProvider {
 
   protected getAIGatewayHeaders(request?: LLMRequest): Record<string, string> {
     const baseUrl = typeof this.config.baseUrl === 'string' ? this.config.baseUrl : '';
-    if (!baseUrl.includes('gateway.ai.cloudflare.com') || !request?.gatewayMetadata) {
+    const isGateway = this.cfGatewayActive || baseUrl.includes('gateway.ai.cloudflare.com');
+    if (!isGateway || !request?.gatewayMetadata) {
       return {};
     }
 
@@ -381,6 +379,9 @@ export abstract class BaseProvider implements LLMProvider {
     }
     if (typeof request.gatewayMetadata.cacheTtl === 'number') {
       headers['cf-aig-cache-ttl'] = String(request.gatewayMetadata.cacheTtl);
+    }
+    if (typeof request.gatewayMetadata.skipCache === 'boolean') {
+      headers['cf-aig-skip-cache'] = String(request.gatewayMetadata.skipCache);
     }
 
     return headers;
