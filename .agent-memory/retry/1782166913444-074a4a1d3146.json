@@ -1,0 +1,8 @@
+{
+  "command": "archive-raw-session",
+  "options": {
+    "_": []
+  },
+  "error": "HTTP 501 from https://mindspring.blue-pine-edf6.workers.dev/api/v2/workspaces/aegis-daemon/notebooks: {\"error\":\"Error: D1_ERROR: out of memory: SQLITE_NOMEM\"}",
+  "createdAt": "2026-06-22T22:21:53.444Z"
+}
