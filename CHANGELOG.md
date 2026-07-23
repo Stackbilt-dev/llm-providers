@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Fixed
+- **Workers AI catalog pricing — 16 corrections against the live account API (2026-07-22 audit)** — 12 metered models were listed as free ($0/$0), including `@cf/moonshotai/kimi-k2.6` / `kimi-k2.7-code` (actually $0.95/$4.00 per M) and `@cf/qwen/qwen2.5-coder-32b-instruct` ($0.66/$1.00); `@cf/openai/gpt-oss-120b` was 1000× too high (per-M prices had been entered in the per-token `inputTokenCost`/`outputTokenCost` fields); `llama-4-scout` and `llama-3.2-11b-vision` had stale rates. Consumers computing spend from `usage.cost` (e.g. the AEGIS `cheap_llm_ledger`) were under-reporting Workers AI costs and overstating savings. All values are now USD-per-token derived from the live `/ai/models/search` prices. **Nothing on Workers AI text generation is free.**
+
 ### Performance
 - **`LatencyHistogram` backed by WASM (#96)** — `LatencyHistogram` is now a thin adapter over `@stackbilt/wasm-core` (Phase 0). The Rust implementation uses a sorted `Vec` with binary search insertion (O(log N) insert, O(1) percentile read) and a circular eviction index (O(1)) in place of `Array.shift()`. No public API change; existing tests pass unchanged. Requires `--experimental-wasm-modules` in Node.js test environments (added to `vitest.config.ts`).
 
