@@ -370,8 +370,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0.00035,  // $0.35/MTok — matches workers-ai-chat.ts GPT_OSS_RATES
-        outputTokenCost: 0.00075, // $0.75/MTok
+        inputTokenCost: 0.00000035,  // $0.35/MTok — matches workers-ai-chat.ts GPT_OSS_RATES
+        outputTokenCost: 0.00000075, // $0.75/MTok
         description: 'GPT-OSS 120B - OpenAI-format tool calling on Workers AI'
       },
       '@cf/moonshotai/kimi-k2.6': {
@@ -381,8 +381,8 @@ export class CloudflareProvider extends BaseProvider {
         toolCalling: true,
         supportsVision: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.00000095,
+        outputTokenCost: 0.000004,
         description: 'Kimi K2.6 — multi-turn tools, vision, structured outputs, 262K context'
       },
       '@cf/zai-org/glm-4.7-flash': {
@@ -391,8 +391,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0000000605,
+        outputTokenCost: 0.0000004,
         thinkingModel: true,
         description: 'GLM-4.7-Flash — chain-of-thought reasoning model; outputs thinking traces, not suitable for direct-response routing'
       },
@@ -478,8 +478,8 @@ export class CloudflareProvider extends BaseProvider {
         toolCalling: true,
         supportsVision: true,
         supportsBatching: true,
-        inputTokenCost: 0.0000003,
-        outputTokenCost: 0.0000009,
+        inputTokenCost: 0.00000027,
+        outputTokenCost: 0.00000085,
         description: 'Llama 4 Scout 17B — natively multimodal, tool calling'
       },
       '@cf/meta/llama-3.2-11b-vision-instruct': {
@@ -488,8 +488,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: false,
         supportsVision: true,
         supportsBatching: true,
-        inputTokenCost: 0.0000005,
-        outputTokenCost: 0.0000005,
+        inputTokenCost: 0.0000000485,
+        outputTokenCost: 0.000000676,
         description: 'Llama 3.2 11B Vision — image understanding'
       },
       '@cf/meta/llama-3.3-70b-instruct-fp8-fast': {
@@ -498,8 +498,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.000000293,
+        outputTokenCost: 0.000002253,
         description: 'Llama 3.3 70B FP8 Fast — best quality/cost on Workers AI, primary COST_EFFECTIVE choice'
       },
       '@cf/openai/gpt-oss-20b': {
@@ -508,8 +508,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0000002,
+        outputTokenCost: 0.0000003,
         description: 'GPT-OSS 20B — lightweight tool-calling model'
       },
       '@cf/qwen/qwen2.5-coder-32b-instruct': {
@@ -518,8 +518,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.00000066,
+        outputTokenCost: 0.000001,
         description: 'Qwen 2.5 Coder 32B — purpose-built for code generation'
       },
       '@cf/mistralai/mistral-small-3.1-24b-instruct': {
@@ -529,8 +529,8 @@ export class CloudflareProvider extends BaseProvider {
         toolCalling: true,
         supportsVision: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.000000351,
+        outputTokenCost: 0.000000555,
         description: 'Mistral Small 3.1 24B — vision + tool-calling, strong balanced model'
       },
       '@cf/qwen/qwen3-30b-a3b-fp8': {
@@ -539,8 +539,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: false,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0000000509,
+        outputTokenCost: 0.000000335,
         description: 'Qwen3 30B FP8 — state-of-the-art Qwen3 generation'
       },
       '@cf/meta/llama-3.2-1b-instruct': {
@@ -548,8 +548,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.000000027,
+        outputTokenCost: 0.000000201,
         description: 'Llama 3.2 1B — ultra-cheap tiny model'
       },
       '@cf/meta/llama-3.2-3b-instruct': {
@@ -557,8 +557,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0000000509,
+        outputTokenCost: 0.000000335,
         description: 'Llama 3.2 3B — cheap small model'
       },
       '@cf/moonshotai/kimi-k2.7-code': {
@@ -567,8 +567,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: false,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.00000095,
+        outputTokenCost: 0.000004,
         description: 'Kimi K2.7 Code — code-focused variant of Kimi K2.6'
       },
       '@cf/nvidia/nemotron-3-120b-a12b': {
@@ -577,8 +577,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0000005,
+        outputTokenCost: 0.0000015,
         description: 'NVIDIA Nemotron-3 120B — hybrid MoE, parallel function calling, 256K context, multi-agent focus'
       },
       '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b': {
@@ -586,8 +586,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.000000497,
+        outputTokenCost: 0.000004881,
         thinkingModel: true,
         description: 'DeepSeek-R1-Distill-Qwen-32B — chain-of-thought reasoning model distilled from DeepSeek-R1; outputs thinking traces'
       },
@@ -596,8 +596,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.00000066,
+        outputTokenCost: 0.000001,
         thinkingModel: true,
         description: 'QwQ-32B — native thinking/reasoning model; outputs chain-of-thought traces; competes with o1-mini on hard reasoning tasks'
       },
