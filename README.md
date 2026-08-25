@@ -100,6 +100,37 @@ Existing `LLMRequest` fields are still supported as compatibility input. `normal
 
 `normalizeLLMResponse()` provides a stable canonical response shape with normalized routing metadata (`selectedProvider`, `selectedModel`, fallback chain, and capability degradations) while preserving raw provider extras under `metadata`.
 
+### Image Analysis Observability
+
+`analyzeImage` has a Worker-safe, sanitized COGS surface on the existing public package entrypoint:
+
+```typescript
+import { LLMProviders, type ImageAnalysisAttemptEvent } from '@stackbilt/llm-providers';
+
+const llm = new LLMProviders({
+  cloudflare: { ai: env.AI },
+  hooks: {
+    onImageAnalysisAttempt(event: ImageAnalysisAttemptEvent) {
+      console.log(event);
+    },
+    onImageAnalysisComplete(event) {
+      console.log(event);
+    },
+  },
+});
+
+await llm.analyzeImage({
+  image: { data: base64Image, mimeType: 'image/jpeg' },
+  prompt: 'Extract this page',
+  requestId: crypto.randomUUID(),
+  metadata: { captureId: 'capture-123', pageNumber: 1 }, // non-PII scalars only
+});
+```
+
+Each physical provider call produces an `ImageAnalysisAttemptEvent`; provider retries and cross-provider fallbacks are separate attempts. `ImageAnalysisCompleteEvent` totals tokens, attempt latency, provider-reported cost, catalog-estimated cost, and unknown-cost attempts. Prompts, image content, credentials, raw provider payloads, and error messages are not included. Sensitive metadata keys and non-scalar values are dropped.
+
+`TokenUsage.cost` remains a number for compatibility. Read `costProvenance`: catalog-derived values are `catalog_estimate`, zero-placeholder or unavailable prices are `unknown`, and only an actual charge supplied by a provider is `provider_reported`. Cloudflare image telemetry reports cost as unknown because Workers AI does not expose a complete billable image-unit value; decoded image bytes remain available for COGS evidence.
+
 ### Auto-Discovery from Environment
 
 ```typescript
@@ -813,7 +844,9 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `LLMResponse` | Unified response: message, optional reasoning, usage (with cost), provider, tool calls, metadata (builtInToolResults) |
 | `BuiltInTool` / `BuiltInToolType` | Server-side tool request: `{ type }` where type is `web_search` \| `visit_website` \| `browser_automation` \| `code_interpreter` \| `wolfram_alpha` |
 | `BuiltInToolResult` | A surfaced built-in execution: `{ type, name?, arguments?, results: [{ title, url, content, score }] }` on `metadata.builtInToolResults` |
-| `TokenUsage` | Token counts, cost, and cached token fields (cachedInputTokens, cacheReadInputTokens, cacheCreationInputTokens, cacheWriteInputTokens) |
+| `TokenUsage` | Token counts, compatible `cost`, explicit `costProvenance` / `tokenProvenance`, and cached token fields |
+| `ImageAnalysisAttemptEvent` | Sanitized per-provider-attempt usage, image-byte, latency, retry/fallback, and error telemetry |
+| `ImageAnalysisCompleteEvent` | Terminal image-analysis aggregate with total attempts, tokens, latency, cost buckets, and final route |
 | `CacheHints` | Cache strategy, key, ttl, sessionId, cacheablePrefix for provider-agnostic prompt caching |
 | `ToolExecutor` | Interface for `generateResponseWithTools`: `execute(name, args) => Promise<unknown>` |
 | `ToolLoopOptions` | Loop config: maxIterations, maxCostUSD, onIteration, abortSignal |

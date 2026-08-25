@@ -3,7 +3,7 @@
  * Implementation for Cerebras fast inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities, ToolCall, TokenUsage } from '../types.js';
+import type { LLMRequest, LLMResponse, CerebrasConfig, ModelCapabilities, ToolCall, TokenUsage, ProviderExecutionOptions } from '../types.js';
 import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
@@ -172,7 +172,7 @@ export class CerebrasProvider extends BaseProvider {
     this.cfGatewayActive = resolved.cfGatewayActive;
   }
 
-  async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+  async generateResponse(request: LLMRequest, options?: ProviderExecutionOptions): Promise<LLMResponse> {
     this.validateRequest(request);
 
     const startTime = Date.now();
@@ -189,7 +189,7 @@ export class CerebrasProvider extends BaseProvider {
         const data = await httpResponse.json() as unknown;
         validateSchema('cerebras', data, CEREBRAS_RESPONSE_SCHEMA);
         return this.formatResponse(data as CerebrasResponse, Date.now() - startTime);
-      });
+      }, options);
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
       this.logRequest(request, response);
@@ -562,7 +562,9 @@ export class CerebrasProvider extends BaseProvider {
         data.usage.prompt_tokens,
         data.usage.completion_tokens,
         data.model
-      )
+      ),
+      costProvenance: 'catalog_estimate',
+      tokenProvenance: 'provider_reported',
     };
     const cachedTokens = data.usage.prompt_tokens_details?.cached_tokens;
     if (typeof cachedTokens === 'number') {

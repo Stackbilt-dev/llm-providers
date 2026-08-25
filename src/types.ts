@@ -239,11 +239,18 @@ export interface LLMResponse {
   metadata?: Record<string, unknown>;
 }
 
+export type CostProvenance = 'provider_reported' | 'catalog_estimate' | 'unknown';
+export type TokenProvenance = 'provider_reported' | 'estimated';
+
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
   cost: number; // Cost in USD
+  /** Whether `cost` is an actual provider charge, a catalog estimate, or unavailable. */
+  costProvenance?: CostProvenance;
+  /** Whether token counts came from the provider or were locally estimated. */
+  tokenProvenance?: TokenProvenance;
   /** Tokens served from provider-side prefix/prompt cache (Groq, Cerebras, OpenAI automatic). */
   cachedInputTokens?: number;
   /** Anthropic: tokens read from a cache_control breakpoint (cache hit). */
@@ -254,6 +261,20 @@ export interface TokenUsage {
   cacheWriteInputTokens?: number;
 }
 
+/** Provider execution detail exposed additively for orchestration observability. */
+export interface ProviderAttemptResult {
+  attempt: number;
+  outcome: 'success' | 'error';
+  durationMs: number;
+  willRetry: boolean;
+  response?: LLMResponse;
+  error?: Error;
+}
+
+export interface ProviderExecutionOptions {
+  onAttempt?(result: ProviderAttemptResult): void;
+}
+
 export interface LLMProvider {
   name: string;
   models: string[];
@@ -262,7 +283,7 @@ export interface LLMProvider {
   supportsBatching: boolean;
   supportsVision?: boolean;
 
-  generateResponse(request: LLMRequest): Promise<LLMResponse>;
+  generateResponse(request: LLMRequest, options?: ProviderExecutionOptions): Promise<LLMResponse>;
   streamResponse?(request: LLMRequest): Promise<ReadableStream<string>>;
   getProviderBalance?(): Promise<ProviderBalance>;
   validateConfig(): boolean;

@@ -16,7 +16,9 @@ import type {
   ProviderMetrics,
   QuotaCheckInput,
   QuotaCheckResult,
-  TokenUsage
+  TokenUsage,
+  CostProvenance,
+  TokenProvenance
 } from '../types.js';
 
 // ── Event types ──────────────────────────────────────────────────────────
@@ -135,6 +137,75 @@ export interface SchemaDriftEvent {
   timestamp: number;
 }
 
+export type ImageAnalysisMetadata = Record<string, string | number | boolean | null>;
+
+export interface SanitizedTelemetryError {
+  code: string;
+  category:
+    | 'authentication'
+    | 'rate_limit'
+    | 'quota'
+    | 'timeout'
+    | 'circuit_breaker'
+    | 'schema_drift'
+    | 'invalid_request'
+    | 'configuration'
+    | 'provider'
+    | 'unknown';
+}
+
+/** One physical provider call, including provider-internal retries. */
+export interface ImageAnalysisAttemptEvent {
+  operation: 'analyze_image';
+  requestId?: string;
+  metadata?: ImageAnalysisMetadata;
+  provider: string;
+  model: string;
+  /** Monotonic attempt number across the whole analyzeImage operation. */
+  attempt: number;
+  /** Attempt number within this provider's retry loop. */
+  providerAttempt: number;
+  outcome: 'success' | 'error';
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  tokenProvenance: TokenProvenance;
+  imageCount: number;
+  decodedImageBytes: number;
+  costUsd: number | null;
+  costProvenance: CostProvenance;
+  retry: boolean;
+  willRetry: boolean;
+  fallback: boolean;
+  fallbackFromProvider?: string;
+  error?: SanitizedTelemetryError;
+  timestamp: number;
+}
+
+/** Terminal aggregate for one analyzeImage operation. */
+export interface ImageAnalysisCompleteEvent {
+  operation: 'analyze_image';
+  requestId?: string;
+  metadata?: ImageAnalysisMetadata;
+  outcome: 'success' | 'error';
+  attempts: number;
+  totalLatencyMs: number;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  imageCount: number;
+  decodedImageBytes: number;
+  providerReportedCostUsd: number;
+  catalogEstimatedCostUsd: number;
+  unknownCostAttempts: number;
+  finalProvider?: string;
+  finalModel?: string;
+  error?: SanitizedTelemetryError;
+  timestamp: number;
+}
+
 // ── Hooks interface ──────────────────────────────────────────────────────
 
 export interface ObservabilityHooks {
@@ -151,6 +222,8 @@ export interface ObservabilityHooks {
   onQuotaDenied?(event: QuotaDeniedEvent): void;
   onProviderBalance?(event: ProviderBalanceEvent): void;
   onSchemaDrift?(event: SchemaDriftEvent): void;
+  onImageAnalysisAttempt?(event: ImageAnalysisAttemptEvent): void;
+  onImageAnalysisComplete?(event: ImageAnalysisCompleteEvent): void;
 }
 
 /** Silent hooks — default. */
@@ -166,6 +239,7 @@ export function composeHooks(...implementations: ObservabilityHooks[]): Observab
     'onRetry', 'onFallback', 'onCircuitStateChange',
     'onQuotaExhausted', 'onBudgetThreshold', 'onQuotaCheck',
     'onQuotaDenied', 'onProviderBalance', 'onSchemaDrift',
+    'onImageAnalysisAttempt', 'onImageAnalysisComplete',
   ] as const;
 
   const composed: ObservabilityHooks = {};

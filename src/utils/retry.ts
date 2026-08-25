@@ -8,6 +8,15 @@ import type { Logger } from './logger.js';
 import { noopLogger } from './logger.js';
 import { LLMErrorFactory, LLMProviderError } from '../errors.js';
 
+export interface RetryAttemptResult<T> {
+  attempt: number;
+  outcome: 'success' | 'error';
+  durationMs: number;
+  willRetry: boolean;
+  value?: T;
+  error?: Error;
+}
+
 export class RetryManager {
   private config: RetryConfig;
   private logger: Logger;
@@ -34,20 +43,39 @@ export class RetryManager {
    */
   async execute<T>(
     fn: () => Promise<T>,
-    context: string = 'operation'
+    context: string = 'operation',
+    onAttempt?: (result: RetryAttemptResult<T>) => void
   ): Promise<T> {
     let lastError: Error;
     let attempt = 0;
 
     while (attempt <= this.config.maxRetries) {
+      const attemptNumber = attempt + 1;
+      const startedAt = Date.now();
       try {
-        return await fn();
+        const value = await fn();
+        onAttempt?.({
+          attempt: attemptNumber,
+          outcome: 'success',
+          durationMs: Date.now() - startedAt,
+          willRetry: false,
+          value,
+        });
+        return value;
       } catch (error) {
         lastError = error as Error;
         attempt++;
 
         // Check if we should retry this error
-        if (!this.shouldRetry(error as Error, attempt)) {
+        const willRetry = this.shouldRetry(error as Error, attempt);
+        onAttempt?.({
+          attempt: attemptNumber,
+          outcome: 'error',
+          durationMs: Date.now() - startedAt,
+          willRetry,
+          error: lastError,
+        });
+        if (!willRetry) {
           throw error;
         }
 
