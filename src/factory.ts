@@ -29,12 +29,19 @@ import type {
   ToolLoopOptions,
   ToolLoopState,
   ResponseCacheAdapter,
-  CacheObservability
+  CacheObservability,
+  ProviderAttemptResult
 } from './types.js';
+import type { CostProvenance, TokenProvenance } from './types.js';
 
 import type { Logger } from './utils/logger.js';
 import { noopLogger } from './utils/logger.js';
-import type { ObservabilityHooks } from './utils/hooks.js';
+import type {
+  ObservabilityHooks,
+  ImageAnalysisAttemptEvent,
+  ImageAnalysisMetadata,
+  SanitizedTelemetryError,
+} from './utils/hooks.js';
 import { noopHooks } from './utils/hooks.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
@@ -125,6 +132,122 @@ interface ProviderSelectionPlan {
   chain: string[];
   providerModels: Map<string, string>;
   useCase: ModelRecommendationUseCase;
+}
+
+interface ImageAnalysisTotals {
+  attempts: number;
+  totalLatencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  providerReportedCostUsd: number;
+  catalogEstimatedCostUsd: number;
+  unknownCostAttempts: number;
+  finalProvider?: string;
+  finalModel?: string;
+}
+
+interface ImageAnalysisContext {
+  requestId?: string;
+  metadata?: ImageAnalysisMetadata;
+  imageCount: number;
+  decodedImageBytes: number;
+  startedAt: number;
+  totals: ImageAnalysisTotals;
+}
+
+const SENSITIVE_METADATA_KEY = /(?:prompt|image|base64|bytes|secret|credential|password|authorization|api[_-]?key|access[_-]?token|refresh[_-]?token)/i;
+
+function sanitizeImageMetadata(metadata?: Record<string, unknown>): ImageAnalysisMetadata | undefined {
+  if (!metadata) return undefined;
+  const sanitized: ImageAnalysisMetadata = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (SENSITIVE_METADATA_KEY.test(key)) continue;
+    if (value === null || typeof value === 'number' || typeof value === 'boolean') {
+      sanitized[key] = value;
+    } else if (typeof value === 'string') {
+      sanitized[key] = value.slice(0, 256);
+    }
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+function decodedBase64Bytes(data?: string): number {
+  if (!data) return 0;
+  const encoded = (data.includes(',') ? data.slice(data.indexOf(',') + 1) : data).replace(/\s/g, '');
+  if (!encoded || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return 0;
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor(encoded.length * 3 / 4) - padding);
+}
+
+function sanitizedError(error: Error): SanitizedTelemetryError {
+  const rawCode = (error as Error & { code?: unknown }).code;
+  const code = typeof rawCode === 'string'
+    ? rawCode.replace(/[^A-Z0-9_-]/gi, '_').slice(0, 64).toUpperCase()
+    : 'UNKNOWN_ERROR';
+  let category: SanitizedTelemetryError['category'] = 'unknown';
+  if (error instanceof AuthenticationError) category = 'authentication';
+  else if (error instanceof RateLimitError) category = 'rate_limit';
+  else if (error instanceof QuotaExceededError) category = 'quota';
+  else if (code === 'TIMEOUT') category = 'timeout';
+  else if (error instanceof CircuitBreakerOpenError) category = 'circuit_breaker';
+  else if (error instanceof SchemaDriftError) category = 'schema_drift';
+  else if (code === 'INVALID_REQUEST' || code === 'MODEL_NOT_FOUND' || code === 'TOKEN_LIMIT') category = 'invalid_request';
+  else if (error instanceof ConfigurationError) category = 'configuration';
+  else if (error instanceof LLMProviderError) category = 'provider';
+  return { code, category };
+}
+
+function inferredCostProvenance(cost: number, explicit?: CostProvenance): CostProvenance {
+  if (explicit) return explicit;
+  return Number.isFinite(cost) && cost > 0 ? 'catalog_estimate' : 'unknown';
+}
+
+function imageCostProvenance(
+  provider: string,
+  cost: number,
+  explicit?: CostProvenance
+): CostProvenance {
+  const provenance = inferredCostProvenance(cost, explicit);
+  // Workers AI does not expose a billable image-unit value. A text-token
+  // catalog estimate is not a complete image-analysis charge.
+  if (provider === 'cloudflare' && provenance !== 'provider_reported') return 'unknown';
+  return provenance;
+}
+
+function recordImageAttempt(
+  context: ImageAnalysisContext,
+  hooks: ObservabilityHooks,
+  event: Omit<ImageAnalysisAttemptEvent, 'operation' | 'requestId' | 'metadata' | 'attempt' | 'imageCount' | 'decodedImageBytes' | 'timestamp'>
+): void {
+  const attempt = ++context.totals.attempts;
+  context.totals.totalLatencyMs += event.latencyMs;
+  context.totals.inputTokens += event.inputTokens;
+  context.totals.outputTokens += event.outputTokens;
+  context.totals.totalTokens += event.totalTokens;
+  if (event.costProvenance === 'provider_reported' && event.costUsd !== null) {
+    context.totals.providerReportedCostUsd += event.costUsd;
+  } else if (event.costProvenance === 'catalog_estimate' && event.costUsd !== null) {
+    context.totals.catalogEstimatedCostUsd += event.costUsd;
+  } else {
+    context.totals.unknownCostAttempts++;
+  }
+  context.totals.finalProvider = event.provider;
+  context.totals.finalModel = event.model;
+  try {
+    hooks.onImageAnalysisAttempt?.({
+      operation: 'analyze_image',
+      requestId: context.requestId,
+      metadata: context.metadata,
+      attempt,
+      imageCount: context.imageCount,
+      decodedImageBytes: context.decodedImageBytes,
+      timestamp: Date.now(),
+      ...event,
+    });
+  } catch {
+    // Telemetry must never affect inference.
+  }
 }
 
 function deriveResponseCacheKey(request: LLMRequest): string {
@@ -282,6 +405,13 @@ export class LLMProviderFactory {
    * Generate response with intelligent provider selection and fallback
    */
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+    return this.generateResponseInternal(request);
+  }
+
+  private async generateResponseInternal(
+    request: LLMRequest,
+    imageContext?: ImageAnalysisContext
+  ): Promise<LLMResponse> {
     const responseCacheKey = this.config.responseCache ? deriveResponseCacheKey(request) : undefined;
 
     if (this.config.responseCache) {
@@ -332,6 +462,8 @@ export class LLMProviderFactory {
 
     for (let index = 0; index < providerChain.length; index++) {
       const providerName = providerChain[index];
+      const attemptsBeforeProvider = imageContext?.totals.attempts ?? 0;
+      let providerStartedAt: number | undefined;
 
       try {
         const provider = this.providers.get(providerName);
@@ -357,7 +489,7 @@ export class LLMProviderFactory {
         }
 
         // Emit fallback event if this isn't the first provider attempted
-        if (previousProvider && lastError) {
+        if (!imageContext && previousProvider && lastError) {
           this.hooks.onFallback?.({
             fromProvider: previousProvider,
             toProvider: providerName,
@@ -374,16 +506,88 @@ export class LLMProviderFactory {
         const model = providerRequest.model || provider.models[0] || 'unknown';
         await this.checkQuota(providerName, provider, providerRequest, model);
 
-        this.hooks.onRequestStart?.({
-          provider: providerName,
-          model,
-          requestId: request.requestId,
-          tenantId: request.tenantId,
-          timestamp: Date.now(),
-        });
+        if (!imageContext) {
+          this.hooks.onRequestStart?.({
+            provider: providerName,
+            model,
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            timestamp: Date.now(),
+          });
+        }
 
         const startTime = Date.now();
-        let response = await provider.generateResponse(providerRequest);
+        providerStartedAt = startTime;
+        const executionOptions = imageContext ? {
+          onAttempt: (result: ProviderAttemptResult) => {
+            const usage = result.response?.usage;
+            const inputTokens = usage?.inputTokens ?? Math.max(1, Math.ceil(
+              providerRequest.messages.reduce((sum, message) => sum + message.content.length, 0) / 4
+            ));
+            const outputTokens = usage?.outputTokens ?? 0;
+            const totalTokens = usage?.totalTokens ?? inputTokens + outputTokens;
+            const tokenProvenance: TokenProvenance = usage?.tokenProvenance
+              ?? (usage ? 'provider_reported' : 'estimated');
+            const rawCost = usage?.cost ?? 0;
+            const costProvenance = usage
+              ? imageCostProvenance(providerName, rawCost, usage.costProvenance)
+              : 'unknown';
+            recordImageAttempt(imageContext, this.hooks, {
+              provider: providerName,
+              model: result.response?.model ?? model,
+              providerAttempt: result.attempt,
+              outcome: result.outcome,
+              latencyMs: result.durationMs,
+              inputTokens,
+              outputTokens,
+              totalTokens,
+              tokenProvenance,
+              costUsd: costProvenance === 'unknown' ? null : rawCost,
+              costProvenance,
+              retry: result.attempt > 1,
+              willRetry: result.willRetry,
+              fallback: index > 0,
+              fallbackFromProvider: index > 0 ? previousProvider ?? undefined : undefined,
+              error: result.error ? sanitizedError(result.error) : undefined,
+            });
+          },
+        } : undefined;
+        let response = executionOptions
+          ? await provider.generateResponse(providerRequest, executionOptions)
+          : await provider.generateResponse(providerRequest);
+        const responseCostProvenance = inferredCostProvenance(
+          response.usage.cost,
+          response.usage.costProvenance
+        );
+        response = {
+          ...response,
+          usage: {
+            ...response.usage,
+            costProvenance: responseCostProvenance,
+            tokenProvenance: response.usage.tokenProvenance ?? 'provider_reported',
+          },
+        };
+        if (imageContext && providerStartedAt !== undefined && imageContext.totals.attempts === attemptsBeforeProvider) {
+          const usage = response.usage;
+          const costProvenance = imageCostProvenance(providerName, usage.cost, usage.costProvenance);
+          recordImageAttempt(imageContext, this.hooks, {
+            provider: providerName,
+            model: response.model,
+            providerAttempt: 1,
+            outcome: 'success',
+            latencyMs: Date.now() - startTime,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+            tokenProvenance: usage.tokenProvenance ?? 'provider_reported',
+            costUsd: costProvenance === 'unknown' ? null : usage.cost,
+            costProvenance,
+            retry: false,
+            willRetry: false,
+            fallback: index > 0,
+            fallbackFromProvider: index > 0 ? previousProvider ?? undefined : undefined,
+          });
+        }
         const durationMs = Date.now() - startTime;
         const providerCache = cacheObservabilityForResponse(providerRequest, response);
         const factoryCache: CacheObservability | undefined = this.config.responseCache
@@ -398,17 +602,19 @@ export class LLMProviderFactory {
         const cache = mergeCacheObservability(response.cache, providerCache, factoryCache);
         response = responseCacheMetadata(response, cache);
 
-        this.hooks.onRequestEnd?.({
-          provider: providerName,
-          model: response.model,
-          requestId: request.requestId,
-          tenantId: request.tenantId,
-          durationMs,
-          usage: response.usage,
-          finishReason: response.finishReason,
-          cache: response.cache,
-          timestamp: Date.now(),
-        });
+        if (!imageContext) {
+          this.hooks.onRequestEnd?.({
+            provider: providerName,
+            model: response.model,
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            durationMs,
+            usage: response.usage,
+            finishReason: response.finishReason,
+            cache: response.cache,
+            timestamp: Date.now(),
+          });
+        }
 
         if (response.cache?.providerPrefix) {
           this.hooks.onCache?.({
@@ -481,21 +687,52 @@ export class LLMProviderFactory {
 
       } catch (error) {
         const err = error as Error;
+        if (imageContext && providerStartedAt !== undefined && imageContext.totals.attempts === attemptsBeforeProvider) {
+          const latencyMs = Date.now() - providerStartedAt;
+          const provider = this.providers.get(providerName);
+          const providerRequest = provider
+            ? this.requestForProvider(request, providerName, providerModels)
+            : request;
+          const model = providerRequest.model || provider?.models[0] || 'unknown';
+          const inputTokens = Math.max(1, Math.ceil(
+            providerRequest.messages.reduce((sum, message) => sum + message.content.length, 0) / 4
+          ));
+          recordImageAttempt(imageContext, this.hooks, {
+            provider: providerName,
+            model,
+            providerAttempt: 1,
+            outcome: 'error',
+            latencyMs,
+            inputTokens,
+            outputTokens: 0,
+            totalTokens: inputTokens,
+            tokenProvenance: 'estimated',
+            costUsd: null,
+            costProvenance: 'unknown',
+            retry: false,
+            willRetry: false,
+            fallback: index > 0,
+            fallbackFromProvider: index > 0 ? previousProvider ?? undefined : undefined,
+            error: sanitizedError(err),
+          });
+        }
         lastError = err;
         previousProvider = providerName;
         this.logger.warn(`[LLMProviderFactory] Provider ${providerName} failed:`, err.message);
 
-        this.hooks.onRequestError?.({
-          provider: providerName,
-          model: request.model || 'unknown',
-          requestId: request.requestId,
-          tenantId: request.tenantId,
-          error: err,
-          errorCode: (err as { code?: string }).code,
-          attempt: 1,
-          willRetry: this.shouldFallback(err),
-          timestamp: Date.now(),
-        });
+        if (!imageContext) {
+          this.hooks.onRequestError?.({
+            provider: providerName,
+            model: request.model || 'unknown',
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            error: err,
+            errorCode: (err as { code?: string }).code,
+            attempt: 1,
+            willRetry: this.shouldFallback(err),
+            timestamp: Date.now(),
+          });
+        }
 
         // Auto-mark quota-exhausted providers
         if (err instanceof QuotaExceededError) {
@@ -509,7 +746,7 @@ export class LLMProviderFactory {
 
         // Schema drift — the upstream API silently changed shape. Surface
         // structured telemetry so oncall sees the drift before it cascades.
-        if (err instanceof SchemaDriftError) {
+        if (!imageContext && err instanceof SchemaDriftError) {
           this.hooks.onSchemaDrift?.({
             provider: providerName,
             model: request.model,
@@ -796,18 +1033,71 @@ export class LLMProviderFactory {
   }
 
   async analyzeImage(input: AnalyzeImageInput): Promise<LLMResponse> {
-    return this.generateResponse({
-      messages: [{ role: 'user', content: input.prompt }],
-      images: [input.image],
-      model: input.model ?? this.getDefaultVisionModel(),
-      systemPrompt: input.systemPrompt,
-      temperature: input.temperature,
-      maxTokens: input.maxTokens,
-      response_format: input.response_format,
-      tenantId: input.tenantId,
+    const context: ImageAnalysisContext = {
       requestId: input.requestId,
-      metadata: input.metadata
-    });
+      metadata: sanitizeImageMetadata(input.metadata),
+      imageCount: 1,
+      decodedImageBytes: decodedBase64Bytes(input.image.data),
+      startedAt: Date.now(),
+      totals: {
+        attempts: 0,
+        totalLatencyMs: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        providerReportedCostUsd: 0,
+        catalogEstimatedCostUsd: 0,
+        unknownCostAttempts: 0,
+      },
+    };
+    let response: LLMResponse | undefined;
+    let terminalError: Error | undefined;
+    try {
+      response = await this.generateResponseInternal({
+        messages: [{ role: 'user', content: input.prompt }],
+        images: [input.image],
+        model: input.model ?? this.getDefaultVisionModel(),
+        systemPrompt: input.systemPrompt,
+        temperature: input.temperature,
+        maxTokens: input.maxTokens,
+        response_format: input.response_format,
+        tenantId: input.tenantId,
+        requestId: input.requestId,
+        metadata: input.metadata
+      }, context);
+      context.totals.finalProvider ??= response.provider;
+      context.totals.finalModel ??= response.model;
+      return response;
+    } catch (error) {
+      terminalError = error as Error;
+      throw error;
+    } finally {
+      try {
+        this.hooks.onImageAnalysisComplete?.({
+          operation: 'analyze_image',
+          requestId: context.requestId,
+          metadata: context.metadata,
+          outcome: terminalError ? 'error' : 'success',
+          attempts: context.totals.attempts,
+          totalLatencyMs: context.totals.totalLatencyMs,
+          durationMs: Date.now() - context.startedAt,
+          inputTokens: context.totals.inputTokens,
+          outputTokens: context.totals.outputTokens,
+          totalTokens: context.totals.totalTokens,
+          imageCount: context.imageCount,
+          decodedImageBytes: context.decodedImageBytes,
+          providerReportedCostUsd: context.totals.providerReportedCostUsd,
+          catalogEstimatedCostUsd: context.totals.catalogEstimatedCostUsd,
+          unknownCostAttempts: context.totals.unknownCostAttempts,
+          finalProvider: context.totals.finalProvider,
+          finalModel: context.totals.finalModel,
+          error: terminalError ? sanitizedError(terminalError) : undefined,
+          timestamp: Date.now(),
+        });
+      } catch {
+        // Telemetry must never affect inference.
+      }
+    }
   }
 
   async getProviderBalance(provider?: string): Promise<ProviderBalance | Record<string, ProviderBalance>> {

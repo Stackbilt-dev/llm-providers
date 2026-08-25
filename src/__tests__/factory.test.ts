@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LLMProviderFactory, createCostOptimizedFactory } from '../factory';
-import { AuthenticationError } from '../errors';
+import { AuthenticationError, ServerError } from '../errors';
 import type { LLMRequest, LLMResponse } from '../types';
 import { OpenAIProvider } from '../providers/openai';
 import { CreditLedger } from '../utils/credit-ledger';
@@ -195,6 +195,7 @@ describe('LLMProviderFactory', () => {
       status: 'unavailable',
       source: 'not_supported'
     });
+    mockCloudflareProvider.supportsVision = false;
 
     factory = new LLMProviderFactory({
       openai: { apiKey: 'test-openai-key' },
@@ -730,9 +731,222 @@ describe('LLMProviderFactory', () => {
           images: [{ data: 'abc123', mimeType: 'image/jpeg' }],
           // claude-sonnet-4-6 (quality:6) wins vision routing over haiku (quality:4) after score recalibration
           model: 'claude-sonnet-4-6-20250618'
-        })
+        }),
+        expect.objectContaining({ onAttempt: expect.any(Function) })
       );
       expect(mockCloudflareProvider.generateResponse).not.toHaveBeenCalled();
+    });
+
+    it('emits sanitized attempt and aggregate observability for image analysis', async () => {
+      const onImageAnalysisAttempt = vi.fn();
+      const onImageAnalysisComplete = vi.fn();
+      mockOpenAIProvider.generateResponse.mockImplementationOnce(async (_request, options) => {
+        const response = {
+          message: 'Cookbook page',
+          usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20, cost: 0.003 },
+          model: 'gpt-4o',
+          provider: 'openai',
+          responseTime: 4
+        } as LLMResponse;
+        options?.onAttempt?.({
+          attempt: 1,
+          outcome: 'success',
+          durationMs: 4,
+          willRetry: false,
+          response,
+        });
+        return response;
+      });
+      const visionFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'openai',
+        costOptimization: false,
+        hooks: { onImageAnalysisAttempt, onImageAnalysisComplete },
+      });
+
+      const response = await visionFactory.analyzeImage({
+        image: { data: 'AQIDBA==', mimeType: 'image/jpeg' },
+        prompt: 'private cookbook prompt',
+        model: 'gpt-4o',
+        requestId: 'capture-1',
+        metadata: { captureId: 'cap-1', pageNumber: 7, secret: 'drop-me', imageData: 'drop-me-too' },
+      });
+
+      expect(response.usage).toMatchObject({
+        cost: 0.003,
+        costProvenance: 'catalog_estimate',
+        tokenProvenance: 'provider_reported',
+      });
+      expect(onImageAnalysisAttempt).toHaveBeenCalledWith(expect.objectContaining({
+        operation: 'analyze_image',
+        requestId: 'capture-1',
+        metadata: { captureId: 'cap-1', pageNumber: 7 },
+        provider: 'openai',
+        model: 'gpt-4o',
+        attempt: 1,
+        providerAttempt: 1,
+        outcome: 'success',
+        inputTokens: 12,
+        outputTokens: 8,
+        totalTokens: 20,
+        tokenProvenance: 'provider_reported',
+        imageCount: 1,
+        decodedImageBytes: 4,
+        costUsd: 0.003,
+        costProvenance: 'catalog_estimate',
+      }));
+      expect(onImageAnalysisComplete).toHaveBeenCalledWith(expect.objectContaining({
+        outcome: 'success',
+        attempts: 1,
+        totalLatencyMs: 4,
+        catalogEstimatedCostUsd: 0.003,
+        unknownCostAttempts: 0,
+        finalProvider: 'openai',
+        finalModel: 'gpt-4o',
+      }));
+      expect(JSON.stringify(onImageAnalysisAttempt.mock.calls)).not.toContain('private cookbook prompt');
+      expect(JSON.stringify(onImageAnalysisAttempt.mock.calls)).not.toContain('drop-me');
+    });
+
+    it('accounts for every retry and fallback in image aggregates', async () => {
+      const attempts: unknown[] = [];
+      const completed: unknown[] = [];
+      const firstError = new ServerError('openai', 'raw payload must stay private');
+      mockOpenAIProvider.generateResponse.mockImplementationOnce(async (_request, options) => {
+        options?.onAttempt?.({ attempt: 1, outcome: 'error', durationMs: 3, willRetry: true, error: firstError });
+        options?.onAttempt?.({ attempt: 2, outcome: 'error', durationMs: 5, willRetry: false, error: firstError });
+        throw firstError;
+      });
+      mockAnthropicProvider.generateResponse.mockImplementationOnce(async (_request, options) => {
+        const response = {
+          message: 'fallback answer',
+          usage: { inputTokens: 10, outputTokens: 6, totalTokens: 16, cost: 0.002 },
+          model: 'claude-sonnet-4-6-20250618',
+          provider: 'anthropic',
+          responseTime: 7,
+        } as LLMResponse;
+        options?.onAttempt?.({ attempt: 1, outcome: 'success', durationMs: 7, willRetry: false, response });
+        return response;
+      });
+      const visionFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        anthropic: { apiKey: 'test-anthropic-key' },
+        defaultProvider: 'openai',
+        fallbackRules: [{ condition: 'error', fallbackProvider: 'anthropic' }],
+        costOptimization: false,
+        hooks: {
+          onImageAnalysisAttempt: event => attempts.push(event),
+          onImageAnalysisComplete: event => completed.push(event),
+        },
+      });
+
+      await visionFactory.analyzeImage({
+        image: { data: 'AQID', mimeType: 'image/jpeg' },
+        prompt: 'do not emit this prompt',
+        model: 'gpt-4o',
+      });
+
+      expect(attempts).toHaveLength(3);
+      expect(attempts).toEqual([
+        expect.objectContaining({ attempt: 1, provider: 'openai', providerAttempt: 1, retry: false, willRetry: true, fallback: false }),
+        expect.objectContaining({ attempt: 2, provider: 'openai', providerAttempt: 2, retry: true, willRetry: false, fallback: false }),
+        expect.objectContaining({ attempt: 3, provider: 'anthropic', providerAttempt: 1, fallback: true, fallbackFromProvider: 'openai' }),
+      ]);
+      expect(completed).toEqual([expect.objectContaining({
+        outcome: 'success',
+        attempts: 3,
+        totalLatencyMs: 15,
+        catalogEstimatedCostUsd: 0.002,
+        unknownCostAttempts: 2,
+        finalProvider: 'anthropic',
+      })]);
+      expect(JSON.stringify({ attempts, completed })).not.toContain('raw payload must stay private');
+      expect(JSON.stringify({ attempts, completed })).not.toContain('do not emit this prompt');
+    });
+
+    it('keeps Cloudflare image cost explicitly unknown while recording decoded bytes', async () => {
+      const onImageAnalysisAttempt = vi.fn();
+      mockCloudflareProvider.supportsVision = true;
+      mockCloudflareProvider.generateResponse.mockImplementationOnce(async (_request, options) => {
+        const response = {
+          message: 'page',
+          usage: {
+            inputTokens: 9,
+            outputTokens: 3,
+            totalTokens: 12,
+            cost: 0.0001,
+            costProvenance: 'catalog_estimate',
+            tokenProvenance: 'estimated',
+          },
+          model: '@cf/meta/llama-3.2-11b-vision-instruct',
+          provider: 'cloudflare',
+          responseTime: 2,
+        } as LLMResponse;
+        options?.onAttempt?.({ attempt: 1, outcome: 'success', durationMs: 2, willRetry: false, response });
+        return response;
+      });
+      const visionFactory = new LLMProviderFactory({
+        cloudflare: { ai: {} as Ai },
+        defaultProvider: 'cloudflare',
+        costOptimization: false,
+        hooks: { onImageAnalysisAttempt },
+      });
+
+      try {
+        await visionFactory.analyzeImage({
+          image: { data: 'AQIDBAU=', mimeType: 'image/jpeg' },
+          prompt: 'extract',
+          model: '@cf/meta/llama-3.2-11b-vision-instruct',
+        });
+      } finally {
+        mockCloudflareProvider.supportsVision = false;
+      }
+
+      expect(onImageAnalysisAttempt).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'cloudflare',
+        decodedImageBytes: 5,
+        tokenProvenance: 'estimated',
+        costUsd: null,
+        costProvenance: 'unknown',
+      }));
+    });
+
+    it('emits only a sanitized terminal error for failed image analysis', async () => {
+      const events: unknown[] = [];
+      const authError = new AuthenticationError('openai', 'Bearer secret-value from raw response');
+      mockOpenAIProvider.generateResponse.mockImplementationOnce(async (_request, options) => {
+        options?.onAttempt?.({ attempt: 1, outcome: 'error', durationMs: 2, willRetry: false, error: authError });
+        throw authError;
+      });
+      const visionFactory = new LLMProviderFactory({
+        openai: { apiKey: 'test-openai-key' },
+        defaultProvider: 'openai',
+        costOptimization: false,
+        hooks: {
+          onImageAnalysisAttempt: event => events.push(event),
+          onImageAnalysisComplete: event => events.push(event),
+        },
+      });
+
+      await expect(visionFactory.analyzeImage({
+        image: { data: 'c2VjcmV0LWltYWdl', mimeType: 'image/jpeg' },
+        prompt: 'secret prompt',
+        model: 'gpt-4o',
+      })).rejects.toBe(authError);
+
+      expect(events).toHaveLength(2);
+      expect(events[0]).toEqual(expect.objectContaining({
+        outcome: 'error',
+        error: { code: 'AUTHENTICATION_ERROR', category: 'authentication' },
+      }));
+      expect(events[1]).toEqual(expect.objectContaining({
+        outcome: 'error',
+        error: { code: 'AUTHENTICATION_ERROR', category: 'authentication' },
+      }));
+      const serialized = JSON.stringify(events);
+      expect(serialized).not.toContain('secret prompt');
+      expect(serialized).not.toContain('secret-value');
+      expect(serialized).not.toContain('c2VjcmV0LWltYWdl');
     });
 
     it('skips vision-incapable providers in the fallback chain', async () => {

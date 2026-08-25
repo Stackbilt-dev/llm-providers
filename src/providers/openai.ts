@@ -3,7 +3,7 @@
  * Implementation for OpenAI GPT models with streaming and tools support
  */
 
-import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool, TokenUsage } from '../types.js';
+import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool, TokenUsage, ProviderExecutionOptions } from '../types.js';
 import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
@@ -174,7 +174,7 @@ export class OpenAIProvider extends BaseProvider {
     this.project = config.project;
   }
 
-  async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+  async generateResponse(request: LLMRequest, options?: ProviderExecutionOptions): Promise<LLMResponse> {
     this.validateRequest(request);
 
     const startTime = Date.now();
@@ -191,7 +191,7 @@ export class OpenAIProvider extends BaseProvider {
         const data = await httpResponse.json() as unknown;
         validateSchema('openai', data, OPENAI_RESPONSE_SCHEMA);
         return this.formatResponse(data as OpenAIResponse, Date.now() - startTime);
-      });
+      }, options);
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
       this.logRequest(request, response);
@@ -436,7 +436,9 @@ export class OpenAIProvider extends BaseProvider {
         data.usage.prompt_tokens,
         data.usage.completion_tokens,
         data.model
-      )
+      ),
+      costProvenance: 'catalog_estimate',
+      tokenProvenance: 'provider_reported',
     };
     const cachedTokens = data.usage.prompt_tokens_details?.cached_tokens;
     if (typeof cachedTokens === 'number') {
@@ -604,7 +606,7 @@ export class OpenAIProvider extends BaseProvider {
         // Handle individual request failures
         responses.push({
           message: '',
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 },
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0, costProvenance: 'unknown', tokenProvenance: 'estimated' },
           model: request.model || this.getDefaultModel(request),
           provider: this.name,
           responseTime: 0,

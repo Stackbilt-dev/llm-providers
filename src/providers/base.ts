@@ -11,6 +11,7 @@ import type {
   ProviderConfig,
   ModelCapabilities,
   ProviderMetrics,
+  ProviderExecutionOptions,
   ToolCall,
   TokenUsage
 } from '../types.js';
@@ -189,10 +190,24 @@ export abstract class BaseProvider implements LLMProvider {
    * Execute request with circuit breaker and retry logic
    */
   protected async executeWithResiliency<T>(
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
+    options?: ProviderExecutionOptions
   ): Promise<T> {
     return this.getCircuitBreaker().execute(
-      () => this.retryManager.execute(operation)
+      () => this.retryManager.execute(operation, 'provider request', result => {
+        try {
+          options?.onAttempt?.({
+            attempt: result.attempt,
+            outcome: result.outcome,
+            durationMs: result.durationMs,
+            willRetry: result.willRetry,
+            response: result.value as LLMResponse | undefined,
+            error: result.error,
+          });
+        } catch {
+          // Observability callbacks must not affect provider execution.
+        }
+      })
     );
   }
 
@@ -521,6 +536,8 @@ export abstract class BaseProvider implements LLMProvider {
       outputTokens,
       totalTokens,
       cost: this.calculateCost(inputTokens, outputTokens, model),
+      costProvenance: this.calculateCost(inputTokens, outputTokens, model) > 0 ? 'catalog_estimate' : 'unknown',
+      tokenProvenance: 'provider_reported',
     };
 
     const details = usage['prompt_tokens_details'];
@@ -553,7 +570,9 @@ export abstract class BaseProvider implements LLMProvider {
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         totalTokens: usage.inputTokens + usage.outputTokens,
-        cost
+        cost,
+        costProvenance: cost > 0 ? 'catalog_estimate' : 'unknown',
+        tokenProvenance: 'provider_reported',
       },
       model,
       provider: this.name,

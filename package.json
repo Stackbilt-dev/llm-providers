@@ -1,6 +1,6 @@
 {
   "name": "@stackbilt/llm-providers",
-  "version": "1.19.0",
+  "version": "1.20.0",
   "description": "Multi-LLM failover with circuit breakers, cost tracking, and intelligent retry. Cloudflare Workers native.",
   "author": "Stackbilt <admin@stackbilt.dev>",
   "license": "Apache-2.0",
@@ -40,6 +40,7 @@
     "typecheck": "npm run sync:version && tsc --noEmit",
     "test": "npm run sync:version && vitest run",
     "test:package": "bash ./scripts/package-smoke.sh",
+    "test:worker-import": "npm run build && node ./scripts/worker-import-smoke.mjs",
     "test:watch": "npm run sync:version && vitest watch",
     "test:coverage": "npm run sync:version && vitest run --coverage",
     "prepare": "npm run build",
@@ -48,6 +49,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",
     "@vitest/coverage-v8": "^1.6.1",
+    "esbuild": "^0.21.5",
     "typescript": "^5.0.0",
     "vitest": "^1.6.1"
   },
@@ -58,7 +60,5 @@
     "access": "public",
     "provenance": false
   },
-  "dependencies": {
-    "@stackbilt/wasm-core": "^0.1.0"
-  }
+  "dependencies": {}
 }

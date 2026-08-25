@@ -12,6 +12,7 @@ import type {
   CacheObservability,
   ModelCapabilities,
   TokenUsage,
+  ProviderExecutionOptions,
   ToolCall
 } from '../types.js';
 import { BaseProvider } from './base.js';
@@ -218,7 +219,7 @@ export class CloudflareProvider extends BaseProvider {
     this.gateway = config.gateway;
   }
 
-  async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+  async generateResponse(request: LLMRequest, options?: ProviderExecutionOptions): Promise<LLMResponse> {
     this.validateRequest(request);
 
     const startTime = Date.now();
@@ -242,7 +243,7 @@ export class CloudflareProvider extends BaseProvider {
         const result = await this.runModel(model, cloudflareRequest, request);
 
         return this.formatResponse(result as WorkersAIResult, model, request, Date.now() - startTime);
-      });
+      }, options);
 
       this.updateMetrics(response.responseTime, true, response.usage?.cost || 0);
       this.logRequest(request, response);
@@ -1185,7 +1186,9 @@ export class CloudflareProvider extends BaseProvider {
         inputTokens: normalizedInputTokens,
         outputTokens: normalizedOutputTokens,
         totalTokens: normalizedTotalTokens,
-        cost: this.calculateCost(normalizedInputTokens, normalizedOutputTokens, model)
+        cost: this.calculateCost(normalizedInputTokens, normalizedOutputTokens, model),
+        costProvenance: 'catalog_estimate',
+        tokenProvenance: 'provider_reported',
       };
 
       const cachedInputTokens = this.extractCachedInputTokens(usage);
@@ -1205,7 +1208,9 @@ export class CloudflareProvider extends BaseProvider {
       inputTokens: estimatedInputTokens,
       outputTokens: estimatedOutputTokens,
       totalTokens: estimatedInputTokens + estimatedOutputTokens,
-      cost: this.calculateCost(estimatedInputTokens, estimatedOutputTokens, model)
+      cost: this.calculateCost(estimatedInputTokens, estimatedOutputTokens, model),
+      costProvenance: 'catalog_estimate',
+      tokenProvenance: 'estimated',
     };
   }
 

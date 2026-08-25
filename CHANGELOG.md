@@ -5,8 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
-### Performance
-- **`LatencyHistogram` backed by WASM (#96)** — `LatencyHistogram` is now a thin adapter over `@stackbilt/wasm-core` (Phase 0). The Rust implementation uses a sorted `Vec` with binary search insertion (O(log N) insert, O(1) percentile read) and a circular eviction index (O(1)) in place of `Array.shift()`. No public API change; existing tests pass unchanged. Requires `--experimental-wasm-modules` in Node.js test environments (added to `vitest.config.ts`).
+## [1.20.0] — 2026-08-25
+
+### Added
+- **Image-analysis COGS observability** — `ObservabilityHooks.onImageAnalysisAttempt` emits one sanitized event for every physical provider attempt, including retries and fallbacks. `onImageAnalysisComplete` emits the terminal aggregate. Events include resolved provider/model, token and cost provenance, decoded image bytes, latency, retry/fallback state, and sanitized error classification.
+- **Usage provenance** — `TokenUsage.costProvenance` distinguishes provider-reported charges, catalog estimates, and unknown cost; `tokenProvenance` distinguishes provider counts from local estimates.
+
+### Changed
+- **Worker-safe root import** — `LatencyHistogram` is now a dependency-free TypeScript implementation. Importing `@stackbilt/llm-providers` no longer eagerly resolves `@stackbilt/wasm-core` or a WASM binary.
 
 ## [1.19.0] — 2026-06-23
 

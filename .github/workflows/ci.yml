@@ -24,4 +24,5 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:package
+      - run: npm run test:worker-import
       - run: npm audit --omit=dev

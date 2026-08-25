@@ -3,7 +3,7 @@
  * Implementation for NVIDIA NIM inference models (OpenAI-compatible API)
  */
 
-import type { LLMRequest, LLMResponse, NvidiaConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage } from '../types.js';
+import type { LLMRequest, LLMResponse, NvidiaConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage, ProviderExecutionOptions } from '../types.js';
 import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
@@ -166,7 +166,7 @@ export class NvidiaProvider extends BaseProvider {
     this.cfGatewayActive = resolved.cfGatewayActive;
   }
 
-  async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+  async generateResponse(request: LLMRequest, options?: ProviderExecutionOptions): Promise<LLMResponse> {
     this.validateRequest(request);
 
     const startTime = Date.now();
@@ -183,7 +183,7 @@ export class NvidiaProvider extends BaseProvider {
         const data = await httpResponse.json() as unknown;
         validateSchema('nvidia', data, NVIDIA_RESPONSE_SCHEMA);
         return this.formatResponse(data as NvidiaResponse, Date.now() - startTime);
-      });
+      }, options);
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
       this.logRequest(request, response);
@@ -567,7 +567,9 @@ export class NvidiaProvider extends BaseProvider {
         data.usage.prompt_tokens,
         data.usage.completion_tokens,
         data.model
-      )
+      ),
+      costProvenance: 'unknown',
+      tokenProvenance: 'provider_reported',
     };
     // NVIDIA NIM returns prompt_tokens_details as null; handle null gracefully.
     const cachedTokens = data.usage.prompt_tokens_details?.cached_tokens;

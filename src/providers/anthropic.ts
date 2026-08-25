@@ -11,7 +11,8 @@ import type {
   ProviderBalance,
   Tool,
   ToolCall,
-  TokenUsage
+  TokenUsage,
+  ProviderExecutionOptions
 } from '../types.js';
 import { BaseProvider, resolveCfGateway } from './base.js';
 import {
@@ -185,7 +186,7 @@ export class AnthropicProvider extends BaseProvider {
     this.version = config.version || '2023-06-01';
   }
 
-  async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+  async generateResponse(request: LLMRequest, options?: ProviderExecutionOptions): Promise<LLMResponse> {
     this.validateRequest(request);
 
     const startTime = Date.now();
@@ -213,7 +214,7 @@ export class AnthropicProvider extends BaseProvider {
         }
 
         return formatted;
-      });
+      }, options);
 
       this.updateMetrics(response.responseTime, true, response.usage.cost);
       this.logRequest(request, response);
@@ -556,7 +557,9 @@ export class AnthropicProvider extends BaseProvider {
         data.usage.input_tokens,
         data.usage.output_tokens,
         data.model
-      )
+      ),
+      costProvenance: 'catalog_estimate',
+      tokenProvenance: 'provider_reported',
     };
     if (typeof data.usage.cache_read_input_tokens === 'number') {
       usage.cacheReadInputTokens = data.usage.cache_read_input_tokens;
@@ -649,6 +652,8 @@ export class AnthropicProvider extends BaseProvider {
         outputTokens,
         totalTokens: inputTokens + outputTokens,
         cost: this.calculateCost(inputTokens, outputTokens, model),
+        costProvenance: 'catalog_estimate',
+        tokenProvenance: 'provider_reported',
       };
 
       if (cacheReadInputTokens !== undefined) usage.cacheReadInputTokens = cacheReadInputTokens;

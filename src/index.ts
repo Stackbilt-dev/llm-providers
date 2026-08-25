@@ -18,6 +18,10 @@ export type {
   LLMMessage,
   LLMConfig,
   TokenUsage,
+  CostProvenance,
+  TokenProvenance,
+  ProviderAttemptResult,
+  ProviderExecutionOptions,
   Tool,
   BuiltInTool,
   BuiltInToolType,
@@ -211,6 +215,10 @@ export type {
   QuotaDeniedEvent,
   ProviderBalanceEvent,
   SchemaDriftEvent,
+  ImageAnalysisMetadata,
+  SanitizedTelemetryError,
+  ImageAnalysisAttemptEvent,
+  ImageAnalysisCompleteEvent,
 } from './utils/hooks.js';
 
 // Exhaustion registry
