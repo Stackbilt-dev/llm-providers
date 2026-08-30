@@ -1,0 +1,17 @@
+{
+  "response": {
+    "steps": [
+      "echo ok"
+    ]
+  },
+  "tool_calls": [],
+  "usage": {
+    "prompt_tokens": 25,
+    "completion_tokens": 7,
+    "total_tokens": 32,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "neurons": 2.136363636363
+  }
+}

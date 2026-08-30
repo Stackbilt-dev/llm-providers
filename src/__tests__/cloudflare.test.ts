@@ -9,6 +9,7 @@ import { ConfigurationError } from '../errors';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { getStreamUsage } from '../utils/stream-usage';
 import type { LLMRequest } from '../types';
+import qwenStructuredResponse from './fixtures/response-shapes/cloudflare-qwen-coder-structured.json';
 
 class TestableCloudflareProvider extends CloudflareProvider {
   exposeModelCapabilities() {
@@ -159,6 +160,37 @@ describe('CloudflareProvider', () => {
       expect(response.message).toBe('4');
       expect(response.content).toBe('4');
       expect(response.provider).toBe('cloudflare');
+    });
+
+    it('normalizes Qwen Coder native JSON response objects into parseable text', async () => {
+      mockAiRun.mockResolvedValueOnce(qwenStructuredResponse);
+
+      const response = await provider.generateResponse({
+        model: '@cf/qwen/qwen2.5-coder-32b-instruct',
+        systemPrompt: 'Return only valid JSON.',
+        messages: [{ role: 'user', content: 'Return {"steps":["echo ok"]}' }],
+        maxTokens: 512
+      });
+
+      expect(mockAiRun).toHaveBeenCalledWith(
+        '@cf/qwen/qwen2.5-coder-32b-instruct',
+        expect.objectContaining({
+          messages: [
+            { role: 'system', content: 'Return only valid JSON.' },
+            { role: 'user', content: 'Return {"steps":["echo ok"]}' }
+          ],
+          max_tokens: 512
+        })
+      );
+      expect(response.message).not.toBe('');
+      expect(JSON.parse(response.message)).toEqual({ steps: ['echo ok'] });
+      expect(response.content).toBe(response.message);
+      expect(response.usage).toMatchObject({
+        inputTokens: 25,
+        outputTokens: 7,
+        totalTokens: 32,
+        cachedInputTokens: 0
+      });
     });
 
     it('passes x-session-affinity in Workers AI run options for provider-prefix caching', async () => {

@@ -132,6 +132,25 @@ describe('validateSchema', () => {
       .toThrow(SchemaDriftError);
   });
 
+  it('supports recursively validated JSON values without accepting arbitrary objects', () => {
+    const schema: SchemaField[] = [{ path: 'response', type: 'json-value' }];
+    expect(() => validateSchema('cloudflare', {
+      response: { steps: ['echo ok'], retry: false, exitCode: 0, metadata: null }
+    }, schema)).not.toThrow();
+    expect(() => validateSchema('cloudflare', { response: ['first', { second: 2 }] }, schema))
+      .not.toThrow();
+
+    expect(() => validateSchema('cloudflare', { response: { invalid: undefined } }, schema))
+      .toThrow(SchemaDriftError);
+    expect(() => validateSchema('cloudflare', { response: new Date() }, schema))
+      .toThrow(SchemaDriftError);
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => validateSchema('cloudflare', { response: cyclic }, schema))
+      .toThrow(SchemaDriftError);
+  });
+
   it('fails fast on first drift (does not keep walking)', () => {
     const schema: SchemaField[] = [
       { path: 'first', type: 'string' },
