@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.20.1] — 2026-08-30
+
+### Fixed
+- **Cloudflare Qwen structured responses (#104)** — `CloudflareProvider` now accepts recursively validated native JSON values in Workers AI's `response` field and serializes object/array output to normalized text. This fixes schema-drift failures from `@cf/qwen/qwen2.5-coder-32b-instruct` when JSON output is returned as an object instead of a string.
+
 ## [1.20.0] — 2026-08-25
 
 ### Added

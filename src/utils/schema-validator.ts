@@ -33,7 +33,8 @@ export type SchemaFieldType =
   | 'array'
   | 'object'
   | 'string-or-null'    // anthropic/openai sometimes null content fields
-  | 'string-or-number'; // CF Workers AI returns numeric responses for short numeric answers
+  | 'string-or-number'  // CF Workers AI returns numeric responses for short numeric answers
+  | 'json-value';       // Structured-output providers may return parsed JSON instead of text
 
 export interface SchemaField {
   /**
@@ -112,7 +113,44 @@ function matchesType(value: unknown, type: SchemaFieldType): boolean {
       return value === null || typeof value === 'string';
     case 'string-or-number':
       return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
+    case 'json-value':
+      return isJsonValue(value);
   }
+}
+
+/**
+ * Return true only for values that can be serialized losslessly as JSON.
+ * This deliberately rejects class instances, cycles, undefined, bigint,
+ * functions, symbols, and non-finite numbers instead of treating every object
+ * as a valid structured response.
+ */
+function isJsonValue(value: unknown, ancestors = new Set<object>()): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return true;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+
+  if (typeof value !== 'object') {
+    return false;
+  }
+
+  if (ancestors.has(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+
+  ancestors.add(value);
+  const children = Array.isArray(value) ? value : Object.values(value);
+  const valid = children.every(child => isJsonValue(child, ancestors));
+  ancestors.delete(value);
+  return valid;
 }
 
 /**

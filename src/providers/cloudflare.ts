@@ -34,7 +34,9 @@ import { extractThinkBlocks, joinReasoning } from '../utils/reasoning.js';
  * any particular shape.
  */
 const CLOUDFLARE_RESPONSE_SCHEMA: SchemaField[] = [
-  { path: 'response', type: 'string-or-number', optional: true },
+  // Text-generation models may return structured/JSON-mode output as a native
+  // JSON value here rather than a serialized string (notably Qwen Coder).
+  { path: 'response', type: 'json-value', optional: true },
   { path: 'id', type: 'string', optional: true },
   { path: 'model', type: 'string', optional: true },
   { path: 'output_text', type: 'string', optional: true },
@@ -131,8 +133,16 @@ interface WorkersAIUsage {
   input_tokens_details?: { cached_tokens?: number };
 }
 
+type WorkersAIJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | WorkersAIJsonValue[]
+  | { [key: string]: WorkersAIJsonValue };
+
 interface WorkersAIResult {
-  response?: string;
+  response?: WorkersAIJsonValue;
   id?: string;
   model?: string;
   choices?: WorkersAIChoice[];
@@ -987,12 +997,13 @@ export class CloudflareProvider extends BaseProvider {
       return payload;
     }
 
-    if (typeof payload?.response === 'string') {
-      return payload.response;
-    }
-    // CF sometimes returns numeric responses (e.g. "4" for "2+2") as a bare number.
-    if (typeof payload?.response === 'number') {
-      return String(payload.response);
+    if (payload && payload.response !== undefined) {
+      // Workers AI returns plain strings for normal text, but Qwen and other
+      // structured-output paths can return the generated JSON already parsed.
+      // Validation above guarantees non-string values are JSON-safe.
+      return typeof payload.response === 'string'
+        ? payload.response
+        : JSON.stringify(payload.response);
     }
 
     const chatContent = payload?.choices?.[0]?.message?.content;
