@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.21.0] — 2026-09-01
+
+### Added
+- **Cloudflare Workers AI August model refresh** — added hosted model support for `@cf/zai-org/glm-5.3`, `@cf/zai-org/glm-5.3-flash`, `@cf/deepseek-ai/deepseek-v4-flash-0731`, `@cf/deepseek-ai/deepseek-v4-pro-0813`, and `@cf/qwen/qwen3.8-27b`. The existing unified-catalog `deepseek/deepseek-v4-pro` entry remains available.
+- **Provider-agnostic tool constraints** — `LLMRequest.toolChoice` now supports `'auto'`, `'none'`, `'required'`, and a specific named function. Required mode survives canonical request conversion; OpenAI-compatible providers and Workers AI receive the standard wire value, while Anthropic receives its native `any`/named-tool representation. Invalid named constraints fail before inference.
+
+### Changed
+- **Cloudflare model routing metadata** — added current context windows, token pricing, streaming/tool/batch flags, vision support for GLM-5.3 Flash and Qwen 3.8 27B, and routing scores for the new hosted models.
+- **Vision-model guidance** — Cloudflare image-input errors now recommend the newly supported GLM-5.3 Flash and Qwen 3.8 27B models.
+
+### Fixed
+- **Cloudflare native multi-turn tool loops (#106)** — Workers AI continuation history is serialized as string-only assistant selections and user tool-result messages, avoiding binding error 5006 from OpenAI-style `content: null`, `tool_calls`, and `tool_call_id` history. `generateResponseWithTools()` now works through the Cloudflare binding without downstream continuation workarounds.
+- **Hallucinated tool execution** — managed loops no longer invoke tool names outside the supplied schema; the unavailable-tool error is returned to the model so it can recover on the next turn.
+- **Workers AI pricing audit (#102)** — corrected metered rates for 16 existing models and documented the catalog contract as USD per 1,000 tokens. The values are converted into the library's established units so cost estimates do not introduce a second 1000× scaling error.
+
 ## [1.20.1] — 2026-08-30
 
 ### Fixed

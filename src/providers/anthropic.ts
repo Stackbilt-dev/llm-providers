@@ -103,7 +103,10 @@ interface AnthropicTool {
   cache_control?: AnthropicCacheControl;
 }
 
-type AnthropicToolChoice = 'auto' | 'none' | { type: 'function'; function: { name: string } };
+type AnthropicToolChoice =
+  | { type: 'auto' }
+  | { type: 'any' }
+  | { type: 'tool'; name: string };
 
 interface AnthropicRequest {
   model: string;
@@ -463,7 +466,7 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     // Add tools if provided
-    if (request.tools && request.tools.length > 0) {
+    if (request.tools && request.tools.length > 0 && request.toolChoice !== 'none') {
       anthropicRequest.tools = request.tools.map(tool => ({
         name: tool.function.name,
         description: tool.function.description,
@@ -471,7 +474,16 @@ export class AnthropicProvider extends BaseProvider {
       }));
 
       if (request.toolChoice) {
-        anthropicRequest.tool_choice = request.toolChoice;
+        if (request.toolChoice === 'auto') {
+          anthropicRequest.tool_choice = { type: 'auto' };
+        } else if (request.toolChoice === 'required') {
+          anthropicRequest.tool_choice = { type: 'any' };
+        } else if (typeof request.toolChoice === 'object') {
+          anthropicRequest.tool_choice = {
+            type: 'tool',
+            name: request.toolChoice.function.name
+          };
+        }
       }
     }
 

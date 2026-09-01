@@ -88,7 +88,7 @@ interface OpenAITool {
   };
 }
 
-type OpenAIToolChoice = 'auto' | 'none' | { type: 'function'; function: { name: string } };
+type OpenAIToolChoice = NonNullable<LLMRequest['toolChoice']>;
 
 interface OpenAIRequest {
   model: string;

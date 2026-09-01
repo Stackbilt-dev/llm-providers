@@ -119,6 +119,17 @@ describe('canonical provider contract', () => {
     expect(Object.keys(canonical)).not.toContain('toolChoice');
   });
 
+  it('round-trips required tool choice without relaxing the constraint', () => {
+    const canonical = normalizeLLMRequest({
+      messages: [{ role: 'user', content: 'Call a tool' }],
+      tools: canonicalFixture.tools,
+      toolChoice: 'required',
+    });
+
+    expect(canonical.toolMode).toBe('required');
+    expect(canonicalToLLMRequest(canonical).toolChoice).toBe('required');
+  });
+
   it('moves legacy provider-specific knobs into providerOptions', () => {
     const canonical = normalizeLLMRequest({
       messages: [{ role: 'user', content: 'Hello' }],

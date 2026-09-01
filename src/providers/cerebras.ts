@@ -81,7 +81,7 @@ interface CerebrasRequest {
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
   tools?: CerebrasTool[];
-  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  tool_choice?: NonNullable<LLMRequest['toolChoice']>;
   seed?: number;
   reasoning_effort?: 'low' | 'medium' | 'high' | 'none';
   reasoning_format?: 'parsed' | 'raw' | 'hidden';

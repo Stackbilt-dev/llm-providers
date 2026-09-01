@@ -330,14 +330,13 @@ function canonicalOutputToLegacy(output: CanonicalOutputFormat | undefined): LLM
 
 function normalizeToolMode(toolChoice: LLMRequest['toolChoice'] | undefined): CanonicalToolMode | undefined {
   if (!toolChoice) return undefined;
-  if (toolChoice === 'auto' || toolChoice === 'none') return toolChoice;
+  if (toolChoice === 'auto' || toolChoice === 'none' || toolChoice === 'required') return toolChoice;
   return { toolName: toolChoice.function.name };
 }
 
 function canonicalToolModeToLegacy(toolMode: CanonicalToolMode | undefined): LLMRequest['toolChoice'] {
   if (!toolMode) return undefined;
-  if (toolMode === 'auto' || toolMode === 'none') return toolMode;
-  if (toolMode === 'required') return 'auto';
+  if (toolMode === 'auto' || toolMode === 'none' || toolMode === 'required') return toolMode;
   return { type: 'function', function: { name: toolMode.toolName } };
 }
 
