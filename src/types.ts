@@ -124,6 +124,13 @@ export interface ToolResult {
   error?: string;
 }
 
+/** Provider-agnostic constraint for caller-defined function tools. */
+export type ToolChoice =
+  | 'auto'
+  | 'none'
+  | 'required'
+  | { type: 'function'; function: { name: string } };
+
 export interface LLMRequest {
   messages: LLMMessage[];
   model?: string;
@@ -141,7 +148,7 @@ export interface LLMRequest {
    * (cast to `BuiltInToolResult[]`).
    */
   builtInTools?: BuiltInTool[];
-  toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  toolChoice?: ToolChoice;
   response_format?:
     | { type: 'json_object' | 'text' }
     | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
@@ -446,7 +453,9 @@ export interface ModelCapabilities {
   supportsVision?: boolean;
   toolCalling?: boolean;
   supportsBatching: boolean;
+  /** USD per 1,000 input tokens. */
   inputTokenCost: number;
+  /** USD per 1,000 output tokens. */
   outputTokenCost: number;
   description: string;
   /** Provider-side prompt/prefix caching supported for this model. */

@@ -571,6 +571,8 @@ while (true) {
 
 `generateResponseWithTools` owns the `generateResponse → parse → execute → append → repeat` cycle. It enforces iteration caps, cumulative cost limits, and abort-signal cancellation — no boilerplate needed on the caller side.
 
+Set `toolChoice` to `'auto'`, `'none'`, `'required'`, or a named function constraint such as `{ type: 'function', function: { name: 'replace_in_file' } }`. Named constraints must reference a tool in the request. A constrained `tools` array also acts as the execution allowlist: if a model hallucinates another tool name, the loop returns an unavailable-tool error to the model instead of invoking the executor. Cloudflare Workers AI continuations are translated to binding-safe plain string messages automatically.
+
 ```typescript
 import { LLMProviders, ToolLoopLimitError } from '@stackbilt/llm-providers';
 
@@ -598,7 +600,7 @@ const result = await llm.generateResponseWithTools(
     onIteration: (iteration, state) => {
       // Return { abort: true, reason? } to stop the loop early and throw ToolLoopAbortedError.
       // Returning void (or nothing) continues to the next iteration.
-      if (state.messages.some(m => m.role === 'assistant' && m.content?.includes('DONE'))) {
+      if (state.iteration >= 4) {
         return { abort: true, reason: 'found answer' };
       }
     },
@@ -840,7 +842,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 
 | Type | Description |
 |------|-------------|
-| `LLMRequest` | Unified request: messages, model, temperature, tools, builtInTools, response_format, cache, lora |
+| `LLMRequest` | Unified request: messages, model, temperature, tools, toolChoice, builtInTools, response_format, cache, lora |
 | `LLMResponse` | Unified response: message, optional reasoning, usage (with cost), provider, tool calls, metadata (builtInToolResults) |
 | `BuiltInTool` / `BuiltInToolType` | Server-side tool request: `{ type }` where type is `web_search` \| `visit_website` \| `browser_automation` \| `code_interpreter` \| `wolfram_alpha` |
 | `BuiltInToolResult` | A surfaced built-in execution: `{ type, name?, arguments?, results: [{ title, url, content, score }] }` on `metadata.builtInToolResults` |
@@ -849,6 +851,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `ImageAnalysisCompleteEvent` | Terminal image-analysis aggregate with total attempts, tokens, latency, cost buckets, and final route |
 | `CacheHints` | Cache strategy, key, ttl, sessionId, cacheablePrefix for provider-agnostic prompt caching |
 | `ToolExecutor` | Interface for `generateResponseWithTools`: `execute(name, args) => Promise<unknown>` |
+| `ToolChoice` | Caller-defined tool constraint: `auto`, `none`, `required`, or a specific named function |
 | `ToolLoopOptions` | Loop config: maxIterations, maxCostUSD, onIteration, abortSignal |
 | `ToolLoopAbortSignal` | `{ abort: true; reason?: string }` — return from `onIteration` to stop the loop and throw `ToolLoopAbortedError` |
 | `RoutingInfo` | Pre-flight routing snapshot: useCase, provider, model, estimatedInputTokens, lifecycle, deprecationWarning |

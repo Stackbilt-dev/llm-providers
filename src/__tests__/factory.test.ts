@@ -678,6 +678,39 @@ describe('LLMProviderFactory', () => {
       });
     });
 
+    it('feeds hallucinated tool names back as errors without executing them', async () => {
+      mockOpenAIProvider.generateResponse
+        .mockResolvedValueOnce({
+          ...toolCallResponse(),
+          toolCalls: [{
+            id: 'call-hallucinated',
+            type: 'function',
+            function: { name: 'apply_patch', arguments: '{}' }
+          }]
+        })
+        .mockResolvedValueOnce(finalResponse);
+      const executor = { execute: vi.fn() };
+
+      await makeLoopFactory().generateResponseWithTools({
+        ...testRequest,
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'noop',
+            description: 'A permitted no-op',
+            parameters: { type: 'object', properties: {} }
+          }
+        }]
+      }, executor);
+
+      expect(executor.execute).not.toHaveBeenCalled();
+      const secondCall = mockOpenAIProvider.generateResponse.mock.calls[1][0] as LLMRequest;
+      expect(secondCall.messages.at(-1)?.toolResults?.[0]).toMatchObject({
+        id: 'call-hallucinated',
+        error: expect.stringContaining("unavailable tool 'apply_patch'")
+      });
+    });
+
     it('invokes onIteration callback with correct state on each iteration', async () => {
       mockOpenAIProvider.generateResponse
         .mockResolvedValueOnce(toolCallResponse())

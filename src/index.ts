@@ -28,6 +28,7 @@ export type {
   BuiltInToolResult,
   ToolCall,
   ToolResult,
+  ToolChoice,
   ProviderConfig,
   OpenAIConfig,
   AnthropicConfig,

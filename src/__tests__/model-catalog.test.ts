@@ -480,6 +480,14 @@ describe('current CF Workers AI models (August 2026)', () => {
   });
 
   it('uses Cloudflare token pricing in cost-per-1K units', () => {
+    expect(getCatalogEntry('@cf/openai/gpt-oss-120b')?.capabilities).toMatchObject({
+      inputTokenCost: 0.00035,
+      outputTokenCost: 0.00075,
+    });
+    expect(getCatalogEntry('@cf/qwen/qwen2.5-coder-32b-instruct')?.capabilities).toMatchObject({
+      inputTokenCost: 0.00066,
+      outputTokenCost: 0.001,
+    });
     expect(getCatalogEntry('@cf/zai-org/glm-5.3')?.capabilities).toMatchObject({
       inputTokenCost: 0.0014,
       outputTokenCost: 0.0044,

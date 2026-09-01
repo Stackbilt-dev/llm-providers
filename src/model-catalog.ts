@@ -333,8 +333,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: true,
-    inputTokenCost: 0.0000008,
-    outputTokenCost: 0.0000008,
+    inputTokenCost: 0.00035,
+    outputTokenCost: 0.00075,
     description: 'Workers AI GPT-OSS 120B — OpenAI open-weight 117B/5.1B-active MoE, near o4-mini class (not Phi-4)'
   }, { speed: 4, quality: 6, cost: 4 }),
   entry('cloudflare', '@cf/moonshotai/kimi-k2.6', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION', 'BALANCED'], {
@@ -344,8 +344,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     toolCalling: true,
     supportsVision: true,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.00095,
+    outputTokenCost: 0.004,
     description: 'Workers AI Kimi K2.6 — 1T/32B-active MoE, frontier-scale agent model; vision, 262K context, tool calling (Moonshot self-reported benchmarks)'
   }, { speed: 3, quality: 6, cost: 5 }),
   entry('cloudflare', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', 'active', ['COST_EFFECTIVE', 'BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING'], {
@@ -354,8 +354,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.000293,
+    outputTokenCost: 0.002253,
     description: 'Workers AI Llama 3.3 70B FP8 Fast — primary COST_EFFECTIVE choice; fast FP8 inference, full tool calling'
   }, { speed: 5, quality: 5, cost: 5 }),
   entry('cloudflare', '@cf/openai/gpt-oss-20b', 'active', ['COST_EFFECTIVE', 'TOOL_CALLING'], {
@@ -364,8 +364,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.0002,
+    outputTokenCost: 0.0003,
     description: 'Workers AI GPT-OSS 20B — lightweight tool-calling model; cost-effective complement to gpt-oss-120b'
   }, { speed: 5, quality: 4, cost: 5 }),
   entry('cloudflare', '@cf/qwen/qwen2.5-coder-32b-instruct', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING'], {
@@ -374,8 +374,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.00066,
+    outputTokenCost: 0.001,
     description: 'Workers AI Qwen 2.5 Coder 32B — purpose-built for code generation and completion'
   }, { speed: 4, quality: 5, cost: 5 }),
   entry('cloudflare', '@cf/mistralai/mistral-small-3.1-24b-instruct', 'active', ['BALANCED', 'TOOL_CALLING'], {
@@ -385,8 +385,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     toolCalling: true,
     supportsVision: true,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.000351,
+    outputTokenCost: 0.000555,
     description: 'Workers AI Mistral Small 3.1 24B — vision + tool calling; weakest of the active CF set'
   }, { speed: 4, quality: 3, cost: 5 }),
   entry('cloudflare', '@cf/qwen/qwen3-30b-a3b-fp8', 'active', ['BALANCED', 'HIGH_PERFORMANCE'], {
@@ -395,8 +395,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: false,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.0000509,
+    outputTokenCost: 0.000335,
     description: 'Workers AI Qwen3 30B FP8 — state-of-the-art Qwen3 for balanced/high-performance tasks'
   }, { speed: 4, quality: 5, cost: 5 }),
   entry('cloudflare', '@cf/qwen/qwen3.8-27b', 'active', ['BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
@@ -415,8 +415,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.000027,
+    outputTokenCost: 0.000201,
     description: 'Workers AI Llama 3.2 1B — ultra-cheap tiny model for simple classification and summary'
   }, { speed: 5, quality: 2, cost: 5 }),
   entry('cloudflare', '@cf/meta/llama-3.2-3b-instruct', 'active', ['COST_EFFECTIVE'], {
@@ -424,8 +424,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.0000509,
+    outputTokenCost: 0.000335,
     description: 'Workers AI Llama 3.2 3B — cheap small model, step up from 1B'
   }, { speed: 5, quality: 3, cost: 5 }),
   entry('cloudflare', '@cf/moonshotai/kimi-k2.7-code', 'active', ['BALANCED', 'TOOL_CALLING'], {
@@ -434,8 +434,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: false,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.00095,
+    outputTokenCost: 0.004,
     description: 'Workers AI Kimi K2.7 Code — K2.6 retuned for code, 30% fewer thinking tokens; SWE-bench 78.2 (Moonshot self-reported)'
   }, { speed: 3, quality: 6, cost: 5 }),
   entry('cloudflare', '@cf/zai-org/glm-4.7-flash', 'active', ['RESEARCH'], {
@@ -444,8 +444,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.0000605,
+    outputTokenCost: 0.0004,
     thinkingModel: true,
     description: 'Workers AI GLM-4.7-Flash — 30B/3B-active MoE CoT model; emits <think> reasoning traces, RESEARCH-only routing'
   }, { speed: 5, quality: 5, cost: 5 }),
@@ -541,8 +541,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     toolCalling: true,
     supportsVision: true,
     supportsBatching: true,
-    inputTokenCost: 0.0000003,
-    outputTokenCost: 0.0000009,
+    inputTokenCost: 0.00027,
+    outputTokenCost: 0.00085,
     description: 'Workers AI Llama 4 Scout — 109B/17B-active MoE; multimodal + 10M ctx, capability ≈ Llama 3.3 70B dense'
   }, { speed: 4, quality: 4, cost: 4 }),
   entry('cloudflare', '@cf/meta/llama-3.2-11b-vision-instruct', 'active', ['VISION'], {
@@ -551,8 +551,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: false,
     supportsVision: true,
     supportsBatching: true,
-    inputTokenCost: 0.0000005,
-    outputTokenCost: 0.0000005,
+    inputTokenCost: 0.0000485,
+    outputTokenCost: 0.000676,
     description: 'Workers AI Llama 3.2 Vision'
   }, { speed: 4, quality: 3, cost: 4 }),
   entry('cloudflare', '@cf/nvidia/nemotron-3-120b-a12b', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
@@ -561,8 +561,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.0005,
+    outputTokenCost: 0.0015,
     description: 'Workers AI NVIDIA Nemotron-3 120B — hybrid MoE, parallel function calling, 256K context'
   }, { speed: 3, quality: 5, cost: 5 }),
   entry('cloudflare', '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', 'active', ['RESEARCH'], {
@@ -570,8 +570,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.000497,
+    outputTokenCost: 0.004881,
     thinkingModel: true,
     description: 'Workers AI DeepSeek-R1-Distill-Qwen-32B — chain-of-thought reasoning model; outputs thinking traces'
   }, { speed: 3, quality: 5, cost: 5 }),
@@ -580,8 +580,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
+    inputTokenCost: 0.00066,
+    outputTokenCost: 0.001,
     thinkingModel: true,
     description: 'Workers AI QwQ-32B — native thinking/reasoning model; outputs chain-of-thought traces'
   }, { speed: 4, quality: 5, cost: 5 }),
@@ -603,8 +603,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsTools: true,
     toolCalling: true,
     supportsBatching: true,
-    inputTokenCost: 0.0000014,
-    outputTokenCost: 0.0000044,
+    inputTokenCost: 0.0014,
+    outputTokenCost: 0.0044,
     description: 'Workers AI GLM-5.2 — Z.ai flagship agentic coder; 262K ctx, direct-response (not CoT), function calling'
   }, { speed: 4, quality: 6, cost: 3 }),
   entry('cloudflare', '@cf/zai-org/glm-5.3', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {

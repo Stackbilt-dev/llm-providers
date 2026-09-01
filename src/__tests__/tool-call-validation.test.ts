@@ -275,6 +275,48 @@ describe('Tool call validation at provider boundary', () => {
       expect(res.toolCalls![0].id).toBe('toolu_1');
       expect(res.toolCalls![0].function.name).toBe('search');
     });
+
+    it('translates required and named tool constraints to Anthropic wire format', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'ok' }],
+          model: 'claude-haiku-4-5-20251001',
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 10, output_tokens: 5 }
+        }),
+        headers: new Headers({ 'content-type': 'application/json' })
+      });
+      const tools = [{
+        type: 'function' as const,
+        function: {
+          name: 'search',
+          description: 'Search files',
+          parameters: { type: 'object' as const, properties: {} }
+        }
+      }];
+
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'search' }],
+        model: 'claude-haiku-4-5-20251001',
+        tools,
+        toolChoice: 'required'
+      });
+      await provider.generateResponse({
+        messages: [{ role: 'user', content: 'search' }],
+        model: 'claude-haiku-4-5-20251001',
+        tools,
+        toolChoice: { type: 'function', function: { name: 'search' } }
+      });
+
+      const requiredBody = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+      const namedBody = JSON.parse(mockFetch.mock.calls[1][1].body as string);
+      expect(requiredBody.tool_choice).toEqual({ type: 'any' });
+      expect(namedBody.tool_choice).toEqual({ type: 'tool', name: 'search' });
+    });
   });
 
   // ---------- Groq ----------

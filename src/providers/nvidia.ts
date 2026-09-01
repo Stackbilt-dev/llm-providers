@@ -80,7 +80,7 @@ interface NvidiaRequest {
     | { type: 'json_object' | 'text' }
     | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
   tools?: NvidiaTool[];
-  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  tool_choice?: NonNullable<LLMRequest['toolChoice']>;
   seed?: number;
 }
 

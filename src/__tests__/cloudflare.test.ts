@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CloudflareProvider } from '../providers/cloudflare';
+import { LLMProviderFactory } from '../factory';
 import { ConfigurationError } from '../errors';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { getStreamUsage } from '../utils/stream-usage';
@@ -14,6 +15,10 @@ import qwenStructuredResponse from './fixtures/response-shapes/cloudflare-qwen-c
 class TestableCloudflareProvider extends CloudflareProvider {
   exposeModelCapabilities() {
     return this.getModelCapabilities();
+  }
+
+  exposeCalculateCost(inputTokens: number, outputTokens: number, model: string) {
+    return this.calculateCost(inputTokens, outputTokens, model);
   }
 }
 
@@ -359,6 +364,43 @@ describe('CloudflareProvider', () => {
       expect(response.usage.totalTokens).toBe(32);
     });
 
+    it('forwards required and named tool constraints to Workers AI', async () => {
+      mockAiRun.mockResolvedValue({ response: 'ok' });
+
+      await provider.generateResponse({ ...toolRequest, toolChoice: 'required' });
+      await provider.generateResponse({
+        ...toolRequest,
+        toolChoice: { type: 'function', function: { name: 'get_weather' } }
+      });
+
+      expect(mockAiRun.mock.calls[0][1].tool_choice).toBe('required');
+      expect(mockAiRun.mock.calls[1][1].tool_choice).toEqual({
+        type: 'function',
+        function: { name: 'get_weather' }
+      });
+    });
+
+    it('rejects a named tool constraint that is absent from the tool schema', async () => {
+      await expect(provider.generateResponse({
+        ...toolRequest,
+        toolChoice: { type: 'function', function: { name: 'apply_patch' } }
+      })).rejects.toThrow("toolChoice references unknown tool 'apply_patch'");
+      expect(mockAiRun).not.toHaveBeenCalled();
+    });
+
+    it('calculates Workers AI catalog rates in USD per million tokens', () => {
+      expect(provider.exposeCalculateCost(
+        1_000_000,
+        1_000_000,
+        '@cf/openai/gpt-oss-120b'
+      )).toBeCloseTo(1.10, 8);
+      expect(provider.exposeCalculateCost(
+        1_000_000,
+        1_000_000,
+        '@cf/zai-org/glm-5.3'
+      )).toBeCloseTo(5.80, 8);
+    });
+
     it('surfaces Cloudflare reasoning_content separately when content is null', async () => {
       mockAiRun.mockResolvedValueOnce({
         id: 'chatcmpl-cf-kimi',
@@ -461,7 +503,7 @@ describe('CloudflareProvider', () => {
       expect(mockAiRun).not.toHaveBeenCalled();
     });
 
-    it('should preserve assistant tool calls and emit tool result messages in OpenAI format', async () => {
+    it('should preserve combined tool calls and results as binding-safe plain messages', async () => {
       mockAiRun.mockResolvedValueOnce({
         response: 'Done'
       });
@@ -496,22 +538,11 @@ describe('CloudflareProvider', () => {
       expect(body.messages).toEqual([
         {
           role: 'assistant',
-          content: null,
-          tool_calls: [
-            {
-              id: 'call_weather',
-              type: 'function',
-              function: {
-                name: 'get_weather',
-                arguments: '{"city":"Austin"}'
-              }
-            }
-          ]
+          content: '[{"id":"call_weather","name":"get_weather","arguments":{"city":"Austin"}}]'
         },
         {
-          role: 'tool',
-          content: '{"temperature":72}',
-          tool_call_id: 'call_weather'
+          role: 'user',
+          content: 'Tool results (JSON):\n[{"id":"call_weather","name":"get_weather","output":"{\\"temperature\\":72}"}]'
         }
       ]);
     });
@@ -563,17 +594,64 @@ describe('CloudflareProvider', () => {
         { role: 'user', content: 'list files' },
         {
           role: 'assistant',
-          content: null,
-          tool_calls: [
-            {
-              id: 'c1',
-              type: 'function',
-              function: { name: 'bash', arguments: '{"command":"ls"}' }
-            }
-          ]
+          content: '[{"id":"c1","name":"bash","arguments":{"command":"ls"}}]'
         },
-        { role: 'user', content: 'file1\nfile2' },
-        { role: 'tool', content: 'file1\nfile2', tool_call_id: 'c1' }
+        {
+          role: 'user',
+          content: 'Tool results (JSON):\n[{"id":"c1","name":"bash","output":"file1\\nfile2"}]'
+        }
+      ]);
+    });
+
+    it('runs a managed multi-turn tool loop with binding-safe continuation messages', async () => {
+      mockAiRun
+        .mockResolvedValueOnce({
+          id: 'chatcmpl-tool-turn',
+          model: '@cf/openai/gpt-oss-120b',
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{
+                id: 'call_weather',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '{"city":"Austin"}' }
+              }]
+            },
+            finish_reason: 'tool_calls'
+          }],
+          usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 }
+        })
+        .mockResolvedValueOnce({
+          response: 'It is 72 degrees.',
+          usage: { prompt_tokens: 20, completion_tokens: 6, total_tokens: 26 }
+        });
+      const factory = new LLMProviderFactory({
+        cloudflare: { ai: { run: mockAiRun } as unknown as Ai },
+        defaultProvider: 'cloudflare',
+        costOptimization: false,
+        enableRetries: false
+      });
+
+      const response = await factory.generateResponseWithTools(
+        toolRequest,
+        { execute: vi.fn().mockResolvedValue({ temperature: 72 }) },
+        { maxIterations: 2 }
+      );
+
+      expect(response.message).toBe('It is 72 degrees.');
+      const secondBody = mockAiRun.mock.calls[1][1];
+      expect(secondBody.messages).toEqual([
+        { role: 'user', content: 'What is the weather in Austin?' },
+        {
+          role: 'assistant',
+          content: '[{"id":"call_weather","name":"get_weather","arguments":{"city":"Austin"}}]'
+        },
+        {
+          role: 'user',
+          content: 'Tool results (JSON):\n[{"id":"call_weather","name":"get_weather","output":"{\\"temperature\\":72}"}]'
+        }
       ]);
     });
   });

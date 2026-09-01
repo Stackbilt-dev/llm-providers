@@ -929,9 +929,21 @@ export class LLMProviderFactory {
       }
 
       const toolResults = [];
+      const allowedToolNames = request.tools
+        ? new Set(request.tools.map(tool => tool.function.name))
+        : undefined;
       for (const toolCall of response.toolCalls) {
         if (opts.abortSignal?.aborted) {
           throw new ToolLoopAbortedError('factory');
+        }
+
+        if (allowedToolNames && !allowedToolNames.has(toolCall.function.name)) {
+          toolResults.push({
+            id: toolCall.id,
+            output: '',
+            error: `Model requested unavailable tool '${toolCall.function.name}'. Available tools: ${[...allowedToolNames].join(', ')}`
+          });
+          continue;
         }
 
         let parsedArguments: unknown;

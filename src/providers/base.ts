@@ -335,6 +335,20 @@ export abstract class BaseProvider implements LLMProvider {
       throw new ConfigurationError(this.name, 'temperature must be between 0 and 2');
     }
 
+    if (request.toolChoice && request.toolChoice !== 'none' && !request.tools?.length) {
+      throw new ConfigurationError(this.name, 'toolChoice requires at least one tool definition');
+    }
+
+    if (request.toolChoice && typeof request.toolChoice === 'object') {
+      const selectedName = request.toolChoice.function.name;
+      if (!request.tools?.some(tool => tool.function.name === selectedName)) {
+        throw new ConfigurationError(
+          this.name,
+          `toolChoice references unknown tool '${selectedName}'`
+        );
+      }
+    }
+
     // Validate model if specified
     if (request.model && !this.models.includes(request.model)) {
       throw new ConfigurationError(

@@ -112,7 +112,7 @@ interface GroqRequest {
     | { type: 'json_object' | 'text' }
     | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
   tools?: GroqTool[];
-  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  tool_choice?: NonNullable<LLMRequest['toolChoice']>;
   // Compound systems (groq/compound*) configure built-in tools here rather than
   // on the OpenAI-style `tools` array. `enabled_tools` takes Groq's compound
   // vocabulary, which equals our normalized BuiltInToolType identifiers.

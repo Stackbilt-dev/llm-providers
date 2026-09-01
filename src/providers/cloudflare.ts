@@ -281,8 +281,7 @@ export class CloudflareProvider extends BaseProvider {
   }
 
   estimateCost(request: LLMRequest): number {
-    // Cloudflare AI is essentially "free" as it's included in Workers compute
-    // But we can estimate the computational cost
+    // Estimate metered Workers AI inference from the model catalog rates.
     const model = request.model || this.getRecommendedModel(request);
     const capabilities = this.getModelCapabilities()[model];
 
@@ -386,7 +385,7 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0.00035,  // $0.35/MTok — matches workers-ai-chat.ts GPT_OSS_RATES
+        inputTokenCost: 0.00035,  // $0.35/MTok; capability costs are per 1K tokens
         outputTokenCost: 0.00075, // $0.75/MTok
         description: 'GPT-OSS 120B - OpenAI-format tool calling on Workers AI'
       },
@@ -397,8 +396,8 @@ export class CloudflareProvider extends BaseProvider {
         toolCalling: true,
         supportsVision: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.00095,
+        outputTokenCost: 0.004,
         description: 'Kimi K2.6 — multi-turn tools, vision, structured outputs, 262K context'
       },
       '@cf/zai-org/glm-4.7-flash': {
@@ -407,8 +406,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0000605,
+        outputTokenCost: 0.0004,
         thinkingModel: true,
         description: 'GLM-4.7-Flash — chain-of-thought reasoning model; outputs thinking traces, not suitable for direct-response routing'
       },
@@ -418,8 +417,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0.0000014,
-        outputTokenCost: 0.0000044,
+        inputTokenCost: 0.0014,
+        outputTokenCost: 0.0044,
         description: 'GLM-5.2 — Z.ai flagship agentic coder; 262K ctx, direct-response (not CoT), function calling'
       },
       '@cf/zai-org/glm-5.3': {
@@ -535,8 +534,8 @@ export class CloudflareProvider extends BaseProvider {
         toolCalling: true,
         supportsVision: true,
         supportsBatching: true,
-        inputTokenCost: 0.0000003,
-        outputTokenCost: 0.0000009,
+        inputTokenCost: 0.00027,
+        outputTokenCost: 0.00085,
         description: 'Llama 4 Scout 17B — natively multimodal, tool calling'
       },
       '@cf/meta/llama-3.2-11b-vision-instruct': {
@@ -545,8 +544,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: false,
         supportsVision: true,
         supportsBatching: true,
-        inputTokenCost: 0.0000005,
-        outputTokenCost: 0.0000005,
+        inputTokenCost: 0.0000485,
+        outputTokenCost: 0.000676,
         description: 'Llama 3.2 11B Vision — image understanding'
       },
       '@cf/meta/llama-3.3-70b-instruct-fp8-fast': {
@@ -555,8 +554,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.000293,
+        outputTokenCost: 0.002253,
         description: 'Llama 3.3 70B FP8 Fast — best quality/cost on Workers AI, primary COST_EFFECTIVE choice'
       },
       '@cf/openai/gpt-oss-20b': {
@@ -565,8 +564,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0002,
+        outputTokenCost: 0.0003,
         description: 'GPT-OSS 20B — lightweight tool-calling model'
       },
       '@cf/qwen/qwen2.5-coder-32b-instruct': {
@@ -575,8 +574,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.00066,
+        outputTokenCost: 0.001,
         description: 'Qwen 2.5 Coder 32B — purpose-built for code generation'
       },
       '@cf/mistralai/mistral-small-3.1-24b-instruct': {
@@ -586,8 +585,8 @@ export class CloudflareProvider extends BaseProvider {
         toolCalling: true,
         supportsVision: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.000351,
+        outputTokenCost: 0.000555,
         description: 'Mistral Small 3.1 24B — vision + tool-calling, strong balanced model'
       },
       '@cf/qwen/qwen3-30b-a3b-fp8': {
@@ -596,8 +595,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: false,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0000509,
+        outputTokenCost: 0.000335,
         description: 'Qwen3 30B FP8 — state-of-the-art Qwen3 generation'
       },
       '@cf/qwen/qwen3.8-27b': {
@@ -616,8 +615,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.000027,
+        outputTokenCost: 0.000201,
         description: 'Llama 3.2 1B — ultra-cheap tiny model'
       },
       '@cf/meta/llama-3.2-3b-instruct': {
@@ -625,8 +624,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0000509,
+        outputTokenCost: 0.000335,
         description: 'Llama 3.2 3B — cheap small model'
       },
       '@cf/moonshotai/kimi-k2.7-code': {
@@ -635,8 +634,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: false,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.00095,
+        outputTokenCost: 0.004,
         description: 'Kimi K2.7 Code — code-focused variant of Kimi K2.6'
       },
       '@cf/nvidia/nemotron-3-120b-a12b': {
@@ -645,8 +644,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsTools: true,
         toolCalling: true,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.0005,
+        outputTokenCost: 0.0015,
         description: 'NVIDIA Nemotron-3 120B — hybrid MoE, parallel function calling, 256K context, multi-agent focus'
       },
       '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b': {
@@ -654,8 +653,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.000497,
+        outputTokenCost: 0.004881,
         thinkingModel: true,
         description: 'DeepSeek-R1-Distill-Qwen-32B — chain-of-thought reasoning model distilled from DeepSeek-R1; outputs thinking traces'
       },
@@ -664,8 +663,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.00066,
+        outputTokenCost: 0.001,
         thinkingModel: true,
         description: 'QwQ-32B — native thinking/reasoning model; outputs chain-of-thought traces; competes with o1-mini on hard reasoning tasks'
       },
@@ -824,9 +823,62 @@ export class CloudflareProvider extends BaseProvider {
       });
     }
 
+    // Workers AI's binding has rejected OpenAI-style continuation messages in
+    // production (error 5006) even when the same model accepts the first tool
+    // turn. Keep continuation history in Cloudflare's documented traditional
+    // function-calling form: JSON string assistant selections followed by a
+    // plain user message containing JSON tool results.
+    const toolNamesById = new Map<string, string>();
+    for (const message of request.messages) {
+      for (const toolCall of message.toolCalls ?? []) {
+        toolNamesById.set(toolCall.id, toolCall.function.name);
+      }
+    }
+
     // Convert messages
     for (const message of request.messages) {
       if (message.role === 'system' && request.systemPrompt) {
+        continue;
+      }
+
+      if (message.toolCalls && message.toolCalls.length > 0) {
+        const selectedTools = message.toolCalls.map(toolCall => {
+          let argumentsValue: unknown = toolCall.function.arguments;
+          try {
+            argumentsValue = JSON.parse(toolCall.function.arguments);
+          } catch {
+            // Preserve malformed/raw arguments so the model can repair them.
+          }
+          return {
+            id: toolCall.id,
+            name: toolCall.function.name,
+            arguments: argumentsValue
+          };
+        });
+        messages.push({
+          role: 'assistant',
+          content: JSON.stringify(selectedTools)
+        });
+        if (!message.toolResults?.length) {
+          continue;
+        }
+      }
+
+      if (message.toolResults && message.toolResults.length > 0) {
+        const toolOutputs = message.toolResults.map(toolResult => ({
+          id: toolResult.id,
+          name: toolNamesById.get(toolResult.id) ?? 'unknown',
+          output: toolResult.output,
+          ...(toolResult.error ? { error: toolResult.error } : {})
+        }));
+        const rawPrefix = message.content.trim();
+        const prefix = toolOutputs.some(toolOutput => toolOutput.output === rawPrefix)
+          ? ''
+          : rawPrefix;
+        messages.push({
+          role: 'user',
+          content: `${prefix ? `${prefix}\n\n` : ''}Tool results (JSON):\n${JSON.stringify(toolOutputs)}`
+        });
         continue;
       }
 
@@ -835,31 +887,7 @@ export class CloudflareProvider extends BaseProvider {
         content: message.content
       };
 
-      if (message.toolCalls && message.toolCalls.length > 0) {
-        cloudflareMessage.tool_calls = message.toolCalls.map(toolCall => ({
-          id: toolCall.id,
-          type: toolCall.type,
-          function: toolCall.function
-        }));
-        cloudflareMessage.content = null;
-      }
-
       messages.push(cloudflareMessage);
-
-      if (message.toolResults && message.toolResults.length > 0) {
-        for (const toolResult of message.toolResults) {
-          messages.push({
-            role: 'tool',
-            content: toolResult.error
-              ? JSON.stringify({
-                  output: toolResult.output,
-                  error: toolResult.error
-                })
-              : toolResult.output,
-            tool_call_id: toolResult.id
-          });
-        }
-      }
     }
 
     if (hasImages) {
