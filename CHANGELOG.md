@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.20.2] — 2026-09-01
+
+### Added
+- **Cloudflare Workers AI August model refresh** — added hosted model support for `@cf/zai-org/glm-5.3`, `@cf/zai-org/glm-5.3-flash`, `@cf/deepseek-ai/deepseek-v4-flash-0731`, `@cf/deepseek-ai/deepseek-v4-pro-0813`, and `@cf/qwen/qwen3.8-27b`. The existing unified-catalog `deepseek/deepseek-v4-pro` entry remains available.
+
+### Changed
+- **Cloudflare model routing metadata** — added current context windows, token pricing, streaming/tool/batch flags, vision support for GLM-5.3 Flash and Qwen 3.8 27B, and routing scores for the new hosted models.
+- **Vision-model guidance** — Cloudflare image-input errors now recommend the newly supported GLM-5.3 Flash and Qwen 3.8 27B models.
+
 ## [1.20.1] — 2026-08-30
 
 ### Fixed
