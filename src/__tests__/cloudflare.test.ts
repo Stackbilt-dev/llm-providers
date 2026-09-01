@@ -81,9 +81,16 @@ describe('CloudflareProvider', () => {
   });
 
   describe('Constructor', () => {
-    it('should initialize with valid config and expose GPT-OSS tool support', () => {
+    it('should initialize with the current hosted catalog and expose tool support', () => {
       expect(provider.name).toBe('cloudflare');
       expect(provider.models).toContain('@cf/openai/gpt-oss-120b');
+      expect(provider.models).toEqual(expect.arrayContaining([
+        '@cf/deepseek-ai/deepseek-v4-flash-0731',
+        '@cf/deepseek-ai/deepseek-v4-pro-0813',
+        '@cf/qwen/qwen3.8-27b',
+        '@cf/zai-org/glm-5.3',
+        '@cf/zai-org/glm-5.3-flash',
+      ]));
       expect(provider.supportsStreaming).toBe(true);
       expect(provider.supportsTools).toBe(true);
       expect(provider.supportsBatching).toBe(true);
@@ -91,6 +98,8 @@ describe('CloudflareProvider', () => {
       const capabilities = provider.exposeModelCapabilities();
       expect(capabilities['@cf/openai/gpt-oss-120b'].supportsTools).toBe(true);
       expect(capabilities['@cf/openai/gpt-oss-120b'].toolCalling).toBe(true);
+      expect(capabilities['@cf/zai-org/glm-5.3-flash'].supportsVision).toBe(true);
+      expect(capabilities['@cf/deepseek-ai/deepseek-v4-pro-0813'].maxContextLength).toBe(1_048_576);
     });
 
     it('should throw without an AI binding', () => {
@@ -104,7 +113,7 @@ describe('CloudflareProvider', () => {
       expect(provider.getRecommendedModel({
         messages: [{ role: 'user', content: 'Hello' }],
         maxTokens: 200
-      })).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
+      })).toBe('@cf/zai-org/glm-5.3-flash');
 
       expect(provider.getRecommendedModel({
         messages: [{ role: 'user', content: 'Use the weather tool' }],
@@ -117,8 +126,7 @@ describe('CloudflareProvider', () => {
             parameters: { type: 'object' }
           }
         }]
-      // gpt-oss-120b (quality:6) ties llama-3.3-70b (quality:5) on TOOL_CALLING score and wins on catalog order
-      })).toBe('@cf/openai/gpt-oss-120b');
+      })).toBe('@cf/zai-org/glm-5.3-flash');
     });
   });
 

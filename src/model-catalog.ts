@@ -399,6 +399,17 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0,
     description: 'Workers AI Qwen3 30B FP8 — state-of-the-art Qwen3 for balanced/high-performance tasks'
   }, { speed: 4, quality: 5, cost: 5 }),
+  entry('cloudflare', '@cf/qwen/qwen3.8-27b', 'active', ['BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
+    maxContextLength: 262144,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: false,
+    inputTokenCost: 0.00045,
+    outputTokenCost: 0.0032,
+    description: 'Workers AI Qwen 3.8 27B — vision-language model for reasoning and multi-turn function calling with 262K context'
+  }, { speed: 4, quality: 5, cost: 3 }),
   entry('cloudflare', '@cf/meta/llama-3.2-1b-instruct', 'active', ['COST_EFFECTIVE'], {
     maxContextLength: 131072,
     supportsStreaming: true,
@@ -447,6 +458,26 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0,
     description: 'Workers AI DeepSeek V4 Pro — frontier-class reasoning and coding, near gpt-oss-120b tier'
   }, { speed: 3, quality: 6, cost: 5 }),
+  entry('cloudflare', '@cf/deepseek-ai/deepseek-v4-flash-0731', 'active', ['BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 1310720,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0.00044,
+    outputTokenCost: 0.00132,
+    description: 'Workers AI DeepSeek V4 Flash 0731 — fast hosted reasoning and agentic model; 1.31M context and function calling'
+  }, { speed: 4, quality: 6, cost: 4 }),
+  entry('cloudflare', '@cf/deepseek-ai/deepseek-v4-pro-0813', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 1048576,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0.00132,
+    outputTokenCost: 0.00396,
+    description: 'Workers AI DeepSeek V4 Pro 0813 — hosted long-horizon reasoning and agentic model; 1M context and function calling'
+  }, { speed: 3, quality: 6, cost: 3 }),
   entry('cloudflare', '@cf/tinyllama/tinyllama-1.1b-chat-v1.0', 'compatibility', ['COST_EFFECTIVE'], {
     maxContextLength: 2048,
     supportsStreaming: true,
@@ -576,6 +607,27 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.0000044,
     description: 'Workers AI GLM-5.2 — Z.ai flagship agentic coder; 262K ctx, direct-response (not CoT), function calling'
   }, { speed: 4, quality: 6, cost: 3 }),
+  entry('cloudflare', '@cf/zai-org/glm-5.3', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 1048576,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0.0014,
+    outputTokenCost: 0.0044,
+    description: 'Workers AI GLM-5.3 — flagship agentic coding model; 1M context, reasoning, function calling, and structured output'
+  }, { speed: 4, quality: 7, cost: 3 }),
+  entry('cloudflare', '@cf/zai-org/glm-5.3-flash', 'active', ['COST_EFFECTIVE', 'BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
+    maxContextLength: 1048576,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: true,
+    inputTokenCost: 0.00015,
+    outputTokenCost: 0.0005,
+    description: 'Workers AI GLM-5.3 Flash — multimodal 320B/18B-active MoE; 1M context, reasoning, function calling, and vision'
+  }, { speed: 5, quality: 6, cost: 5 }),
   entry('cloudflare', '@cf/moonshotai/kimi-k2.5', 'retired', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
     maxContextLength: 256000,
     supportsStreaming: true,

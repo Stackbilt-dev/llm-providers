@@ -186,7 +186,11 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/moonshotai/kimi-k2.6',
     '@cf/zai-org/glm-4.7-flash',
     '@cf/zai-org/glm-5.2',
+    '@cf/zai-org/glm-5.3',
+    '@cf/zai-org/glm-5.3-flash',
     'deepseek/deepseek-v4-pro',
+    '@cf/deepseek-ai/deepseek-v4-flash-0731',
+    '@cf/deepseek-ai/deepseek-v4-pro-0813',
     '@cf/tinyllama/tinyllama-1.1b-chat-v1.0',
     '@cf/qwen/qwen1.5-0.5b-chat',
     '@cf/qwen/qwen1.5-1.8b-chat',
@@ -199,6 +203,7 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/openai/gpt-oss-20b',
     '@cf/qwen/qwen2.5-coder-32b-instruct',
     '@cf/qwen/qwen3-30b-a3b-fp8',
+    '@cf/qwen/qwen3.8-27b',
     '@cf/mistralai/mistral-small-3.1-24b-instruct',
     '@cf/moonshotai/kimi-k2.7-code',
     '@cf/meta/llama-4-scout-17b-16e-instruct',
@@ -417,6 +422,27 @@ export class CloudflareProvider extends BaseProvider {
         outputTokenCost: 0.0000044,
         description: 'GLM-5.2 — Z.ai flagship agentic coder; 262K ctx, direct-response (not CoT), function calling'
       },
+      '@cf/zai-org/glm-5.3': {
+        maxContextLength: 1048576,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0.0014,
+        outputTokenCost: 0.0044,
+        description: 'GLM-5.3 — Z.ai flagship agentic coding model; 1M context, reasoning, function calling, and structured output'
+      },
+      '@cf/zai-org/glm-5.3-flash': {
+        maxContextLength: 1048576,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: true,
+        inputTokenCost: 0.00015,
+        outputTokenCost: 0.0005,
+        description: 'GLM-5.3 Flash — multimodal 320B/18B-active MoE; 1M context, reasoning, function calling, and vision'
+      },
       'deepseek/deepseek-v4-pro': {
         maxContextLength: 128000,
         supportsStreaming: true,
@@ -425,6 +451,26 @@ export class CloudflareProvider extends BaseProvider {
         inputTokenCost: 0,
         outputTokenCost: 0,
         description: 'DeepSeek V4 Pro - high-capability reasoning and coding model on Workers AI'
+      },
+      '@cf/deepseek-ai/deepseek-v4-flash-0731': {
+        maxContextLength: 1310720,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0.00044,
+        outputTokenCost: 0.00132,
+        description: 'DeepSeek V4 Flash 0731 — fast Cloudflare-hosted reasoning and agentic model with 1.31M context'
+      },
+      '@cf/deepseek-ai/deepseek-v4-pro-0813': {
+        maxContextLength: 1048576,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0.00132,
+        outputTokenCost: 0.00396,
+        description: 'DeepSeek V4 Pro 0813 — Cloudflare-hosted long-horizon reasoning and agentic model with 1M context'
       },
       '@cf/tinyllama/tinyllama-1.1b-chat-v1.0': {
         maxContextLength: 2048,
@@ -553,6 +599,17 @@ export class CloudflareProvider extends BaseProvider {
         inputTokenCost: 0,
         outputTokenCost: 0,
         description: 'Qwen3 30B FP8 — state-of-the-art Qwen3 generation'
+      },
+      '@cf/qwen/qwen3.8-27b': {
+        maxContextLength: 262144,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: false,
+        inputTokenCost: 0.00045,
+        outputTokenCost: 0.0032,
+        description: 'Qwen 3.8 27B — vision-language model for reasoning and multi-turn function calling with 262K context'
       },
       '@cf/meta/llama-3.2-1b-instruct': {
         maxContextLength: 131072,
@@ -746,7 +803,7 @@ export class CloudflareProvider extends BaseProvider {
     if (hasImages && !capabilities?.supportsVision) {
       throw new ConfigurationError(
         this.name,
-        `Model '${model}' does not support image input. Use a vision-capable model like @cf/google/gemma-4-26b-a4b-it, @cf/meta/llama-4-scout-17b-16e-instruct, or @cf/meta/llama-3.2-11b-vision-instruct.`
+        `Model '${model}' does not support image input. Use a vision-capable model like @cf/zai-org/glm-5.3-flash, @cf/qwen/qwen3.8-27b, or @cf/google/gemma-4-26b-a4b-it.`
       );
     }
 

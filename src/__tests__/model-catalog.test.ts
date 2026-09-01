@@ -444,11 +444,49 @@ describe('new CF Workers AI models (v1.16.0)', () => {
     }
   });
 
-  it('nemotron wins cloudflare LONG_CONTEXT rankings due to 256K context', () => {
+  it('prefers the current DeepSeek V4 Flash lane for Cloudflare long-context routing', () => {
     const ranked = rankModels('LONG_CONTEXT', ['cloudflare']);
-    const nemotronPos = ranked.findIndex(e => e.model === '@cf/nvidia/nemotron-3-120b-a12b');
-    expect(nemotronPos).toBeGreaterThanOrEqual(0);
-    // Nemotron should be near the top of LONG_CONTEXT due to 256K window
-    expect(nemotronPos).toBeLessThan(5);
+    expect(ranked[0]?.model).toBe('@cf/deepseek-ai/deepseek-v4-flash-0731');
+  });
+});
+
+describe('current CF Workers AI models (August 2026)', () => {
+  const CURRENT_MODELS = [
+    '@cf/deepseek-ai/deepseek-v4-flash-0731',
+    '@cf/deepseek-ai/deepseek-v4-pro-0813',
+    '@cf/qwen/qwen3.8-27b',
+    '@cf/zai-org/glm-5.3',
+    '@cf/zai-org/glm-5.3-flash',
+  ];
+
+  it('catalogues every new hosted model as active with tools and streaming', () => {
+    for (const model of CURRENT_MODELS) {
+      const entry = getCatalogEntry(model);
+      expect(entry).toBeDefined();
+      expect(entry?.provider).toBe('cloudflare');
+      expect(entry?.lifecycle).toBe('active');
+      expect(entry?.capabilities.supportsStreaming).toBe(true);
+      expect(entry?.capabilities.supportsTools).toBe(true);
+      expect(entry?.capabilities.toolCalling).toBe(true);
+    }
+  });
+
+  it('records the documented context windows and vision capabilities', () => {
+    expect(getCatalogEntry('@cf/deepseek-ai/deepseek-v4-flash-0731')?.capabilities.maxContextLength).toBe(1_310_720);
+    expect(getCatalogEntry('@cf/deepseek-ai/deepseek-v4-pro-0813')?.capabilities.maxContextLength).toBe(1_048_576);
+    expect(getCatalogEntry('@cf/zai-org/glm-5.3')?.capabilities.maxContextLength).toBe(1_048_576);
+    expect(getCatalogEntry('@cf/qwen/qwen3.8-27b')?.capabilities.supportsVision).toBe(true);
+    expect(getCatalogEntry('@cf/zai-org/glm-5.3-flash')?.capabilities.supportsVision).toBe(true);
+  });
+
+  it('uses Cloudflare token pricing in cost-per-1K units', () => {
+    expect(getCatalogEntry('@cf/zai-org/glm-5.3')?.capabilities).toMatchObject({
+      inputTokenCost: 0.0014,
+      outputTokenCost: 0.0044,
+    });
+    expect(getCatalogEntry('@cf/zai-org/glm-5.3-flash')?.capabilities).toMatchObject({
+      inputTokenCost: 0.00015,
+      outputTokenCost: 0.0005,
+    });
   });
 });
