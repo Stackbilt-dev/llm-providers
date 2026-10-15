@@ -10,22 +10,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
   - Workers AI: `@cf/meta/llama-3.1-8b-instruct-fp8`, `@cf/ibm-granite/granite-4.0-h-micro`, `@cf/aisingapore/gemma-sea-lion-v4-27b-it`.
   - OpenAI: `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`.
   - Anthropic: `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`.
-- `ModelCatalogEntry.explicitOnly` (optional): the model is served when a request names it, but recommendations and automatic routing skip it. The new OpenAI and Anthropic models and SEA-LION are explicit-only, so default routing does not change in this release.
+- `ModelCatalogEntry.explicitOnly` (optional): the model is served when a request names it, but recommendations and automatic routing skip it. The new OpenAI and Anthropic models and SEA-LION are explicit-only, so OpenAI and Anthropic defaults do not change in this release.
 - `MODELS` constants for the new models and for current Workers AI models (`CF_GLM_5_3`, `CF_GLM_5_3_FLASH`, `CF_KIMI_K2_6`, `CF_DEEPSEEK_V4_PRO`, `CF_DEEPSEEK_V4_FLASH`, `CF_GPT_OSS_120B`, `CF_GPT_OSS_20B`, `CF_GEMMA_4_26B`, `CF_QWEN_3_8_27B`, `CF_LLAMA_3_3_70B_FAST`, `CF_LLAMA_3_1_8B_FP8`, `CF_GRANITE_4_MICRO`).
 
 ### Changed
 - The package is documented as a Cloudflare-first router. A test requires a Workers AI model to rank first for every use case when all providers are configured and healthy (no health, ledger or request context).
 - Workers AI models that Cloudflare deprecated are now `retired` in the catalog and are no longer auto-routed: Llama 3.1 8B / 70B, Llama 3 8B, Llama 2 7B int8, Phi-2 and Mistral 7B v0.1 (2026-05-30), OpenChat 3.5, TinyLlama and the four Qwen 1.5 models (2025-10-01). The adapter still accepts them by name. Their `MODELS` constants are marked `@deprecated`.
 - `gpt-4`, `gpt-4-turbo` and `gpt-3.5-turbo` (OpenAI shutdown 2026-10-23) and the invalid `gpt-3.5-turbo-16k` are `retired` in the catalog and no longer auto-routed. The adapter still accepts them by name.
-- `gpt-4o-mini` stays the OpenAI default; responses from it now carry a deprecation warning for its 2027-01-14 shutdown.
+- `gpt-4o-mini` stays the OpenAI default. `getRoutingInfo()` reports its 2027-01-14 shutdown in `deprecationWarning`; response metadata does not, because the model is still `active`.
 - Claude Opus 4.6, Sonnet 4.6 and Haiku 4.5 stay the Anthropic defaults; their descriptions note that Anthropic lists them as legacy.
+- Routing changes from the corrected data:
+  - Cloudflare long-context requests (and `getProviderDefaultModel('cloudflare', ...)` for long requests) now pick `@cf/zai-org/glm-5.3-flash` instead of `@cf/deepseek-ai/deepseek-v4-flash-0731`, because DeepSeek V4 Flash's context window was corrected from 1.31M to 1.05M tokens and long-context scoring weighs context size.
+  - `@cf/meta/llama-3.1-8b-instruct-fp8` and `@cf/ibm-granite/granite-4.0-h-micro` join the recommendation lists and fallback pools; neither ranks first for any use case.
+  - OpenAI's fallback pool shrinks to `gpt-4o-mini` now that `gpt-4`, `gpt-4-turbo` and `gpt-3.5-turbo` are retired.
+- OpenAI responses that name a dated snapshot are now priced by their alias. This includes the default `gpt-4o-mini`, whose responses name `gpt-4o-mini-2024-07-18` and were recorded at $0 cost in 1.22; ledgers, budgets and cost tracking will now show real spend for it.
+- `@cf/qwen/qwen2.5-coder-32b-instruct` requests that include tools now throw a `ConfigurationError` before any call, because the catalog no longer claims function calling for it (see Fixed).
 - OpenAI requests to reasoning models (GPT-5 and later, o-series) send `max_completion_tokens` instead of `max_tokens` and omit `temperature`. `max_completion_tokens` also covers reasoning tokens, so a small `maxTokens` can leave no room for the answer. Only requests that name one of these models are affected.
 - Anthropic requests to Claude 5.x models omit `temperature` (non-default values return 400) and default to `max_tokens: 16000` when the request sets none, because these models think by default and thinking counts against `max_tokens`. Preflight cost estimates use the same default.
 - Anthropic forced tool choice (`toolChoice: 'required'` or a named function) on Fable 5.1, Opus 5.5 and Sonnet 5.5 now throws a `ConfigurationError` before any API call; those models return 400 for it. Use `toolChoice: 'auto'`. Haiku 5.5 and earlier models still accept it.
 
 ### Fixed
 - Anthropic JSON mode no longer sends an assistant prefill to Claude Opus 4.6, Sonnet 4.6 or the 5.x models, which reject prefill with a 400. This affected the 1.22 default for JSON requests (`claude-sonnet-4-6`). These models rely on the JSON system instruction; Haiku 4.5 still uses the prefill.
-- OpenAI cost was $0 when a response named a dated snapshot (for example `gpt-5.5-2026-04-23`); unknown snapshot IDs are now priced by their alias. Prompts over 272K tokens on the new 1M-context models are billed at 2x input and 1.5x output.
+- Streaming JSON mode on models that are prefilled (Haiku 4.5) now restores the opening `{` on the first text chunk, as non-streaming responses already did.
+- OpenAI cost was $0 when a response named a dated snapshot (for example `gpt-4o-mini-2024-07-18` or `gpt-5.5-2026-04-23`); IDs with a date suffix are now priced by their alias. Snapshot IDs without a date suffix (for example `gpt-3.5-turbo-0125`) are still not priced. Prompts over 272K tokens on the new 1M-context models are billed at 2x input and 1.5x output.
 - Claude Opus 4.8 through the AI Gateway unified catalog no longer receives `temperature` or `top_p`, which Claude 4.7 and later reject.
 - Workers AI context windows: Llama 3.3 70B FP8 Fast 24,000 (was 131,072), Llama 3.2 1B 60,000, Llama 3.2 3B 80,000, Qwen3 30B 32,768, Kimi K2.6 and K2.7 Code 262,144, DeepSeek V4 Flash 1,048,576 (was 1,310,720). Kimi K2.7 Code supports vision.
 - `@cf/qwen/qwen2.5-coder-32b-instruct` no longer claims function calling; Cloudflare's model page does not list it.
@@ -33,8 +40,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 - Anthropic cache reads use per-model rates (Fable 5.1 2.5%, Opus 5.5 and Sonnet 5.5 5% of input), and Haiku 5.5 prompts over 100K tokens, cache included, are billed at the 5x long-prompt rate.
 
 ### Known limitations
-- Claude 5.x thinking blocks are not passed back with tool results, which Anthropic requires for multi-turn tool use. This is why the 5.x models are explicit-only.
+- Claude 5.x thinking blocks are not passed back with tool results, which Anthropic requires for multi-turn tool use. This is why the 5.x models are explicit-only. The adapter also sends `tool_result` blocks without `tool_use_id`, which likely breaks multi-turn tool use on every Claude model (#124).
 - `gpt-6-luna` and `gpt-6.1-sol` are not supported yet (tool-calling restrictions on Chat Completions).
+- The 16,000-token `max_tokens` default for Claude 5.x does not change the 30-second default `timeout`, which covers the whole non-streaming response. Long thinking responses from Fable 5.1 or Opus 5.5 can exceed it; set a larger `timeout` on the Anthropic provider config or use streaming.
 
 ## [1.22.1] — 2026-10-15
 

@@ -15,7 +15,7 @@ import { OpenAIProvider, isOpenAIReasoningModel } from '../providers/openai';
 import {
   getCatalogEntry, getRoutingInfo, MODEL_RECOMMENDATIONS, rankModels, type ModelRecommendationUseCase,
 } from '../model-catalog';
-import { MODELS } from '../index';
+import { LLMProviders, MODELS } from '../index';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import type { LLMRequest } from '../types';
 
@@ -362,6 +362,119 @@ describe('Anthropic models', () => {
     // 60K input + 50K cache read: 110K prompt, so $0.50/$2.50 and $0.05 cache reads
     expect(await cost({ input_tokens: 60_000, output_tokens: 1_000, cache_read_input_tokens: 50_000 }))
       .toBeCloseTo(0.03 + 0.0025 + 0.0025, 8);
+  });
+});
+
+function sse(text: string) {
+  const bytes = new TextEncoder().encode(text);
+  return new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } });
+}
+async function readAll(stream: ReadableStream<string>): Promise<string> {
+  const reader = stream.getReader();
+  let out = '';
+  for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) out += chunk.value;
+  return out;
+}
+function anthropicStream(chunks: string[]): string {
+  const events = [
+    { type: 'message_start', message: { usage: { input_tokens: 1, output_tokens: 0 } } },
+    ...chunks.map(text => ({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })),
+    { type: 'message_delta', usage: { output_tokens: 1 } },
+    { type: 'message_stop' },
+  ];
+  return events.map(event => `data:${JSON.stringify(event)}\n\n`).join('');
+}
+
+describe('Anthropic JSON mode streaming', () => {
+  it('restores the prefilled brace on the first streamed text for Claude Haiku 4.5', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, body: sse(anthropicStream(['"a"', ':1}'])) });
+    vi.stubGlobal('fetch', fetchMock);
+    const stream = await new AnthropicProvider({ apiKey: 'k', maxRetries: 0 }).streamResponse({
+      ...request, model: 'claude-haiku-4-5-20251001', response_format: { type: 'json_object' } });
+    expect(await readAll(stream)).toBe('{"a":1}');
+    const messages = sentBody(fetchMock).messages as Array<{ role: string }>;
+    expect(messages[messages.length - 1].role).toBe('assistant');
+  });
+
+  it('streams text unchanged on models that are not prefilled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, body: sse(anthropicStream(['Result: ', '{"a":1}'])) });
+    vi.stubGlobal('fetch', fetchMock);
+    const stream = await new AnthropicProvider({ apiKey: 'k', maxRetries: 0 }).streamResponse({
+      ...request, model: 'claude-sonnet-4-6', response_format: { type: 'json_object' } });
+    expect(await readAll(stream)).toBe('Result: {"a":1}');
+  });
+});
+
+describe('explicit-only models through the factory', () => {
+  const tools: LLMRequest['tools'] = [
+    { type: 'function', function: { name: 'lookup', description: 'Lookup', parameters: { type: 'object' } } }];
+
+  function factory(run = vi.fn().mockResolvedValue({ response: 'ok', usage: { prompt_tokens: 1, completion_tokens: 1 } })) {
+    const llm = new LLMProviders({
+      anthropic: { apiKey: 'k', maxRetries: 0 }, openai: { apiKey: 'k', maxRetries: 0 },
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 }, stateScope: 'client',
+    });
+    return { llm, run };
+  }
+
+  it.each([
+    ['claude-opus-5-5', 'anthropic'],
+    ['gpt-5.5', 'openai'],
+  ])('serves a named %s through %s', async (model, provider) => {
+    const fetchMock = vi.fn().mockResolvedValue(provider === 'anthropic' ? anthropicReply(model) : openaiReply(model));
+    vi.stubGlobal('fetch', fetchMock);
+    const { llm, run } = factory();
+    const response = await llm.generateResponse({ ...request, model });
+    expect(response.provider).toBe(provider);
+    expect(sentBody(fetchMock).model).toBe(model);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('serves a named SEA-LION request through Workers AI', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const { llm, run } = factory();
+    const response = await llm.generateResponse({ ...request, model: '@cf/aisingapore/gemma-sea-lion-v4-27b-it' });
+    expect(response.provider).toBe('cloudflare');
+    expect(run.mock.calls[0][0]).toBe('@cf/aisingapore/gemma-sea-lion-v4-27b-it');
+  });
+
+  it.each(['anthropic', 'openai'] as const)('never picks an explicit-only %s model for an unnamed request', async provider => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
+      const model = JSON.parse(init.body).model as string;
+      return provider === 'anthropic' ? anthropicReply(model) : openaiReply(model);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const llm = new LLMProviders({ [provider]: { apiKey: 'k', maxRetries: 0 }, stateScope: 'client' });
+    await llm.generateResponse(request);
+    const model = sentBody(fetchMock).model as string;
+    expect(getCatalogEntry(model)?.provider).toBe(provider);
+    expect(getCatalogEntry(model)?.explicitOnly).toBeUndefined();
+  });
+
+  it.each(['generateResponse', 'generateResponseStream'] as const)(
+    'rejects forced tool choice on claude-sonnet-5-5 via %s without calling any provider', async method => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const { llm, run } = factory();
+      await expect(llm[method]({ ...request, model: 'claude-sonnet-5-5', tools, toolChoice: 'required' }))
+        .rejects.toThrow(/does not support forced tool choice/);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+    });
+
+  it('allows toolChoice none on claude-sonnet-5-5 and sends no tools', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(anthropicReply('claude-sonnet-5-5'));
+    vi.stubGlobal('fetch', fetchMock);
+    const { llm } = factory();
+    await llm.generateResponse({ ...request, model: 'claude-sonnet-5-5', tools, toolChoice: 'none' });
+    expect(sentBody(fetchMock)).not.toHaveProperty('tools');
+    expect(sentBody(fetchMock)).not.toHaveProperty('tool_choice');
+  });
+
+  it('prices the default gpt-4o-mini by its dated snapshot (was $0 in 1.22)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openaiReply('gpt-4o-mini-2024-07-18', 1000, 1000)));
+    const response = await new OpenAIProvider({ apiKey: 'k', maxRetries: 0 }).generateResponse({ ...request, model: 'gpt-4o-mini' });
+    expect(response.usage.cost).toBeCloseTo(0.00015 + 0.0006, 8);
   });
 });
 

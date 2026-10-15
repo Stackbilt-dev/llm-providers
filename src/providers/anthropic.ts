@@ -752,6 +752,8 @@ export class AnthropicProvider extends BaseProvider {
 
     const anthropicRequest = { ...this.formatRequest(request), stream: true };
     const model = anthropicRequest.model;
+    // JSON mode prefilled '{' on this model: restore it on the first text, as generateResponse does.
+    let restoreBrace = request.response_format?.type === 'json_object' && usesJsonPrefill(model);
     let sawUsage = false;
     let inputTokens = 0;
     let outputTokens = 0;
@@ -853,6 +855,10 @@ export class AnthropicProvider extends BaseProvider {
           throw new SchemaDriftError('anthropic', 'content_block_delta.delta.text', 'string', actual);
         }
 
+        if (restoreBrace) {
+          restoreBrace = false;
+          if (!text.startsWith('{')) return { text: '{' + text };
+        }
         return { text };
       },
       usage: currentUsage,
