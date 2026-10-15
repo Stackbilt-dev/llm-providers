@@ -8,6 +8,7 @@
 
 import type { Logger } from './logger.js';
 import { noopLogger } from './logger.js';
+import { resolveModelId } from '../model-catalog.js';
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -224,6 +225,8 @@ export class CreditLedger {
   // ─── Core recording ─────────────────────────────────────
 
   record(provider: string, model: string, cost: number, inputTokens: number, outputTokens: number): void {
+    // Spend and per-model budgets share the vendor wire ID, including for corrected legacy IDs (#112).
+    model = resolveModelId(model);
     const now = Date.now();
     const acc = this.getOrCreateProvider(provider);
     const totalTokens = inputTokens + outputTokens;
@@ -317,6 +320,7 @@ export class CreditLedger {
   // ─── Budget management ──────────────────────────────────
 
   setBudget(config: BudgetConfig): void {
+    if (config.model) config = { ...config, model: resolveModelId(config.model) };
     // Remove existing budget for this provider/model combo
     this.budgets = this.budgets.filter(b =>
       !(b.provider === config.provider && b.model === config.model)
@@ -344,6 +348,7 @@ export class CreditLedger {
   }
 
   removeBudget(provider: string, model?: string): void {
+    if (model) model = resolveModelId(model);
     this.budgets = this.budgets.filter(b =>
       !(b.provider === provider && b.model === model)
     );
@@ -356,6 +361,7 @@ export class CreditLedger {
   // ─── Queries ────────────────────────────────────────────
 
   remainingBalance(provider: string, model?: string): number | null {
+    if (model) model = resolveModelId(model);
     const acc = this.providers.get(provider);
     if (!acc) return null;
 
@@ -372,6 +378,7 @@ export class CreditLedger {
   }
 
   utilizationPct(provider: string, model?: string): number {
+    if (model) model = resolveModelId(model);
     const acc = this.providers.get(provider);
     if (!acc) return 0;
 
@@ -391,6 +398,7 @@ export class CreditLedger {
   }
 
   getModelAccumulator(provider: string, model: string): ModelAccumulator | undefined {
+    model = resolveModelId(model);
     return this.providers.get(provider)?.models[model];
   }
 

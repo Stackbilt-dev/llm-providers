@@ -759,7 +759,7 @@ export class AnthropicProvider extends BaseProvider {
       usage: currentUsage,
       onError: error => {
         if (error instanceof SchemaDriftError) this.config.hooks?.onSchemaDrift?.({
-          provider: this.name, model: request.model, requestId: request.requestId,
+          provider: this.name, model, requestId: request.requestId,
           path: error.path, expected: error.expected, actual: error.actual, timestamp: Date.now(),
         });
       },

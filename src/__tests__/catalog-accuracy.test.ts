@@ -13,6 +13,8 @@ import { getCatalogEntry, getRecommendedModel, getRoutingInfo, MODEL_CATALOG, ty
 import { getGatewayRoutePlan } from '../gateway-routing';
 import { LLMProviders, MODELS } from '../index';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
+import { CreditLedger } from '../utils/credit-ledger';
+import { SchemaDriftError } from '../errors';
 import { getStreamUsage } from '../utils/stream-usage';
 import type { LLMRequest } from '../types';
 
@@ -131,6 +133,26 @@ describe('previously published Anthropic IDs outside the adapter', () => {
     expect(generate.mock.calls[0][0].model).toBe('claude-opus-4-6');
     await vi.waitFor(() => expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-opus-4-6' })));
     expect(llm.getRoutingInfo({ ...request, model: 'claude-opus-4-6-20250618' }).model).toBe('claude-opus-4-6');
+  });
+});
+
+describe('previously published IDs in ledgers and telemetry', () => {
+  it('a per-model budget keyed by an old ID tracks spend recorded under the real ID', () => {
+    const ledger = new CreditLedger({ budgets: [{ provider: 'anthropic', model: 'claude-opus-4-6-20250618', monthlyBudget: 1 }] });
+    ledger.record('anthropic', 'claude-opus-4-6', 0.25, 10, 10);
+    ledger.record('anthropic', 'claude-opus-4-6-20250618', 0.25, 10, 10);
+    expect(ledger.utilizationPct('anthropic', 'claude-opus-4-6')).toBeCloseTo(0.5, 6);
+    expect(ledger.remainingBalance('anthropic', 'claude-opus-4-6-20250618')).toBeCloseTo(0.5, 6);
+    expect(ledger.getModelAccumulator('anthropic', 'claude-opus-4-6-20250618')?.spend).toBeCloseTo(0.5, 6);
+  });
+
+  it('schema-drift telemetry from a direct adapter reports the real ID', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: sse('data:{broken}\n\n') }));
+    const onSchemaDrift = vi.fn();
+    const provider = new AnthropicProvider({ apiKey: 'k', maxRetries: 0, hooks: { onSchemaDrift } });
+    const stream = await provider.streamResponse({ ...request, model: 'claude-opus-4-6-20250618' });
+    await expect(drain(stream)).rejects.toBeInstanceOf(SchemaDriftError);
+    expect(onSchemaDrift).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-opus-4-6' }));
   });
 });
 
