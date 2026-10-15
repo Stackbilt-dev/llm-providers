@@ -1,5 +1,7 @@
 # @stackbilt/llm-providers
 
+Development status and resume notes: [issue sweep checkpoint](docs/maintenance/issue-sweep.md). The checkpoint identifies APIs and fixes that are still unreleased.
+
 A multi-provider LLM abstraction layer with automatic failover, graduated circuit breakers, cost tracking, and intelligent retry. Built for Cloudflare Workers but runs anywhere with a standard `fetch` API. Extracted from a production orchestration platform handling 80K+ LOC across multiple services.
 
 ## Features
@@ -99,6 +101,10 @@ The canonical request is capability-oriented rather than vendor-oriented:
 Existing `LLMRequest` fields are still supported as compatibility input. `normalizeLLMRequest()` maps legacy aliases such as `response_format`, `toolChoice`, `images`, `lora`, `topP`, `frequencyPenalty`, `reasoning`, and `prediction` into the canonical shape. `canonicalToLLMRequest()` converts canonical requests back into the existing adapter input while providers migrate internally.
 
 `normalizeLLMResponse()` provides a stable canonical response shape with normalized routing metadata (`selectedProvider`, `selectedModel`, fallback chain, and capability degradations) while preserving raw provider extras under `metadata`.
+
+Use `normalizeCanonicalRequest()` when the input is canonical, especially when it contains only `messages` and `metadata`. Use `normalizeLegacyRequest()` when converting `LLMRequest`. The compatibility helper `normalizeLLMRequest()` detects canonical input from canonical-specific fields; ambiguous shapes default to legacy, so nested identity in a metadata-only canonical request requires the explicit canonical boundary. Legacy system messages are joined in order with blank lines; an explicit `systemPrompt` takes precedence. Canonical conversion remains a compatibility helper: it does not enforce every canonical requirement at execution.
+
+`llm.getRoutingInfo(request)` uses the client's dispatch planner and current provider admission state. It resolves shared model IDs against configured hosts and throws `NoRouteError` when no route is available. The exported catalog-level `getRoutingInfo(request, availableProviders)` also respects configured hosts for pinned models. These are preflight snapshots; health, quota and capacity can change before dispatch. Full hard-requirement enforcement across every fallback remains future work.
 
 ### Image Analysis Observability
 
@@ -280,7 +286,13 @@ console.log(breaker.getHealth());
 
 ### Workers State Persistence
 
+For independent clients in the same process or Worker isolate, set `stateScope: 'client'`. This isolates breakers, provider exhaustion, cost analytics and latency history. Alternatively, allocate a `ResilienceContext` and pass it as `resilienceContext` to clients or direct providers that intentionally share one account's health. Use application-defined account identifiers to choose contexts; keep credentials out of identifiers and logs. The global default remains for compatibility. Resetting a shared context affects its participating clients.
+
+`enableCircuitBreaker: false` bypasses admission and health recording in adapters as well as factory prechecks. Non-streaming retry precedence remains compatible: an explicit provider `maxRetries` wins; otherwise `enableRetries: false` sets it to zero. To guarantee no retries, set `maxRetries: 0` on each provider. Breaker failures exclude authentication, invalid input, content policy, configuration and quota errors. Concurrent successes and failures settle in completion order; each success reduces accumulated consecutive failures by one. Rejected requests do not reset the recovery clock.
+
 The default circuit breaker manager, exhaustion registry, and `CreditLedger` keep state in memory. In Cloudflare Workers that state is per isolate and can reset between requests. Persist snapshots to KV, D1, Redis, Durable Objects, or another store when you need circuit state, quota exhaustion, or budget spend to survive across invocations.
+
+The KV example below illustrates approximate snapshot persistence, not atomic budget admission. Concurrent restore/write operations can overwrite newer history. Do not use it to enforce tenant spend or reserve in-flight requests; an atomic coordinator is still outstanding in [#109](https://github.com/Stackbilt-dev/llm-providers/issues/109). `CreditLedger` tracks spend and influences routing; configured monetary budgets do not guarantee a hard cap.
 
 ```typescript
 import {
@@ -346,7 +358,7 @@ const llm = new LLMProviders({
   openai: { apiKey: '...' },
   anthropic: { apiKey: '...' },
   costOptimization: true,
-  ledger, // Factory enforces rate limits and tracks spend
+  ledger, // Completed-use rate counters, spend analytics and routing signals
 });
 ```
 
@@ -461,9 +473,12 @@ const plan = getGatewayRoutePlan({
 }, ['cloudflare', 'groq', 'anthropic']);
 
 console.log(plan.selectedProvider, plan.selectedModel, plan.degradations);
+if (!plan.executable) throw new Error('Required capability is unavailable');
 ```
 
 The route plan intentionally does not read or write a cache. A Worker should map `plan.cache` onto its own storage implementation, such as KV, Cache API, D1, or R2. Provider prompt-cache hints and response-cache hints stay separate so gateways can decide which storage tier owns each policy.
+
+The plan is diagnostic: `executable: false` marks a failed required-capability check, including built-in-tool mismatches on a configured pinned host. A true value does not guarantee native JSON-schema support or complete execution-time requirement enforcement. For metadata-only canonical requests, call `getGatewayRoutePlan(normalizeCanonicalRequest(request), providers)` to preserve identity. Use `llm.getRoutingInfo()` for the actual client's planner/admission snapshot; catalog diagnostics do not have the client's complete configuration.
 
 When `lora` is present, the route plan warns that the adapter id is forwarded to Workers AI without validation. If routing selects a non-Cloudflare provider, the plan reports a `lora` degradation so the gateway can fail, reroute, or explain the downgrade before dispatch.
 
@@ -551,7 +566,20 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 
 ## Factory-Level Streaming
 
-`generateResponseStream` uses the same provider-selection, circuit-breaker, and exhaustion-registry path as `generateResponse`. Pre-stream HTTP errors (401, 429, 503, circuit open) fall over to the next provider before emitting the first chunk. After the stream drains, the factory records attached usage to cost tracking, quota hooks, and request-end hooks.
+Factory streaming can fail over before the first text chunk on eligible provider failures. Authentication and configuration errors stop the request. After output begins, errors propagate to the caller without splicing another provider's answer into the stream.
+
+All adapters decode byte SSE incrementally and read in response to consumer demand. Cancellation cancels the upstream reader and aborts HTTP fetches, including requests still waiting for headers. Workers AI binding calls do not expose an abort signal; if cancelled before the binding returns, the returned reader is cancelled as soon as it becomes available. Provider `timeout` covers the streaming body as well as opening the stream. Provider-level pre-output retries and a Workers runtime concurrency gate remain follow-up work.
+
+Use the managed result when the request lifetime must include final accounting:
+
+```typescript
+const { stream, completion } = await llm.generateManagedResponseStream(request);
+ctx.waitUntil(completion);
+await stream.pipeTo(new WritableStream({ write: text => console.log(text) }));
+const result = await completion; // { outcome, emittedChars, usage }
+```
+
+Do not await `completion` before consuming or cancelling the stream. Reported partial usage survives errors and cancellation; otherwise factory accounting retains the preflight cost estimate and marks it estimated. Quota recording is awaited. Settlement failures reject `completion` and the stream without issuing another provider request. `onRequestEnd` includes the terminal `outcome` for managed streaming; cancellation leaves breaker health unchanged.
 
 ```typescript
 const stream = await llm.generateResponseStream({
@@ -700,10 +728,10 @@ console.log(response.cache?.aiGateway?.status);      // HIT / MISS when the bind
 
 | Strategy | Behavior |
 |----------|----------|
-| `'off'` | No caching hints sent |
-| `'provider-prefix'` | Mark stable prefix for provider-side caching |
-| `'response'` | Enable AI Gateway response caching (via `GatewayMetadata`) |
-| `'both'` | Both prefix and response caching |
+| `'off'` | No cache opt-in hints; bypass factory response-cache reads/writes |
+| `'provider-prefix'` | Provider prefix hints; bypass factory response caching |
+| `'response'` | Factory response caching when an adapter exists; AI Gateway controls remain in `GatewayMetadata` |
+| `'both'` | Provider prefix hints plus response policy; layers remain separately configured |
 
 ### Cache Observability and Cold/Warm Canaries
 
@@ -713,12 +741,19 @@ Every `LLMResponse` can carry `response.cache`, and factory-managed calls also p
 const llm = new LLMProviderFactory({
   cloudflare: { ai: env.AI, gateway: { id: 'default' } },
   responseCache: kvBackedResponseCache,
+  responseCacheNamespace: 'my-app:v1',
   hooks: {
     onCache: event => console.log(event.layer, event.status, event.cache),
     onRequestEnd: event => console.log(event.cache),
   },
 });
 ```
+
+Factory response caching is opt-in through `responseCache`. Keys are versioned SHA-256 hashes of the semantic request, including tenant, system instructions, tools, images, sampling, metadata, provider transport options, and routing policy. Set `responseCacheNamespace` to separate applications, AI bindings, and policy revisions sharing a store. Custom `cache.key` values remain scoped by tenant and namespace. Version 2 keys ignore older entries, so the first requests after upgrading will miss the cache.
+
+`cache.strategy: 'off'` and `'provider-prefix'` bypass factory reads and writes; `'response'` and `'both'` enable them when an adapter is configured. Without a strategy, the configured adapter retains its default behavior. Circular or non-JSON metadata bypasses response caching. Request IDs and gateway tracing/cache controls are excluded from identity; custom gateway metadata is included conservatively.
+
+Cache hits retain original provider usage for historical context and set `cache.factory.usageKind: 'historical'` and `currentChargeUsd: 0`. They do not record a new provider charge. `quotaHook.check` gates cached access too, with estimated new spend of zero. A local denial throws `QuotaDeniedError` and stops the request without fallback or provider exhaustion. `quotaFailPolicy` still controls quota-service failures. `CreditLedger` remains local spend analytics and a routing signal; these checks do not reserve concurrent spend or enforce a hard budget.
 
 Use separate canaries for the two Cloudflare cache layers:
 
@@ -812,6 +847,8 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `GroqProvider` | Groq fast inference (streaming, tools on GPT-OSS/LLaMA 3.3 70B; server-side built-in tools on Compound systems and GPT-OSS) |
 | `NvidiaProvider` | NVIDIA NIM inference (streaming, tools on Llama/Nemotron/Mistral) |
 | `BaseProvider` | Abstract base with shared resiliency, metrics, and cost calculation |
+| `QuotaDeniedError` | Terminal local-policy denial; no fallback or provider exhaustion |
+| `NoRouteError` | No configured route available; a nonretryable configuration error |
 
 ### Utilities
 
@@ -819,6 +856,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 |----------------|-------------|
 | `CircuitBreaker` | Graduated 4-state circuit breaker with probabilistic degradation |
 | `CircuitBreakerManager` | Manages and serializes circuit breakers across multiple providers |
+| `ResilienceContext` | Explicitly owned/shared breakers, exhaustion, latency and factory cost analytics |
 | `RetryManager` | Exponential backoff retry with jitter |
 | `CostTracker` | Per-provider cost accumulation and budget alerts |
 | `CreditLedger` | Monthly budgets, rate limits, burn rate projection, threshold events |
@@ -855,12 +893,14 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `ToolLoopOptions` | Loop config: maxIterations, maxCostUSD, onIteration, abortSignal |
 | `ToolLoopAbortSignal` | `{ abort: true; reason?: string }` — return from `onIteration` to stop the loop and throw `ToolLoopAbortedError` |
 | `RoutingInfo` | Pre-flight routing snapshot: useCase, provider, model, estimatedInputTokens, lifecycle, deprecationWarning |
+| `ManagedTextStream` / `StreamCompletion` | Text stream plus awaited terminal accounting; outcome, emitted characters and usage |
+| `GatewayRoutePlan` | Gateway diagnostics and cache/capability reports; `executable: false` marks failed capability checks |
 | `ModelWorkloadClass` | Gateway-friendly workload class: `summary`, `planning`, `code_draft`, `long_context`, `tool_loop`, `vision`, `research`, `cost_effective`, `balanced`, `high_performance` |
 | `ModelPreferenceMap` | Optional provider+workload override map for workload-aware recommendation APIs |
 | `CircuitBreakerSnapshot` / `CircuitBreakerManagerSnapshot` | Serializable reliability state for external persistence |
 | `CanaryReport` | Schema canary result: provider, status ('ok'|'drift'), diff |
 | `ShapeMap` | Flat `path → JSON-type` map produced by `extractShape` |
-| `ProviderFactoryConfig` | Factory config: provider configs, fallback rules, ledger, logger |
+| `ProviderFactoryConfig` | Provider/routing settings, ledger, hooks, response cache/namespace, `stateScope` and shared context |
 | `CostAnalytics` | Cost breakdown, total, and recommendations |
 | `ProviderHealthEntry` | Health status, metrics, circuit breaker state, capabilities |
 | `ModelCatalogEntry` | Declarative model metadata: provider, lifecycle, capabilities, use cases |
@@ -874,6 +914,10 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `LLMProviders.fromEnv(env)` | Auto-discover providers from environment variables |
 | `llm.generateResponse(request)` | Generate a response with provider selection and fallback |
 | `llm.generateResponseStream(request)` | Streaming generation; fallback chain active before first chunk |
+| `llm.generateManagedResponseStream(request)` | String stream and a completion promise covering terminal accounting |
+| `llm.getRoutingInfo(request)` | Preflight snapshot from the client's actual planner and admission state |
+| `normalizeCanonicalRequest(request)` | Explicit canonical input normalization, including metadata-only identity |
+| `normalizeLegacyRequest(request)` | Explicit conversion of legacy input; nested metadata remains custom data |
 | `llm.generateResponseWithTools(request, executor, opts?)` | Managed tool-use loop with caps and abort-signal support |
 | `llm.getRecommendedModel(request, useCase?)` | Runtime recommendation using configured providers, health, and ledger state |
 | `getRecommendedModel(useCase, providers, context?)` | Pick the best active model for a use case |

@@ -43,6 +43,13 @@ export class QuotaExceededError extends LLMProviderError {
   }
 }
 
+/** Local policy denial; never retry, fail over, or quarantine a provider. */
+export class QuotaDeniedError extends LLMProviderError {
+  constructor(provider: string, message: string = 'Local quota policy denied request') {
+    super(message, 'QUOTA_DENIED', provider, false, 403);
+  }
+}
+
 export class AuthenticationError extends LLMProviderError {
   constructor(provider: string, message: string = 'Authentication failed') {
     super(message, 'AUTHENTICATION_ERROR', provider, false, 401);
@@ -94,6 +101,13 @@ export class TokenLimitError extends LLMProviderError {
 export class ConfigurationError extends LLMProviderError {
   constructor(provider: string, message: string) {
     super(message, 'CONFIGURATION_ERROR', provider, false);
+  }
+}
+
+export class NoRouteError extends ConfigurationError {
+  constructor(message: string = 'No configured provider can serve this request') {
+    super('factory', message);
+    this.code = 'NO_ROUTE';
   }
 }
 

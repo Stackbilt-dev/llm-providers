@@ -39,6 +39,7 @@ export interface RequestEndEvent {
   durationMs: number;
   usage: TokenUsage;
   finishReason?: string;
+  outcome?: 'success' | 'error' | 'cancelled';
   cache?: CacheObservability;
   timestamp: number;
 }

@@ -6,7 +6,7 @@
 import type { CircuitBreakerConfig, CircuitBreakerState } from '../types.js';
 import type { Logger } from './logger.js';
 import { noopLogger } from './logger.js';
-import { CircuitBreakerOpenError } from '../errors.js';
+import { CircuitBreakerOpenError, LLMProviderError } from '../errors.js';
 
 const DEFAULT_DEGRADATION_CURVE = [1.0, 0.9, 0.7, 0.4, 0.1];
 
@@ -103,9 +103,21 @@ export class CircuitBreaker {
    * Rejected requests throw CircuitBreakerOpenError so callers can route elsewhere.
    */
   async exec<T>(fn: () => Promise<T>): Promise<T> {
+    const execution = this.beginExecution();
+    try {
+      const result = await fn();
+      execution.success();
+      return result;
+    } catch (error) {
+      execution.failure(error);
+      throw error;
+    }
+  }
+
+  /** Admit once, then settle when a streamed operation actually terminates. */
+  beginExecution(): { success(): void; failure(error: unknown): void; cancel(): void } {
     const now = Date.now();
     this.syncState(now);
-    this.markTraffic(now);
 
     const primaryPct = this.currentPrimaryTrafficPct();
     if (primaryPct <= 0) {
@@ -119,14 +131,21 @@ export class CircuitBreaker {
       throw new CircuitBreakerOpenError(this.name, 0, this.consecutiveFailures);
     }
 
-    try {
-      const result = await fn();
-      this.onSuccess();
-      return result;
-    } catch (error) {
-      this.onFailure();
-      throw error;
-    }
+    this.markTraffic(now);
+    let settled = false;
+    return {
+      success: () => { if (!settled) { settled = true; this.onSuccess(); } },
+      failure: error => {
+        if (settled) return;
+        settled = true;
+        if (!(error instanceof LLMProviderError) || ![
+          'AUTHENTICATION_ERROR', 'INVALID_REQUEST', 'CONTENT_FILTER', 'TOKEN_LIMIT',
+          'MODEL_NOT_FOUND', 'CONFIGURATION_ERROR', 'QUOTA_DENIED', 'QUOTA_EXCEEDED',
+          'TOOL_LOOP_ABORTED', 'TOOL_LOOP_LIMIT',
+        ].includes(error.code)) this.onFailure();
+      },
+      cancel: () => { settled = true; },
+    };
   }
 
   /**
@@ -137,31 +156,18 @@ export class CircuitBreaker {
     primary: () => Promise<T>,
     fallback: () => Promise<T>
   ): Promise<T> {
-    const now = Date.now();
-    this.syncState(now);
-    this.markTraffic(now);
-
-    const primaryPct = this.currentPrimaryTrafficPct();
-    if (primaryPct <= 0) {
-      this.logger.info(
-        `[CircuitBreaker] ${this.name}: fully degraded (${this.consecutiveFailures} failures), using fallback`
-      );
-      return fallback();
+    let execution: ReturnType<CircuitBreaker['beginExecution']>;
+    try { execution = this.beginExecution(); }
+    catch (error) {
+      if (error instanceof CircuitBreakerOpenError) return fallback();
+      throw error;
     }
-
-    if (primaryPct < 1 && Math.random() > primaryPct) {
-      this.logger.info(
-        `[CircuitBreaker] ${this.name}: degraded (${(primaryPct * 100).toFixed(0)}% primary), routing to fallback`
-      );
-      return fallback();
-    }
-
     try {
       const result = await primary();
-      this.onSuccess();
+      execution.success();
       return result;
     } catch (error) {
-      this.onFailure();
+      execution.failure(error);
       this.logger.warn(
         `[CircuitBreaker] ${this.name}: primary failed (${this.consecutiveFailures} consecutive), trying fallback`
       );

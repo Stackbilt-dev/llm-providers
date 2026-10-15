@@ -59,8 +59,8 @@ export interface CfGatewayConfig {
  * Distinct from CacheHints, which controls provider-side prefix/prompt caching.
  * Works with any backing store (Cloudflare KV, Redis, in-memory map).
  *
- * Keys are derived from (model, messages, temperature, maxTokens). For KV stores
- * with a 512-byte key limit, wrap this adapter to hash the key before forwarding.
+ * Keys are versioned SHA-256 hashes of the complete semantic request, tenant,
+ * application namespace, and routing policy. Invalid/non-JSON identities bypass caching.
  */
 export interface ResponseCacheAdapter {
   get(key: string): Promise<string | null>;
@@ -68,7 +68,7 @@ export interface ResponseCacheAdapter {
 }
 
 export interface CacheHints {
-  /** 'off' disables any provider cache opt-in. Default: let provider decide. */
+  /** 'off' disables cache opt-in; 'provider-prefix' bypasses factory response caching. */
   strategy?: 'off' | 'provider-prefix' | 'response' | 'both';
   /** Provider-specific cache key hint (e.g. OpenAI prompt_cache_key). */
   key?: string;
@@ -105,6 +105,9 @@ export interface CacheObservability {
     status: 'hit' | 'miss' | 'write' | 'error' | 'bypass';
     key?: string;
     ttlSeconds?: number;
+    /** On hits, usage belongs to the original provider call, not this request. */
+    usageKind?: 'historical';
+    currentChargeUsd?: number;
     error?: string;
   };
 }
@@ -316,6 +319,9 @@ export interface LLMConfig {
 }
 
 export interface ProviderConfig {
+  resilienceContext?: import('./utils/resilience-context.js').ResilienceContext;
+  /** false bypasses breaker admission and failure/success recording. */
+  enableCircuitBreaker?: boolean;
   apiKey?: string;
   baseUrl?: string;
   timeout?: number;
@@ -501,6 +507,19 @@ export interface StreamChunk {
 export interface StreamResponse {
   stream: ReadableStream<StreamChunk>;
   controller: ReadableStreamDefaultController<StreamChunk>;
+}
+
+/** Final accounting for a managed text stream, including partial output. */
+export interface StreamCompletion {
+  outcome: 'success' | 'error' | 'cancelled';
+  emittedChars: number;
+  usage: TokenUsage;
+}
+
+export interface ManagedTextStream {
+  stream: ReadableStream<string>;
+  /** Resolves after accounting; rejects if settlement fails. Suitable for ctx.waitUntil. */
+  completion: Promise<StreamCompletion>;
 }
 
 export interface QuotaCheckInput {

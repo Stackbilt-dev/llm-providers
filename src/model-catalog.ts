@@ -1,5 +1,6 @@
 import type { CreditLedger } from './utils/credit-ledger.js';
 import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
+import { NoRouteError } from './errors.js';
 
 export type ProviderName = 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia';
 export type ModelLifecycle = 'active' | 'compatibility' | 'retired';
@@ -1193,6 +1194,7 @@ export function getRoutingInfo(
   availableProviders: ProviderName[] = [...PROVIDER_FALLBACK_ORDER],
   context: ModelSelectionContext = {}
 ): RoutingInfo {
+  if (availableProviders.length === 0) throw new NoRouteError();
   const requiresTools = usesTools(request);
   const requiresVision = usesVision(request);
   const requestsStreaming = request.stream === true;
@@ -1203,10 +1205,12 @@ export function getRoutingInfo(
 
   // When a specific model is pinned, report on that model rather than recommending.
   if (request.model) {
-    const entry = getCatalogEntry(request.model);
-    const provider = (entry?.provider ??
-      getProviderForCatalogModel(request.model) ??
-      availableProviders[0]) as ProviderName;
+    const hosts = getProvidersForCatalogModel(request.model);
+    const provider = hosts.find(host => availableProviders.includes(host)
+      && (request.builtInTools ?? []).every(tool => modelSupportsBuiltInTools(request.model!, host, tool.type)))
+      ?? (hosts.length === 0 ? availableProviders[0] : undefined);
+    if (!provider) throw new NoRouteError(`No configured provider serves model '${request.model}' with its requested built-in tools`);
+    const entry = MODEL_CATALOG.find(candidate => candidate.model === request.model && candidate.provider === provider);
     return {
       useCase,
       provider,

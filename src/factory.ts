@@ -32,6 +32,7 @@ import type {
   CacheObservability,
   ProviderAttemptResult
 } from './types.js';
+import type { ManagedTextStream, StreamCompletion, TokenUsage } from './types.js';
 import type { CostProvenance, TokenProvenance } from './types.js';
 
 import type { Logger } from './utils/logger.js';
@@ -49,13 +50,12 @@ import { CloudflareProvider } from './providers/cloudflare.js';
 import { CerebrasProvider } from './providers/cerebras.js';
 import { GroqProvider } from './providers/groq.js';
 import { NvidiaProvider } from './providers/nvidia.js';
-import { CostTracker, defaultCostTracker } from './utils/cost-tracker.js';
+import { CostTracker } from './utils/cost-tracker.js';
 import type { ProviderCostBreakdownEntry } from './utils/cost-tracker.js';
 import { getStreamUsage } from './utils/stream-usage.js';
+import { deriveResponseCacheKey, isCachedResponse } from './utils/response-cache.js';
 import type { CreditLedger } from './utils/credit-ledger.js';
-import { defaultCircuitBreakerManager } from './utils/circuit-breaker.js';
-import { defaultExhaustionRegistry } from './utils/exhaustion.js';
-import { defaultLatencyHistogram } from './utils/latency-histogram.js';
+import { ResilienceContext, defaultResilienceContext } from './utils/resilience-context.js';
 import {
   PROVIDER_FALLBACK_ORDER,
   getCatalogEntry,
@@ -65,15 +65,20 @@ import {
   modelSupportsBuiltInTools,
   inferUseCaseFromRequest,
   rankModels,
+  getRoutingInfo as describeRouting,
+  type RoutingInfo,
+  type ProviderName,
   type ModelRecommendationUseCase,
 } from './model-catalog.js';
 import {
   LLMProviderError,
   ConfigurationError,
+  NoRouteError,
   CircuitBreakerOpenError,
   AuthenticationError,
   RateLimitError,
   QuotaExceededError,
+  QuotaDeniedError,
   SchemaDriftError,
   ToolLoopAbortedError,
   ToolLoopLimitError,
@@ -92,6 +97,9 @@ export interface ProviderFactoryConfig {
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
   enableRetries?: boolean;
+  /** Opt into independent health, exhaustion, cost analytics and reset effects. */
+  stateScope?: 'global' | 'client';
+  resilienceContext?: ResilienceContext;
   ledger?: CreditLedger;
   quotaHook?: QuotaHook;
   quotaFailPolicy?: 'closed' | 'open';
@@ -100,6 +108,8 @@ export interface ProviderFactoryConfig {
   hooks?: ObservabilityHooks;
   responseCache?: ResponseCacheAdapter;
   responseCacheDefaultTtl?: number;
+  /** Separate applications, credentials, and routing-policy revisions in shared stores. */
+  responseCacheNamespace?: string;
 }
 
 export interface CostAnalytics {
@@ -250,15 +260,6 @@ function recordImageAttempt(
   }
 }
 
-function deriveResponseCacheKey(request: LLMRequest): string {
-  return JSON.stringify({
-    model: request.model ?? '',
-    messages: request.messages,
-    temperature: request.temperature ?? 1,
-    maxTokens: request.maxTokens ?? null,
-  });
-}
-
 function mergeCacheObservability(
   ...entries: Array<CacheObservability | undefined>
 ): CacheObservability | undefined {
@@ -346,14 +347,17 @@ export class LLMProviderFactory {
   private fallbackRules: FallbackRule[];
   private logger: Logger;
   private hooks: ObservabilityHooks;
+  private resilienceContext: ResilienceContext;
 
   constructor(config: ProviderFactoryConfig) {
-    this.config = config;
+    this.config = { ...config, enableCircuitBreaker: config.enableCircuitBreaker ?? true };
     this.logger = config.logger ?? noopLogger;
     this.hooks = config.hooks ?? noopHooks;
+    this.resilienceContext = config.resilienceContext
+      ?? (config.stateScope === 'client' ? new ResilienceContext(this.logger) : defaultResilienceContext);
     this.costTracker = config.ledger
       ? new CostTracker({}, config.ledger, this.logger)
-      : defaultCostTracker;
+      : this.resilienceContext.costTracker;
     this.fallbackRules = config.fallbackRules || this.getDefaultFallbackRules();
 
     this.initializeProviders();
@@ -386,6 +390,8 @@ export class LLMProviderFactory {
           ...retryConfig,
           logger: this.logger,
           hooks: this.hooks,
+          resilienceContext: this.resilienceContext,
+          enableCircuitBreaker: this.config.enableCircuitBreaker ?? providerConfig.enableCircuitBreaker,
         });
         if (provider.validateConfig()) {
           this.providers.set(name, provider);
@@ -412,15 +418,38 @@ export class LLMProviderFactory {
     request: LLMRequest,
     imageContext?: ImageAnalysisContext
   ): Promise<LLMResponse> {
-    const responseCacheKey = this.config.responseCache ? deriveResponseCacheKey(request) : undefined;
+    const responseCacheKey = this.config.responseCache ? await deriveResponseCacheKey(
+      request, this.config.responseCacheNamespace ?? '', {
+        providers: Object.entries({
+          openai: this.config.openai, anthropic: this.config.anthropic,
+          cloudflare: this.config.cloudflare, cerebras: this.config.cerebras,
+          groq: this.config.groq, nvidia: this.config.nvidia,
+        }).filter(([, config]) => config !== undefined).map(([name, config]) => {
+          // Binding objects and callbacks are not JSON. Credentials and transport
+          // options stay inside the hash so separate accounts/endpoints cannot collide.
+          const { ai, logger, hooks, ...options } = config as Record<string, unknown>;
+          return { name, options };
+        }),
+        preferredProvider: this.config.preferredProvider,
+        defaultProvider: this.config.defaultProvider,
+        costOptimization: this.config.costOptimization,
+        defaultVisionModel: this.config.defaultVisionModel,
+        fallbackRules: this.fallbackRules,
+      }
+    ) : undefined;
 
-    if (this.config.responseCache) {
+    if (this.config.responseCache && responseCacheKey !== undefined) {
       try {
         const cached = await this.config.responseCache.get(responseCacheKey!);
         if (cached !== null) {
-          const parsed = JSON.parse(cached) as LLMResponse;
+          const parsed: unknown = JSON.parse(cached);
+          if (!isCachedResponse(parsed) || !this.providers.has(parsed.provider)) {
+            throw new Error('Invalid cached response envelope');
+          }
+          // A cached completion does not authorize access for a denied tenant.
+          await this.checkQuota(parsed.provider, this.providers.get(parsed.provider)!, request, parsed.model, 0);
           const cache = mergeCacheObservability(parsed.cache, {
-            factory: { status: 'hit', key: responseCacheKey }
+            factory: { status: 'hit', key: responseCacheKey, usageKind: 'historical', currentChargeUsd: 0 }
           });
           const response = responseCacheMetadata(parsed, cache);
           this.hooks.onCache?.({
@@ -436,6 +465,7 @@ export class LLMProviderFactory {
           return response;
         }
       } catch (err) {
+        if (err instanceof QuotaDeniedError) throw err;
         this.hooks.onCache?.({
           requestId: request.requestId,
           tenantId: request.tenantId,
@@ -470,14 +500,14 @@ export class LLMProviderFactory {
         if (!provider) continue;
 
         // Check exhaustion registry
-        if (defaultExhaustionRegistry.isExhausted(providerName)) {
+        if (this.resilienceContext.exhaustion.isExhausted(providerName)) {
           this.logger.warn(`[LLMProviderFactory] Provider ${providerName} is quota-exhausted, skipping`);
           continue;
         }
 
         // Check circuit breaker
         if (this.config.enableCircuitBreaker) {
-          const breaker = defaultCircuitBreakerManager.getBreaker(providerName);
+          const breaker = this.resilienceContext.circuitBreakers.getBreaker(providerName);
           if (breaker.isOpen()) {
             this.logger.warn(`[LLMProviderFactory] Circuit breaker open for ${providerName}, skipping`);
             continue;
@@ -590,7 +620,7 @@ export class LLMProviderFactory {
         }
         const durationMs = Date.now() - startTime;
         const providerCache = cacheObservabilityForResponse(providerRequest, response);
-        const factoryCache: CacheObservability | undefined = this.config.responseCache
+        const factoryCache: CacheObservability | undefined = responseCacheKey !== undefined
           ? {
               factory: {
                 status: 'miss',
@@ -673,7 +703,7 @@ export class LLMProviderFactory {
           response = { ...response, metadata: { ...response.metadata, llmProvidersDeprecationWarning: warning } };
         }
 
-        if (this.config.responseCache) {
+        if (this.config.responseCache && responseCacheKey !== undefined) {
           this.config.responseCache.put(
             responseCacheKey!,
             JSON.stringify(response),
@@ -736,10 +766,10 @@ export class LLMProviderFactory {
 
         // Auto-mark quota-exhausted providers
         if (err instanceof QuotaExceededError) {
-          defaultExhaustionRegistry.markExhausted(providerName);
+          this.resilienceContext.exhaustion.markExhausted(providerName);
           this.hooks.onQuotaExhausted?.({
             provider: providerName,
-            resetAfterMs: defaultExhaustionRegistry.defaultResetMs,
+            resetAfterMs: this.resilienceContext.exhaustion.defaultResetMs,
             timestamp: Date.now(),
           });
         }
@@ -783,6 +813,10 @@ export class LLMProviderFactory {
   }
 
   async generateResponseStream(request: LLMRequest): Promise<ReadableStream<string>> {
+    return (await this.generateManagedResponseStream(request)).stream;
+  }
+
+  async generateManagedResponseStream(request: LLMRequest): Promise<ManagedTextStream> {
     const selectionPlan = this.buildProviderPlan({ ...request, stream: true });
     const providerChain = selectionPlan.chain;
     const providerModels = selectionPlan.providerModels;
@@ -794,8 +828,8 @@ export class LLMProviderFactory {
       try {
         const provider = this.providers.get(providerName);
         if (!provider || !provider.supportsStreaming || !provider.streamResponse) continue;
-        if (defaultExhaustionRegistry.isExhausted(providerName)) continue;
-        if (this.config.enableCircuitBreaker && defaultCircuitBreakerManager.getBreaker(providerName).isOpen()) continue;
+        if (this.resilienceContext.exhaustion.isExhausted(providerName)) continue;
+        if (this.config.enableCircuitBreaker && this.resilienceContext.circuitBreakers.getBreaker(providerName).isOpen()) continue;
         if (this.config.ledger && this.isLedgerLimited(providerName)) continue;
 
         if (previousProvider && lastError) {
@@ -825,7 +859,12 @@ export class LLMProviderFactory {
         });
 
         const startTime = Date.now();
-        const opened = await this.openStreamWithFirstChunk(provider, providerRequest);
+        const opened = await this.openStreamWithFirstChunk(provider, providerRequest, async usage => {
+          await this.settleStreamUsage(providerName, model, providerRequest, startTime, usage ?? {
+            inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: estimatedCost,
+            costProvenance: 'catalog_estimate', tokenProvenance: 'estimated',
+          }, 'error');
+        });
         return this.buildFactoryStream(
           opened.reader,
           opened.firstChunk,
@@ -841,6 +880,16 @@ export class LLMProviderFactory {
         const err = error as Error;
         lastError = err;
         previousProvider = providerName;
+
+        if (err instanceof QuotaExceededError) {
+          this.resilienceContext.exhaustion.markExhausted(providerName);
+          try {
+            this.hooks.onQuotaExhausted?.({
+              provider: providerName, resetAfterMs: this.resilienceContext.exhaustion.defaultResetMs,
+              timestamp: Date.now(),
+            });
+          } catch { /* Observers cannot change account exhaustion. */ }
+        }
 
         this.hooks.onRequestError?.({
           provider: providerName,
@@ -1153,6 +1202,20 @@ export class LLMProviderFactory {
     return getProviderDefaultModel(fallbackProvider, request);
   }
 
+  /** Use the execution planner and current admission checks for a preflight snapshot. */
+  getRoutingInfo(request: LLMRequest): RoutingInfo {
+    const plan = this.buildProviderPlan(request);
+    const selected = plan.chain.find(name => this.providers.has(name)
+      && !this.resilienceContext.exhaustion.isExhausted(name)
+      && (!this.config.enableCircuitBreaker || !this.resilienceContext.circuitBreakers.getBreaker(name).isOpen())
+      && (!this.config.ledger || !this.isLedgerLimited(name)));
+    if (!selected) throw new NoRouteError();
+    const selectedRequest = this.requestForProvider(request, selected, plan.providerModels);
+    return describeRouting(selectedRequest, [selected as ProviderName], {
+      providerHealth: this.getSelectionHealth(), ledger: this.config.ledger,
+    });
+  }
+
   /**
    * Build provider chain and provider-specific default models from the catalog.
    */
@@ -1239,7 +1302,7 @@ export class LLMProviderFactory {
       // string (gpt-oss on Cerebras vs Groq) to the capable host. Plain
       // requests keep the prior fallback-order default (no regression).
       if ((request?.builtInTools?.length ?? 0) > 0) {
-        const capable = pool.find(p => modelSupportsBuiltInTools(model, p));
+        const capable = pool.find(p => request!.builtInTools!.every(tool => modelSupportsBuiltInTools(model, p, tool.type)));
         if (capable) return capable;
       }
 
@@ -1292,6 +1355,8 @@ export class LLMProviderFactory {
    * Get fallback routing decision for an error.
    */
   private getFallbackDecision(error: Error): FallbackDecision {
+    if (error instanceof LLMProviderError && error.code === 'STREAM_SETTLEMENT_FAILED') return { shouldFallback: false };
+    if (error instanceof QuotaDeniedError) return { shouldFallback: false };
     // Don't fallback for authentication errors
     if (error instanceof AuthenticationError) {
       return { shouldFallback: false };
@@ -1411,7 +1476,7 @@ export class LLMProviderFactory {
         const isHealthy = await provider.healthCheck();
         const metrics = provider.getMetrics();
         const circuitState = this.config.enableCircuitBreaker
-          ? defaultCircuitBreakerManager.getBreaker(name).getState()
+          ? this.resilienceContext.circuitBreakers.getBreaker(name).getState()
           : null;
 
         health[name] = {
@@ -1481,14 +1546,14 @@ export class LLMProviderFactory {
    * Get latency histogram data for all providers
    */
   getLatencyHistogram(): Record<string, import('./utils/latency-histogram').LatencySummary> {
-    return defaultLatencyHistogram.allSummaries();
+    return this.resilienceContext.latency.allSummaries();
   }
 
   /**
    * Get currently exhausted providers
    */
   getExhaustedProviders(): string[] {
-    return defaultExhaustionRegistry.getExhaustedProviders();
+    return this.resilienceContext.exhaustion.getExhaustedProviders();
   }
 
   /**
@@ -1498,7 +1563,7 @@ export class LLMProviderFactory {
     for (const [name, provider] of this.providers) {
       provider.resetMetrics();
       if (this.config.enableCircuitBreaker) {
-        defaultCircuitBreakerManager.reset(name);
+        this.resilienceContext.circuitBreakers.reset(name);
       }
     }
 
@@ -1506,8 +1571,8 @@ export class LLMProviderFactory {
       this.costTracker.reset();
     }
 
-    defaultExhaustionRegistry.reset();
-    defaultLatencyHistogram.reset();
+    this.resilienceContext.exhaustion.reset();
+    this.resilienceContext.latency.reset();
   }
 
   /**
@@ -1516,10 +1581,14 @@ export class LLMProviderFactory {
   updateConfig(config: Partial<ProviderFactoryConfig>): void {
     this.config = { ...this.config, ...config };
 
-    if ('ledger' in config) {
-      this.costTracker = config.ledger
-        ? new CostTracker({}, config.ledger, this.logger)
-        : defaultCostTracker;
+    if ('resilienceContext' in config || 'stateScope' in config) {
+      this.resilienceContext = this.config.resilienceContext
+        ?? (this.config.stateScope === 'client' ? new ResilienceContext(this.logger) : defaultResilienceContext);
+    }
+    if ('ledger' in config || 'resilienceContext' in config || 'stateScope' in config) {
+      this.costTracker = this.config.ledger
+        ? new CostTracker({}, this.config.ledger, this.logger)
+        : this.resilienceContext.costTracker;
     }
 
     if (config.fallbackRules) {
@@ -1534,6 +1603,9 @@ export class LLMProviderFactory {
       config.cerebras ||
       config.groq ||
       config.nvidia ||
+      config.enableCircuitBreaker !== undefined ||
+      config.stateScope !== undefined ||
+      config.resilienceContext !== undefined ||
       config.enableRetries !== undefined
     ) {
       this.providers.clear();
@@ -1543,7 +1615,8 @@ export class LLMProviderFactory {
 
   private async openStreamWithFirstChunk(
     provider: LLMProvider,
-    request: LLMRequest
+    request: LLMRequest,
+    onFailure?: (usage: TokenUsage | undefined) => Promise<void>
   ): Promise<{
     reader: ReadableStreamDefaultReader<string>;
     firstChunk?: string;
@@ -1557,7 +1630,26 @@ export class LLMProviderFactory {
     const stream = await provider.streamResponse(request);
     const usage = getStreamUsage(stream);
     const reader = stream.getReader();
-    const first = await reader.read();
+    let first: ReadableStreamReadResult<string>;
+    try {
+      first = await reader.read();
+    } catch (error) {
+      await reader.cancel(error).catch(() => {});
+      reader.releaseLock();
+      const reportedUsage = await usage?.catch(() => undefined);
+      const knownUnbilled = error instanceof LLMProviderError && [
+        'CIRCUIT_BREAKER_OPEN', 'AUTHENTICATION_ERROR', 'CONFIGURATION_ERROR',
+        'QUOTA_EXCEEDED', 'QUOTA_DENIED', 'RATE_LIMIT', 'INVALID_REQUEST',
+        'MODEL_NOT_FOUND', 'CONTENT_FILTER', 'TOKEN_LIMIT',
+      ].includes(error.code);
+      try { if (reportedUsage || !knownUnbilled) await onFailure?.(reportedUsage); }
+      catch (settlementError) {
+        const failure = new LLMProviderError('Streaming usage settlement failed', 'STREAM_SETTLEMENT_FAILED', provider.name, false);
+        failure.cause = settlementError;
+        throw failure;
+      }
+      throw error;
+    }
     return {
       reader,
       firstChunk: first.value,
@@ -1576,56 +1668,98 @@ export class LLMProviderFactory {
     startTime: number,
     estimatedCost: number,
     streamUsage?: Promise<LLMResponse['usage'] | undefined>
-  ): ReadableStream<string> {
-    return new ReadableStream<string>({
-      start: async (controller) => {
+  ): ManagedTextStream {
+    let emittedChars = 0;
+    let firstPending = !firstDone;
+    let terminal: Promise<StreamCompletion> | undefined;
+    let resolveCompletion!: (result: StreamCompletion) => void;
+    let rejectCompletion!: (error: unknown) => void;
+    const completion = new Promise<StreamCompletion>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    void completion.catch(() => {});
+    const finish = (outcome: StreamCompletion['outcome']): Promise<StreamCompletion> => {
+      if (terminal) return terminal;
+      terminal = (async () => {
+        const usage = await streamUsage?.catch(() => undefined) ?? {
+          inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: estimatedCost,
+          costProvenance: 'catalog_estimate' as const, tokenProvenance: 'estimated' as const,
+        };
+        const result: StreamCompletion = { outcome, emittedChars, usage };
         try {
-          if (!firstDone && firstChunk !== undefined) {
-            controller.enqueue(firstChunk);
-          }
-
-          if (!firstDone) {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (value !== undefined) controller.enqueue(value);
-            }
-          }
-
-          const usage = await streamUsage?.catch(() => undefined) ?? {
-            inputTokens: 0,
-            outputTokens: 0,
-            totalTokens: 0,
-            cost: estimatedCost
-          };
-          const responseForUsage: LLMResponse = {
-            message: '',
-            usage,
-            model,
-            provider: providerName,
-            responseTime: Date.now() - startTime,
-          };
-          if (this.config.costOptimization || this.config.ledger) {
-            this.costTracker.trackCost(providerName, responseForUsage);
-          }
-          this.hooks.onRequestEnd?.({
-            provider: providerName,
-            model,
-            requestId: request.requestId,
-            tenantId: request.tenantId,
-            durationMs: Date.now() - startTime,
-            usage,
-            finishReason: 'stop',
-            timestamp: Date.now(),
-          });
-          this.recordQuota(providerName, responseForUsage, request);
-          controller.close();
+          await this.settleStreamUsage(providerName, model, request, startTime, usage, outcome);
+          resolveCompletion(result);
+          return result;
         } catch (error) {
-          controller.error(error);
+          rejectCompletion(error);
+          throw error;
         } finally {
-          reader.releaseLock();
+          try { reader.releaseLock(); } catch { /* Cancellation may race a pending read. */ }
         }
-      }
+      })();
+      return terminal;
+    };
+    const stream = new ReadableStream<string>({
+      pull: async controller => {
+        try {
+          if (terminal) return;
+          const chunk = firstPending
+            ? { done: false, value: firstChunk }
+            : firstDone ? { done: true, value: undefined } : await reader.read();
+          firstPending = false;
+          if (terminal) return;
+          if (chunk.done) {
+            await finish('success');
+            controller.close();
+          } else if (chunk.value !== undefined) {
+            emittedChars += chunk.value.length;
+            controller.enqueue(chunk.value);
+          }
+        } catch (error) {
+          if (terminal) { controller.error(error); return; }
+          await reader.cancel(error).catch(() => {});
+          try {
+            await finish('error');
+          } finally {
+            try {
+              this.hooks.onRequestError?.({
+                provider: providerName, model, requestId: request.requestId, tenantId: request.tenantId,
+                error: error as Error, errorCode: (error as { code?: string }).code,
+                attempt: 1, willRetry: false, timestamp: Date.now(),
+              });
+            } catch { /* Telemetry cannot replay a partially delivered response. */ }
+            controller.error(error);
+          }
+        }
+      },
+      cancel: async reason => {
+        const cancelled = finish('cancelled');
+        await reader.cancel(reason).catch(() => {});
+        await cancelled;
+      },
+    }, { highWaterMark: 0 });
+    return { stream, completion };
+  }
+
+  private async settleStreamUsage(
+    provider: string, model: string, request: LLMRequest, startTime: number,
+    usage: TokenUsage, outcome: StreamCompletion['outcome']
+  ): Promise<void> {
+    const response: LLMResponse = {
+      message: '', usage, model, provider, responseTime: Date.now() - startTime,
+    };
+    if (this.config.costOptimization || this.config.ledger) this.costTracker.trackCost(provider, response);
+    try {
+      this.hooks.onRequestEnd?.({
+        provider, model, requestId: request.requestId, tenantId: request.tenantId,
+        durationMs: response.responseTime, usage, outcome, finishReason: outcome === 'success' ? 'stop' : outcome,
+        timestamp: Date.now(),
+      });
+    } catch { /* Terminal observers cannot replay a request. */ }
+    if (this.config.quotaHook) await this.config.quotaHook.record({
+      tenantId: request.tenantId, provider, model, actualCost: usage.cost,
+      inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, metadata: request.metadata,
     });
   }
 
@@ -1633,9 +1767,10 @@ export class LLMProviderFactory {
     providerName: string,
     provider: LLMProvider,
     request: LLMRequest,
-    model: string
+    model: string,
+    costOverride?: number
   ): Promise<number> {
-    const estimatedCost = provider.estimateCost(request);
+    const estimatedCost = costOverride ?? provider.estimateCost(request);
     if (!this.config.quotaHook) {
       return estimatedCost;
     }
@@ -1650,13 +1785,17 @@ export class LLMProviderFactory {
 
     try {
       const result = await this.config.quotaHook.check(input);
-      this.hooks.onQuotaCheck?.({ input, result, timestamp: Date.now() });
+      try {
+        this.hooks.onQuotaCheck?.({ input, result, timestamp: Date.now() });
+      } catch { /* Telemetry cannot change admission. */ }
       if (!result.allowed) {
-        this.hooks.onQuotaDenied?.({ input, reason: result.reason, timestamp: Date.now() });
-        throw new QuotaExceededError(providerName, result.reason || 'Quota hook denied request');
+        try {
+          this.hooks.onQuotaDenied?.({ input, reason: result.reason, timestamp: Date.now() });
+        } catch { /* Telemetry cannot turn a denial into fail-open admission. */ }
+        throw new QuotaDeniedError(providerName, result.reason || 'Quota hook denied request');
       }
     } catch (error) {
-      if (error instanceof QuotaExceededError) {
+      if (error instanceof QuotaDeniedError) {
         throw error;
       }
 
@@ -1666,8 +1805,10 @@ export class LLMProviderFactory {
       }
 
       const reason = (error as Error).message;
-      this.hooks.onQuotaDenied?.({ input, reason, timestamp: Date.now() });
-      throw new QuotaExceededError(providerName, reason);
+      try {
+        this.hooks.onQuotaDenied?.({ input, reason, timestamp: Date.now() });
+      } catch { /* Preserve the fail-closed policy. */ }
+      throw new QuotaDeniedError(providerName, reason);
     }
 
     return estimatedCost;
@@ -1743,7 +1884,7 @@ export class LLMProviderFactory {
     for (const providerName of this.providers.keys()) {
       const metrics = this.providers.get(providerName)?.getMetrics();
       const circuitBreaker = this.config.enableCircuitBreaker
-        ? defaultCircuitBreakerManager.getBreaker(providerName).getState()
+        ? this.resilienceContext.circuitBreakers.getBreaker(providerName).getState()
         : null;
 
       health[providerName as 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia'] = {

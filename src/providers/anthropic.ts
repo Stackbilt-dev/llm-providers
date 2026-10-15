@@ -25,7 +25,6 @@ import {
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
-import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
 import { joinReasoning } from '../utils/reasoning.js';
 
 /**
@@ -379,7 +378,8 @@ export class AnthropicProvider extends BaseProvider {
     endpoint: string,
     body: AnthropicRequest | null,
     method: string = 'POST',
-    request?: LLMRequest
+    request?: LLMRequest,
+    signal?: AbortSignal
   ): Promise<Response> {
     const headers: Record<string, string> = {
       'x-api-key': this.apiKey,
@@ -391,6 +391,7 @@ export class AnthropicProvider extends BaseProvider {
 
     const options: RequestInit = {
       method,
+      signal,
       headers
     };
 
@@ -646,9 +647,6 @@ export class AnthropicProvider extends BaseProvider {
     this.validateRequest(request);
 
     const anthropicRequest = { ...this.formatRequest(request), stream: true };
-    const hooks = this.config.hooks;
-    const providerName = this.name;
-    const usageTracker = createStreamUsageTracker();
     const model = anthropicRequest.model;
     let sawUsage = false;
     let inputTokens = 0;
@@ -677,147 +675,86 @@ export class AnthropicProvider extends BaseProvider {
       return usage;
     };
 
-    const stream = new ReadableStream<string>({
-      start: async (controller) => {
-        try {
-          const response = await this.makeAnthropicRequest('/v1/messages', anthropicRequest, 'POST', request);
-
-          if (!response.ok) {
-            throw await LLMErrorFactory.fromFetchResponse('anthropic', response);
-          }
-
-          const reader = response.body?.getReader();
-          if (!reader) {
-            throw new Error('No response body');
-          }
-
-          const decoder = new TextDecoder();
-          let buffer = '';
-
-          const emitDrift = (path: string, expected: string, actual: string): void => {
-            hooks?.onSchemaDrift?.({
-              provider: providerName,
-              model: request.model,
-              requestId: request.requestId,
-              path,
-              expected,
-              actual,
-              timestamp: Date.now(),
-            });
-          };
-
-          while (true) {
-            const { done, value } = await reader.read();
-
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-              if (!line.startsWith('data: ')) continue;
-
-              const data = line.slice(6).trim();
-              if (data === '[DONE]' || data === '') {
-                if (data === '[DONE]') {
-                  usageTracker.resolve(currentUsage());
-                  controller.close();
-                  return;
-                }
-                continue;
-              }
-
-              let parsed: unknown;
-              try {
-                parsed = JSON.parse(data);
-              } catch {
-                const err = new SchemaDriftError('anthropic', 'sse.chunk', 'valid-json', 'malformed-json');
-                emitDrift('sse.chunk', 'valid-json', 'malformed-json');
-                controller.error(err);
-                reader.cancel().catch(() => {});
-                return;
-              }
-
-              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-              const event = parsed as Record<string, unknown>;
-
-              if (event['type'] === 'message_start') {
-                const message = event['message'];
-                const usage = message && typeof message === 'object' && !Array.isArray(message)
-                  ? (message as Record<string, unknown>)['usage']
-                  : undefined;
-                if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
-                  const usageObj = usage as Record<string, unknown>;
-                  if (typeof usageObj['input_tokens'] === 'number') {
-                    inputTokens = usageObj['input_tokens'];
-                    sawUsage = true;
-                  }
-                  if (typeof usageObj['output_tokens'] === 'number') {
-                    outputTokens = usageObj['output_tokens'];
-                    sawUsage = true;
-                  }
-                  if (typeof usageObj['cache_read_input_tokens'] === 'number') {
-                    cacheReadInputTokens = usageObj['cache_read_input_tokens'];
-                  }
-                  if (typeof usageObj['cache_creation_input_tokens'] === 'number') {
-                    cacheCreationInputTokens = usageObj['cache_creation_input_tokens'];
-                  }
-                }
-                continue;
-              }
-
-              if (event['type'] === 'message_delta') {
-                const usage = event['usage'];
-                if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
-                  const usageObj = usage as Record<string, unknown>;
-                  if (typeof usageObj['output_tokens'] === 'number') {
-                    outputTokens = usageObj['output_tokens'];
-                    sawUsage = true;
-                  }
-                }
-                continue;
-              }
-
-              if (event['type'] !== 'content_block_delta') continue;
-
-              const delta = event['delta'];
-              if (!delta || typeof delta !== 'object' || Array.isArray(delta)) {
-                const actual = delta === null ? 'null' : Array.isArray(delta) ? 'array' : String(typeof delta);
-                emitDrift('content_block_delta.delta', 'object', actual);
-                controller.error(new SchemaDriftError('anthropic', 'content_block_delta.delta', 'object', actual));
-                reader.cancel().catch(() => {});
-                return;
-              }
-
-              const deltaObj = delta as Record<string, unknown>;
-              // text_delta: the only delta type that produces content text.
-              // input_json_delta (tool use) and other future delta types are skipped.
-              if (deltaObj['type'] !== 'text_delta') continue;
-
-              const text = deltaObj['text'];
-              if (typeof text !== 'string') {
-                const actual = text === null ? 'null' : String(typeof text);
-                emitDrift('content_block_delta.delta.text', 'string', actual);
-                controller.error(new SchemaDriftError('anthropic', 'content_block_delta.delta.text', 'string', actual));
-                reader.cancel().catch(() => {});
-                return;
-              }
-
-              controller.enqueue(text);
+    return this.createStream({
+      provider: this.name,
+      timeoutMs: this.config.timeout,
+      open: async signal => {
+        const response = await this.makeAnthropicRequest('/v1/messages', anthropicRequest, 'POST', request, signal);
+        if (!response.ok) throw await LLMErrorFactory.fromFetchResponse(this.name, response);
+        if (!response.body) throw new Error('No response body');
+        return response.body;
+      },
+      event: value => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+        const event = value as Record<string, unknown>;
+        if (event.type === 'error' || event.error) throw LLMErrorFactory.fromHttpResponse(this.name, 500, event);
+        if (event.type === 'message_stop') return { done: true };
+        if (event['type'] === 'message_start') {
+          const message = event['message'];
+          const usage = message && typeof message === 'object' && !Array.isArray(message)
+            ? (message as Record<string, unknown>)['usage']
+            : undefined;
+          if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
+            const usageObj = usage as Record<string, unknown>;
+            if (typeof usageObj['input_tokens'] === 'number') {
+              inputTokens = usageObj['input_tokens'];
+              sawUsage = true;
+            }
+            if (typeof usageObj['output_tokens'] === 'number') {
+              outputTokens = usageObj['output_tokens'];
+              sawUsage = true;
+            }
+            if (typeof usageObj['cache_read_input_tokens'] === 'number') {
+              cacheReadInputTokens = usageObj['cache_read_input_tokens'];
+            }
+            if (typeof usageObj['cache_creation_input_tokens'] === 'number') {
+              cacheCreationInputTokens = usageObj['cache_creation_input_tokens'];
             }
           }
-
-          usageTracker.resolve(currentUsage());
-          controller.close();
-        } catch (error) {
-          usageTracker.resolve(undefined);
-          controller.error(error);
+          return {};
         }
-      }
-    });
 
-    return attachStreamUsage(stream, usageTracker.promise);
+        if (event['type'] === 'message_delta') {
+          const usage = event['usage'];
+          if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
+            const usageObj = usage as Record<string, unknown>;
+            if (typeof usageObj['output_tokens'] === 'number') {
+              outputTokens = usageObj['output_tokens'];
+              sawUsage = true;
+            }
+          }
+          return {};
+        }
+
+        if (event['type'] !== 'content_block_delta') return {};
+
+        const delta = event['delta'];
+        if (!delta || typeof delta !== 'object' || Array.isArray(delta)) {
+          const actual = delta === null ? 'null' : Array.isArray(delta) ? 'array' : String(typeof delta);
+          throw new SchemaDriftError('anthropic', 'content_block_delta.delta', 'object', actual);
+        }
+
+        const deltaObj = delta as Record<string, unknown>;
+        // text_delta: the only delta type that produces content text.
+        // input_json_delta (tool use) and other future delta types are skipped.
+        if (deltaObj['type'] !== 'text_delta') return {};
+
+        const text = deltaObj['text'];
+        if (typeof text !== 'string') {
+          const actual = text === null ? 'null' : String(typeof text);
+          throw new SchemaDriftError('anthropic', 'content_block_delta.delta.text', 'string', actual);
+        }
+
+        return { text };
+      },
+      usage: currentUsage,
+      onError: error => {
+        if (error instanceof SchemaDriftError) this.config.hooks?.onSchemaDrift?.({
+          provider: this.name, model: request.model, requestId: request.requestId,
+          path: error.path, expected: error.expected, actual: error.actual, timestamp: Date.now(),
+        });
+      },
+    });
   }
 
   /**
