@@ -235,33 +235,52 @@ export const noopHooks: ObservabilityHooks = {};
  * in order. Errors in one handler don't block others.
  */
 export function composeHooks(...implementations: ObservabilityHooks[]): ObservabilityHooks {
-  const methods = [
-    'onRequestStart', 'onRequestEnd', 'onCache', 'onRequestError',
-    'onRetry', 'onFallback', 'onCircuitStateChange',
-    'onQuotaExhausted', 'onBudgetThreshold', 'onQuotaCheck',
-    'onQuotaDenied', 'onProviderBalance', 'onSchemaDrift',
-    'onImageAnalysisAttempt', 'onImageAnalysisComplete',
-  ] as const;
-
   const composed: ObservabilityHooks = {};
 
-  for (const method of methods) {
-    const handlers = implementations
-      .map(impl => impl[method])
-      .filter((fn): fn is NonNullable<typeof fn> => fn != null);
+  for (const method of HOOK_METHODS) {
+    const owners = implementations.filter(impl => typeof impl[method] === 'function');
 
-    if (handlers.length > 0) {
+    if (owners.length > 0) {
       (composed as Record<string, Function>)[method] = (event: unknown) => {
-        for (const handler of handlers) {
-          try {
-            handler(event as never);
-          } catch {
-            // Observability must not break the request path.
-          }
-        }
+        for (const owner of owners) invokeHook(owner, method, event);
       };
     }
   }
 
   return composed;
+}
+
+const HOOK_METHODS = [
+  'onRequestStart', 'onRequestEnd', 'onCache', 'onRequestError',
+  'onRetry', 'onFallback', 'onCircuitStateChange',
+  'onQuotaExhausted', 'onBudgetThreshold', 'onQuotaCheck',
+  'onQuotaDenied', 'onProviderBalance', 'onSchemaDrift',
+  'onImageAnalysisAttempt', 'onImageAnalysisComplete',
+] as const;
+
+/** Call one handler with its owner as `this`; sync throws and async rejections are swallowed. */
+function invokeHook(owner: ObservabilityHooks, method: typeof HOOK_METHODS[number], event: unknown): void {
+  try {
+    const handler = owner[method] as ((event: unknown) => unknown) | undefined;
+    if (typeof handler !== 'function') return;
+    const result = handler.call(owner, event);
+    if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
+      (result as PromiseLike<unknown>).then(undefined, () => {});
+    }
+  } catch {
+    // Observability must not break the request path.
+  }
+}
+
+/**
+ * Wrap a caller's hooks so no handler can throw into the request path.
+ * Handlers are looked up at call time, so later mutation of `hooks` is seen.
+ * Internal: the factory routes every lifecycle event through this (#116).
+ */
+export function guardHooks(hooks: ObservabilityHooks): ObservabilityHooks {
+  const guarded: ObservabilityHooks = {};
+  for (const method of HOOK_METHODS) {
+    (guarded as Record<string, Function>)[method] = (event: unknown) => invokeHook(hooks, method, event);
+  }
+  return guarded;
 }

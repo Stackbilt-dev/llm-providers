@@ -24,6 +24,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 - Added [the issue sweep checkpoint](docs/maintenance/issue-sweep.md) with implementation/remaining scope, validation evidence, release implications and GitHub progress-comment links. Historical issue exports are labeled separately.
 
 ### Fixed
+- Lifecycle hooks cannot replay requests (#116): the factory now routes every hook through a guard, so a throwing or rejecting `onRequestEnd` (or any other hook) no longer triggers fallback to a second provider after a successful vendor call, and usage/quota recording still runs. `composeHooks` also swallows async rejections and preserves each handler's `this`.
 - Streaming transport/lifecycle (#110): all adapters share incremental byte SSE framing, honor downstream demand and cancellation, settle partial usage on error, and apply a body deadline. HTTP cancellation aborts pending fetches. Factory accounting is awaited and exposed on every terminal path; streaming health now updates breakers at completion.
 - Breaker policy (#111): disabled breakers bypass adapter execution; rejected calls cannot indefinitely postpone recovery; caller, authentication, local policy and account-quota errors do not degrade provider service health.
 - Tenant-safe factory response caching (#108): versioned SHA-256 identities include semantic inputs, tenant, namespace, provider options, and routing policy. Cache bypass strategies are honored, invalid entries are ignored, and hits identify historical usage and check current quota policy.
