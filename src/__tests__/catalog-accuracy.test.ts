@@ -108,7 +108,7 @@ describe('previously published Anthropic IDs outside the adapter', () => {
     ['claude-sonnet-4-6-20250618', 'claude-sonnet-4-6'],
   ])('routing preflight and gateway plans treat %s as %s', (legacy, real) => {
     const info = getRoutingInfo({ ...request, model: legacy }, ['anthropic']);
-    expect(info).toMatchObject({ model: real, provider: 'anthropic', modelLifecycle: 'active' });
+    expect(info).toMatchObject({ model: real, provider: 'anthropic', modelLifecycle: 'compatibility' });
     expect(info.catalogEntry?.model).toBe(real);
     const plan = getGatewayRoutePlan({ ...request, model: legacy, stream: true }, ['anthropic']);
     expect(plan.executable).toBe(true);

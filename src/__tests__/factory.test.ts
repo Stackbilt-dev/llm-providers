@@ -371,7 +371,7 @@ describe('LLMProviderFactory', () => {
         throw new Error('degraded');
       })).rejects.toThrow('degraded');
 
-      expect(dynamicFactory.getRecommendedModel(testRequest)).toBe('gpt-4o-mini');
+      expect(dynamicFactory.getRecommendedModel(testRequest)).toBe('claude-haiku-5-5');
     });
 
     it('should honor fallbackProvider as the next route when a rule matches', async () => {
@@ -511,7 +511,7 @@ describe('LLMProviderFactory', () => {
       expect(quotaHook.check).toHaveBeenCalledWith(expect.objectContaining({
         tenantId: 'tenant-1',
         provider: 'openai',
-        model: 'gpt-4o-mini'
+        model: 'gpt-5.6-luna'
       }));
       expect(quotaHook.record).toHaveBeenCalledWith(expect.objectContaining({
         tenantId: 'tenant-1',
@@ -762,8 +762,8 @@ describe('LLMProviderFactory', () => {
       expect(mockAnthropicProvider.generateResponse).toHaveBeenCalledWith(
         expect.objectContaining({
           images: [{ data: 'abc123', mimeType: 'image/jpeg' }],
-          // claude-sonnet-4-6 (quality:6) wins vision routing over haiku (quality:4) after score recalibration
-          model: 'claude-sonnet-4-6'
+          // claude-sonnet-5-5 (quality:6) wins vision routing over haiku-5-5 (quality:5)
+          model: 'claude-sonnet-5-5'
         }),
         expect.objectContaining({ onAttempt: expect.any(Function) })
       );

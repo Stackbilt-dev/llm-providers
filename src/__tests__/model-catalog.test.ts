@@ -35,8 +35,9 @@ describe('model catalog', () => {
     const recommended = Object.values(MODEL_RECOMMENDATIONS).flat();
 
     expect(recommended).not.toContain('gpt-4o');
-    expect(recommended).toContain('gpt-4o-mini');
-    expect(recommended).toContain('claude-haiku-4-5-20251001');
+    expect(recommended).not.toContain('gpt-4o-mini');
+    expect(recommended).toContain('gpt-5.6-luna');
+    expect(recommended).toContain('claude-haiku-5-5');
   });
 
   it('keeps retired models in the catalog for compatibility metadata only', () => {
@@ -68,7 +69,7 @@ describe('model catalog', () => {
   it('prefers active modern baselines over retired OpenAI models', () => {
     const recommended = getRecommendedModel('BALANCED', ['openai']);
 
-    expect(recommended).toBe('gpt-4o-mini');
+    expect(recommended).toBe('gpt-5.6-luna');
   });
 
   it('maps gateway workload classes onto catalog use cases', () => {
@@ -145,8 +146,8 @@ describe('model catalog', () => {
       }
     );
 
-    // claude-sonnet-4-6 (quality:6) now edges gpt-4o-mini (quality:4) even with cloudflare DEGRADED
-    expect(recommended).toBe('claude-sonnet-4-6');
+    // With cloudflare DEGRADED, an Anthropic or OpenAI model takes the lead.
+    expect(recommended).toBe('claude-sonnet-5-5');
   });
 });
 
@@ -168,7 +169,7 @@ describe('getRoutingInfo', () => {
 
   it('returns deprecation warning for a compatibility-lifecycle model', () => {
     const info = getRoutingInfo(
-      { messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4' },
+      { messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4o-mini' },
       ['openai']
     );
     expect(info.modelLifecycle).toBe('compatibility');
@@ -444,9 +445,11 @@ describe('new CF Workers AI models (v1.16.0)', () => {
     }
   });
 
-  it('prefers the current DeepSeek V4 Flash lane for Cloudflare long-context routing', () => {
+  it('routes Cloudflare long-context requests to an active 1M-context model', () => {
     const ranked = rankModels('LONG_CONTEXT', ['cloudflare']);
-    expect(ranked[0]?.model).toBe('@cf/deepseek-ai/deepseek-v4-flash-0731');
+    expect(ranked[0]?.lifecycle).toBe('active');
+    expect(ranked[0]?.capabilities.maxContextLength).toBeGreaterThanOrEqual(1_048_576);
+    expect(ranked.slice(0, 3).map(entry => entry.model)).toContain('@cf/deepseek-ai/deepseek-v4-flash-0731');
   });
 });
 
@@ -472,7 +475,7 @@ describe('current CF Workers AI models (August 2026)', () => {
   });
 
   it('records the documented context windows and vision capabilities', () => {
-    expect(getCatalogEntry('@cf/deepseek-ai/deepseek-v4-flash-0731')?.capabilities.maxContextLength).toBe(1_310_720);
+    expect(getCatalogEntry('@cf/deepseek-ai/deepseek-v4-flash-0731')?.capabilities.maxContextLength).toBe(1_048_576);
     expect(getCatalogEntry('@cf/deepseek-ai/deepseek-v4-pro-0813')?.capabilities.maxContextLength).toBe(1_048_576);
     expect(getCatalogEntry('@cf/zai-org/glm-5.3')?.capabilities.maxContextLength).toBe(1_048_576);
     expect(getCatalogEntry('@cf/qwen/qwen3.8-27b')?.capabilities.supportsVision).toBe(true);

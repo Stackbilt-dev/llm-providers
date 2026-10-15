@@ -212,6 +212,9 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/nvidia/nemotron-3-120b-a12b',
     '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
     '@cf/qwen/qwq-32b',
+    '@cf/meta/llama-3.1-8b-instruct-fp8',
+    '@cf/ibm-granite/granite-4.0-h-micro',
+    '@cf/aisingapore/gemma-sea-lion-v4-27b-it',
     'anthropic/claude-opus-4.8',
   ];
   supportsStreaming = true;
@@ -395,7 +398,7 @@ export class CloudflareProvider extends BaseProvider {
         description: 'GPT-OSS 120B - OpenAI-format tool calling on Workers AI'
       },
       '@cf/moonshotai/kimi-k2.6': {
-        maxContextLength: 262100,
+        maxContextLength: 262144,
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
@@ -448,16 +451,16 @@ export class CloudflareProvider extends BaseProvider {
         description: 'GLM-5.3 Flash — multimodal 320B/18B-active MoE; 1M context, reasoning, function calling, and vision'
       },
       'deepseek/deepseek-v4-pro': {
-        maxContextLength: 128000,
+        maxContextLength: 131072,
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
-        description: 'DeepSeek V4 Pro - high-capability reasoning and coding model on Workers AI'
+        inputTokenCost: 0.00174,
+        outputTokenCost: 0.00348,
+        description: 'DeepSeek V4 Pro via the AI Gateway unified catalog (served by Fireworks; not a Workers AI model)'
       },
       '@cf/deepseek-ai/deepseek-v4-flash-0731': {
-        maxContextLength: 1310720,
+        maxContextLength: 1048576,
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
@@ -554,7 +557,7 @@ export class CloudflareProvider extends BaseProvider {
         description: 'Llama 3.2 11B Vision — image understanding'
       },
       '@cf/meta/llama-3.3-70b-instruct-fp8-fast': {
-        maxContextLength: 131072,
+        maxContextLength: 24000,
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
@@ -576,8 +579,7 @@ export class CloudflareProvider extends BaseProvider {
       '@cf/qwen/qwen2.5-coder-32b-instruct': {
         maxContextLength: 32768,
         supportsStreaming: true,
-        supportsTools: true,
-        toolCalling: true,
+        supportsTools: false,
         supportsBatching: true,
         inputTokenCost: 0.00066,
         outputTokenCost: 0.001,
@@ -595,7 +597,7 @@ export class CloudflareProvider extends BaseProvider {
         description: 'Mistral Small 3.1 24B — vision + tool-calling, strong balanced model'
       },
       '@cf/qwen/qwen3-30b-a3b-fp8': {
-        maxContextLength: 40960,
+        maxContextLength: 32768,
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
@@ -616,7 +618,7 @@ export class CloudflareProvider extends BaseProvider {
         description: 'Qwen 3.8 27B — vision-language model for reasoning and multi-turn function calling with 262K context'
       },
       '@cf/meta/llama-3.2-1b-instruct': {
-        maxContextLength: 131072,
+        maxContextLength: 60000,
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
@@ -625,7 +627,7 @@ export class CloudflareProvider extends BaseProvider {
         description: 'Llama 3.2 1B — ultra-cheap tiny model'
       },
       '@cf/meta/llama-3.2-3b-instruct': {
-        maxContextLength: 131072,
+        maxContextLength: 80000,
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
@@ -634,7 +636,8 @@ export class CloudflareProvider extends BaseProvider {
         description: 'Llama 3.2 3B — cheap small model'
       },
       '@cf/moonshotai/kimi-k2.7-code': {
-        maxContextLength: 131072,
+        maxContextLength: 262144,
+        supportsVision: true,
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
@@ -673,13 +676,41 @@ export class CloudflareProvider extends BaseProvider {
         thinkingModel: true,
         description: 'QwQ-32B — native thinking/reasoning model; outputs chain-of-thought traces; competes with o1-mini on hard reasoning tasks'
       },
+      '@cf/meta/llama-3.1-8b-instruct-fp8': {
+        maxContextLength: 32000,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: false,
+        inputTokenCost: 0.000152,
+        outputTokenCost: 0.000287,
+        description: 'Workers AI Llama 3.1 8B FP8 — the listed Llama 3.1 8B variant after the 2026-05-30 deprecations'
+      },
+      '@cf/ibm-granite/granite-4.0-h-micro': {
+        maxContextLength: 131000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: false,
+        inputTokenCost: 0.000017,
+        outputTokenCost: 0.000112,
+        description: 'Workers AI IBM Granite 4.0 H Micro — very low cost small model with function calling'
+      },
+      '@cf/aisingapore/gemma-sea-lion-v4-27b-it': {
+        maxContextLength: 128000,
+        supportsStreaming: true,
+        supportsTools: false,
+        supportsBatching: false,
+        inputTokenCost: 0.000351,
+        outputTokenCost: 0.000555,
+        description: 'Workers AI SEA-LION v4 27B — Gemma-based model for Southeast Asian languages; explicit requests only'
+      },
       'anthropic/claude-opus-4.8': {
         maxContextLength: 1000000,
         supportsStreaming: false,
         supportsTools: false,
         supportsBatching: false,
-        inputTokenCost: 0,
-        outputTokenCost: 0,
+        inputTokenCost: 0.005,
+        outputTokenCost: 0.025,
         description: 'Cloudflare-managed Anthropic Claude Opus 4.8 — 1M context frontier model; billing via Cloudflare dashboard'
       },
     };

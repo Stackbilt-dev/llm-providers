@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- Current vendor models, checked against primary docs on 2026-10-15 (#112, phase 2):
+  - Workers AI: `@cf/meta/llama-3.1-8b-instruct-fp8`, `@cf/ibm-granite/granite-4.0-h-micro`, `@cf/aisingapore/gemma-sea-lion-v4-27b-it` (explicit requests only).
+  - OpenAI: `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`.
+  - Anthropic: `claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`.
+- `MODELS` constants for the new models and for current Workers AI models (`CF_GLM_5_3`, `CF_GLM_5_3_FLASH`, `CF_KIMI_K2_6`, `CF_DEEPSEEK_V4_PRO`, `CF_DEEPSEEK_V4_FLASH`, `CF_GPT_OSS_120B`, `CF_GPT_OSS_20B`, `CF_GEMMA_4_26B`, `CF_QWEN_3_8_27B`, `CF_LLAMA_3_3_70B_FAST`, `CF_LLAMA_3_1_8B_FP8`, `CF_GRANITE_4_MICRO`).
+
+### Changed
+- The package is documented as a Cloudflare-first router. A test now requires a Workers AI model to rank first for every use case when all providers are configured.
+- Default models for direct OpenAI and Anthropic routing are now `gpt-5.6-luna` and `claude-haiku-5-5`, and recommendation lists include the new models.
+- Workers AI models that Cloudflare deprecated are now `retired` in the catalog and are no longer auto-routed: Llama 3.1 8B / 70B, Llama 3 8B, Llama 2 7B int8, Phi-2 and Mistral 7B v0.1 (2026-05-30), OpenChat 3.5, TinyLlama and the four Qwen 1.5 models (2025-10-01). The adapter still accepts them by name. Their `MODELS` constants are marked `@deprecated`.
+- `gpt-4`, `gpt-4-turbo` and `gpt-3.5-turbo` (OpenAI shutdown 2026-10-23) and the invalid `gpt-3.5-turbo-16k` are `retired` in the catalog. `gpt-4o-mini` is `compatibility` (shutdown 2027-01-14). The adapter still accepts all of them by name.
+- Claude Opus 4.6, Sonnet 4.6 and Haiku 4.5 are `compatibility` (Anthropic lists them as legacy), so responses from them carry a deprecation warning.
+- OpenAI requests to reasoning models (GPT-5 and later, o-series) send `max_completion_tokens` instead of `max_tokens` and omit `temperature`.
+- Anthropic requests to Claude 5.x models omit `temperature`; these models return 400 for non-default sampling parameters.
+
+### Fixed
+- Workers AI context windows: Llama 3.3 70B FP8 Fast 24,000 (was 131,072), Llama 3.2 1B 60,000, Llama 3.2 3B 80,000, Qwen3 30B 32,768, Kimi K2.6 and K2.7 Code 262,144, DeepSeek V4 Flash 1,048,576 (was 1,310,720). Kimi K2.7 Code supports vision.
+- `@cf/qwen/qwen2.5-coder-32b-instruct` no longer claims function calling; Cloudflare's model page does not list it.
+- `deepseek/deepseek-v4-pro` and `anthropic/claude-opus-4.8` are priced from the AI Gateway unified catalog ($1.74/$3.48 and $5/$25 per million tokens) instead of $0, and `deepseek/deepseek-v4-pro` has a 131,072-token context.
+- Anthropic cache reads use per-model rates (Fable 5.1 2.5%, Opus 5.5 and Sonnet 5.5 5% of input), and Haiku 5.5 prompts over 100K tokens, cache included, are billed at the 5x long-prompt rate.
+
 ## [1.22.1] — 2026-10-15
 
 ### Fixed
