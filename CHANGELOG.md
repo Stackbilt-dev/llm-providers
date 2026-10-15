@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.23.0] — 2026-10-15
+
 ### Added
 - Current vendor models, checked against primary docs on 2026-10-15 (#112, phase 2):
   - Workers AI: `@cf/meta/llama-3.1-8b-instruct-fp8`, `@cf/ibm-granite/granite-4.0-h-micro`, `@cf/aisingapore/gemma-sea-lion-v4-27b-it`.
