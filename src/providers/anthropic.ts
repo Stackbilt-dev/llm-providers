@@ -162,19 +162,35 @@ const LONG_PROMPT_THRESHOLD: Record<string, number> = { 'claude-haiku-5-5': 100_
 const LONG_PROMPT_MULTIPLIER = 5;
 
 /**
- * Default max_tokens when the request sets none. Fable 5.1 and Opus 5.5 always
- * think, and thinking counts against max_tokens, so 1000 could leave no room for
- * the answer. 16,000 stays below the size where non-streaming requests risk
- * long-request timeouts.
+ * Default max_tokens when the request sets none. Claude 5.x models think by
+ * default (Fable 5.1 and Opus 5.5 always), and thinking counts against
+ * max_tokens, so 1000 could leave no room for the answer. 16,000 stays below the
+ * size where non-streaming requests risk long-request timeouts.
  */
-const ALWAYS_THINKING_DEFAULT_MAX_TOKENS: Record<string, number> = {
+const THINKING_DEFAULT_MAX_TOKENS: Record<string, number> = {
   'claude-fable-5-1': 16_000,
   'claude-opus-5-5': 16_000,
+  'claude-sonnet-5-5': 16_000,
+  'claude-haiku-5-5': 16_000,
 };
 
 function defaultMaxTokens(model: string): number {
-  return ALWAYS_THINKING_DEFAULT_MAX_TOKENS[model] ?? 1000;
+  return THINKING_DEFAULT_MAX_TOKENS[model] ?? 1000;
 }
+
+/** Models that reject a final assistant turn (prefill) with a 400: Claude 4.6 and later. */
+const NO_PREFILL_MODELS = new Set([
+  'claude-opus-4-6', 'claude-sonnet-4-6',
+  'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5',
+]);
+
+/** Whether JSON mode can prefill '{' for this model. */
+function usesJsonPrefill(model: string): boolean {
+  return !NO_PREFILL_MODELS.has(model);
+}
+
+/** Models that reject tool_choice "any" and "tool" with a 400. */
+const NO_FORCED_TOOL_CHOICE_MODELS = new Set(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5']);
 
 export class AnthropicProvider extends BaseProvider {
   name = 'anthropic';
@@ -227,7 +243,8 @@ export class AnthropicProvider extends BaseProvider {
     this.validateRequest(request);
 
     const startTime = Date.now();
-    const jsonMode = request.response_format?.type === 'json_object';
+    const jsonMode = request.response_format?.type === 'json_object'
+      && usesJsonPrefill(resolveModelId(request.model || this.getDefaultModel(request)));
 
     try {
       const response = await this.executeWithResiliency(async () => {
@@ -516,12 +533,13 @@ export class AnthropicProvider extends BaseProvider {
       messages.push(anthropicMessage);
     }
 
-    // Add prefilled assistant message for JSON mode
-    if (jsonMode) {
+    const model = resolveModelId(request.model || this.getDefaultModel(request));
+
+    // Add prefilled assistant message for JSON mode on models that accept one;
+    // later models rely on the system-prompt instruction alone.
+    if (jsonMode && usesJsonPrefill(model)) {
       messages.push({ role: 'assistant', content: '{' });
     }
-
-    const model = resolveModelId(request.model || this.getDefaultModel(request));
     const anthropicRequest: AnthropicRequest = {
       model,
       messages,
@@ -863,6 +881,14 @@ export class AnthropicProvider extends BaseProvider {
   /** Accept the invalid model IDs earlier releases published, validating the real one. */
   protected validateRequest(request: LLMRequest): void {
     super.validateRequest(request.model ? { ...request, model: resolveModelId(request.model) } : request);
+    const model = resolveModelId(request.model || this.getDefaultModel(request));
+    const forced = request.toolChoice === 'required' || typeof request.toolChoice === 'object';
+    if (forced && request.tools?.length && NO_FORCED_TOOL_CHOICE_MODELS.has(model)) {
+      throw new ConfigurationError(
+        this.name,
+        `${model} does not support forced tool choice; use toolChoice 'auto' and say in the prompt when to call the tool`
+      );
+    }
   }
 
   /**

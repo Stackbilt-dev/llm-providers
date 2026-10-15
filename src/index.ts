@@ -543,7 +543,7 @@ export const MODELS = {
   GPT_5_5: 'gpt-5.5',
   /** Not accepted by the OpenAI adapter or routed by this package. OpenAI has announced shutdowns only for dated gpt-4o snapshots. */
   GPT_4O: 'gpt-4o',
-  /** @deprecated OpenAI shuts this model down on 2027-01-14. Use GPT_5_6_LUNA. */
+  /** @deprecated OpenAI shuts this model down on 2027-01-14 and names gpt-6-luna as the replacement (not yet supported by this adapter). */
   GPT_4O_MINI: 'gpt-4o-mini',
   /** @deprecated OpenAI shuts this model down on 2026-10-23. Use GPT_5_6_SOL. */
   GPT_4_TURBO: 'gpt-4-turbo',

@@ -35,9 +35,8 @@ describe('model catalog', () => {
     const recommended = Object.values(MODEL_RECOMMENDATIONS).flat();
 
     expect(recommended).not.toContain('gpt-4o');
-    expect(recommended).not.toContain('gpt-4o-mini');
-    expect(recommended).toContain('gpt-5.6-luna');
-    expect(recommended).toContain('claude-haiku-5-5');
+    expect(recommended).toContain('gpt-4o-mini');
+    expect(recommended).toContain('claude-haiku-4-5-20251001');
   });
 
   it('keeps retired models in the catalog for compatibility metadata only', () => {
@@ -69,7 +68,7 @@ describe('model catalog', () => {
   it('prefers active modern baselines over retired OpenAI models', () => {
     const recommended = getRecommendedModel('BALANCED', ['openai']);
 
-    expect(recommended).toBe('gpt-5.6-luna');
+    expect(recommended).toBe('gpt-4o-mini');
   });
 
   it('maps gateway workload classes onto catalog use cases', () => {
@@ -146,8 +145,8 @@ describe('model catalog', () => {
       }
     );
 
-    // With cloudflare DEGRADED, an Anthropic or OpenAI model takes the lead.
-    expect(recommended).toBe('claude-sonnet-5-5');
+    // claude-sonnet-4-6 (quality:6) now edges gpt-4o-mini (quality:4) even with cloudflare DEGRADED
+    expect(recommended).toBe('claude-sonnet-4-6');
   });
 });
 
@@ -169,8 +168,8 @@ describe('getRoutingInfo', () => {
 
   it('returns deprecation warning for a compatibility-lifecycle model', () => {
     const info = getRoutingInfo(
-      { messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4o-mini' },
-      ['openai']
+      { messages: [{ role: 'user', content: 'hi' }], model: 'qwen-3-235b-a22b-instruct-2507' },
+      ['cerebras']
     );
     expect(info.modelLifecycle).toBe('compatibility');
     expect(info.deprecationWarning).toBeTruthy();

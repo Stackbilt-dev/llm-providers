@@ -1000,8 +1000,8 @@ export class CloudflareProvider extends BaseProvider {
     if (request.systemPrompt) systemParts.push(request.systemPrompt);
     if (systemParts.length > 0) cfRequest.system = systemParts.join('\n\n');
 
-    if (request.temperature !== undefined) cfRequest.temperature = request.temperature;
-    if (request.topP !== undefined) cfRequest.top_p = request.topP;
+    // Claude 4.7 and later (including Opus 4.8) return a 400 for non-default
+    // temperature or top_p, so sampling parameters are not forwarded.
 
     return cfRequest;
   }

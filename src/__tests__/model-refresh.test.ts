@@ -27,11 +27,11 @@ const USE_CASES: ModelRecommendationUseCase[] = [
 function jsonReply(body: unknown) {
   return { ok: true, status: 200, headers: JSON_HEADERS, json: async () => body };
 }
-function openaiReply(model: string) {
+function openaiReply(model: string, promptTokens = 1, completionTokens = 1) {
   return jsonReply({
     id: 'chatcmpl_1', object: 'chat.completion', created: 1, model,
     choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
   });
 }
 function anthropicReply(model: string, usage: Record<string, unknown> = { input_tokens: 1, output_tokens: 1 }) {
@@ -85,6 +85,25 @@ describe('Workers AI catalog', () => {
     expect(getCatalogEntry(model)?.capabilities.maxContextLength).toBe(context);
   });
 
+  it('never auto-routes SEA-LION', () => {
+    const model = '@cf/aisingapore/gemma-sea-lion-v4-27b-it';
+    expect(getCatalogEntry(model)?.explicitOnly).toBe(true);
+    expect(Object.values(MODEL_RECOMMENDATIONS).flat()).not.toContain(model);
+  });
+
+  it('does not forward temperature or top_p to Claude Opus 4.8 through the AI Gateway catalog', async () => {
+    const run = vi.fn().mockResolvedValue({
+      id: 'msg_1', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+    });
+    const provider = new CloudflareProvider({ ai: { run } as unknown as Ai, maxRetries: 0 });
+    await provider.generateResponse({ ...request, model: 'anthropic/claude-opus-4.8', temperature: 0.2, topP: 0.5, maxTokens: 50 });
+    const body = run.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('temperature');
+    expect(body).not.toHaveProperty('top_p');
+    expect(body.max_tokens).toBe(50);
+  });
+
   it('does not claim function calling where the model page does not list it', () => {
     const coder = getCatalogEntry('@cf/qwen/qwen2.5-coder-32b-instruct')!;
     expect(coder.capabilities.supportsTools).toBe(false);
@@ -126,19 +145,32 @@ describe('OpenAI models', () => {
     expect(Object.values(MODEL_RECOMMENDATIONS).flat()).not.toContain(model);
   });
 
-  it('flags gpt-4o-mini with its 2027-01-14 shutdown', () => {
-    const info = getRoutingInfo({ ...request, model: 'gpt-4o-mini' }, ['openai']);
-    expect(info.modelLifecycle).toBe('compatibility');
+  it('keeps gpt-4o-mini as the OpenAI default and warns about its 2027-01-14 shutdown', () => {
+    const info = getRoutingInfo(request, ['openai']);
+    expect(info.model).toBe('gpt-4o-mini');
+    expect(info.modelLifecycle).toBe('active');
     expect(info.deprecationWarning).toContain('2027-01-14');
   });
 
-  it.each(current)('%s is accepted by the adapter and catalogued as active', model => {
+  it.each(current)('%s is accepted by name but never auto-routed', model => {
     expect(new OpenAIProvider({ apiKey: 'k' }).models).toContain(model);
-    expect(getCatalogEntry(model)).toMatchObject({ provider: 'openai', lifecycle: 'active' });
+    expect(getCatalogEntry(model)).toMatchObject({ provider: 'openai', lifecycle: 'active', explicitOnly: true });
+    expect(Object.values(MODEL_RECOMMENDATIONS).flat()).not.toContain(model);
+    expect(getRoutingInfo({ ...request, model }, ['openai']).model).toBe(model);
   });
 
-  it('defaults OpenAI routing to a current model', () => {
-    expect(getRoutingInfo(request, ['openai']).model).toBe('gpt-5.6-luna');
+  it('prices a dated snapshot in the response by its alias', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openaiReply('gpt-5.5-2026-04-23', 200_000, 1_000_000)));
+    const response = await new OpenAIProvider({ apiKey: 'k', maxRetries: 0 }).generateResponse({ ...request, model: 'gpt-5.5' });
+    expect(response.usage.cost).toBeCloseTo(1 + 30, 6);
+  });
+
+  it('bills prompts over 272K tokens at 2x input and 1.5x output', async () => {
+    const provider = new OpenAIProvider({ apiKey: 'k', maxRetries: 0 });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openaiReply('gpt-5.6-luna', 272_000, 1_000_000)));
+    expect((await provider.generateResponse({ ...request, model: 'gpt-5.6-luna' })).usage.cost).toBeCloseTo(0.0544 + 1.2, 6);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openaiReply('gpt-5.6-luna', 300_000, 1_000_000)));
+    expect((await provider.generateResponse({ ...request, model: 'gpt-5.6-luna' })).usage.cost).toBeCloseTo(0.12 + 1.8, 6);
   });
 
   it.each(current)('sends max_completion_tokens and no temperature to %s', async model => {
@@ -184,17 +216,86 @@ describe('Anthropic models', () => {
     ['claude-haiku-5-5', 0.1, 0.5],
   ];
 
-  it.each(current)('%s is accepted, active and priced at $%s/$%s per million tokens', (model, inPerM, outPerM) => {
+  it.each(current)('%s is accepted by name, never auto-routed, and priced at $%s/$%s per million tokens', (model, inPerM, outPerM) => {
     expect(new AnthropicProvider({ apiKey: 'k' }).models).toContain(model);
     const entry = getCatalogEntry(model)!;
-    expect(entry).toMatchObject({ provider: 'anthropic', lifecycle: 'active' });
+    expect(entry).toMatchObject({ provider: 'anthropic', lifecycle: 'active', explicitOnly: true });
+    expect(Object.values(MODEL_RECOMMENDATIONS).flat()).not.toContain(model);
     expect(entry.capabilities.maxContextLength).toBe(1_000_000);
     expect(entry.capabilities.inputTokenCost * 1000).toBeCloseTo(inPerM, 6);
     expect(entry.capabilities.outputTokenCost * 1000).toBeCloseTo(outPerM, 6);
   });
 
-  it.each(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'])('%s is legacy', model => {
-    expect(getCatalogEntry(model)?.lifecycle).toBe('compatibility');
+  it.each(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'])('%s stays routable with a legacy note', model => {
+    const entry = getCatalogEntry(model)!;
+    expect(entry.lifecycle).toBe('active');
+    expect(entry.capabilities.description).toMatch(/legacy/);
+  });
+
+  it('keeps Anthropic routing on Claude 4.x', () => {
+    expect(getRoutingInfo(request, ['anthropic']).model).toBe('claude-haiku-4-5-20251001');
+    expect(getRoutingInfo({ ...request, images: [{ data: 'x', mimeType: 'image/png' }] }, ['anthropic']).model)
+      .toBe('claude-sonnet-4-6');
+  });
+
+  it.each(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'])(
+    'JSON mode on %s ends with a user turn and returns the text unchanged', async model => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonReply({
+        id: 'msg_1', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'Result: {"a":1}' }],
+        model, stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 },
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+      const response = await new AnthropicProvider({ apiKey: 'k', maxRetries: 0 })
+        .generateResponse({ ...request, model, response_format: { type: 'json_object' } });
+      const messages = sentBody(fetchMock).messages as Array<{ role: string }>;
+      expect(messages[messages.length - 1].role).toBe('user');
+      expect(sentBody(fetchMock).system).toMatch(/valid JSON only/);
+      // Without a prefill there is no consumed '{' to restore.
+      expect(response.message).toBe('Result: {"a":1}');
+    });
+
+  it('JSON mode on Claude Haiku 4.5 still prefills and restores the opening brace', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonReply({
+      id: 'msg_1', type: 'message', role: 'assistant', content: [{ type: 'text', text: '"a":1}' }],
+      model: 'claude-haiku-4-5-20251001', stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const response = await new AnthropicProvider({ apiKey: 'k', maxRetries: 0 })
+      .generateResponse({ ...request, model: 'claude-haiku-4-5-20251001', response_format: { type: 'json_object' } });
+    const messages = sentBody(fetchMock).messages as Array<{ role: string; content: unknown }>;
+    expect(messages[messages.length - 1]).toEqual({ role: 'assistant', content: '{' });
+    expect(response.message).toBe('{"a":1}');
+  });
+
+  const tools: LLMRequest['tools'] = [
+    { type: 'function', function: { name: 'lookup', description: 'Lookup', parameters: { type: 'object' } } }];
+
+  it.each(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])('rejects forced tool choice for %s before calling the API', async model => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new AnthropicProvider({ apiKey: 'k', maxRetries: 0 });
+    for (const toolChoice of ['required', { type: 'function', function: { name: 'lookup' } }] as const) {
+      await expect(provider.generateResponse({ ...request, model, tools, toolChoice }))
+        .rejects.toThrow(/does not support forced tool choice/);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('still forwards forced tool choice to models that accept it', async () => {
+    for (const model of ['claude-haiku-5-5', 'claude-sonnet-4-6']) {
+      const fetchMock = vi.fn().mockResolvedValue(anthropicReply(model));
+      vi.stubGlobal('fetch', fetchMock);
+      await new AnthropicProvider({ apiKey: 'k', maxRetries: 0 })
+        .generateResponse({ ...request, model, tools, toolChoice: 'required' });
+      expect(sentBody(fetchMock).tool_choice).toEqual({ type: 'any' });
+    }
+  });
+
+  it.each(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])('allows auto tool choice for %s', async model => {
+    const fetchMock = vi.fn().mockResolvedValue(anthropicReply(model));
+    vi.stubGlobal('fetch', fetchMock);
+    await new AnthropicProvider({ apiKey: 'k', maxRetries: 0 }).generateResponse({ ...request, model, tools, toolChoice: 'auto' });
+    expect(sentBody(fetchMock).tool_choice).toEqual({ type: 'auto' });
   });
 
   it.each(current.map(([model]) => model))('does not send temperature to %s', async model => {
@@ -207,7 +308,8 @@ describe('Anthropic models', () => {
   it.each([
     ['claude-fable-5-1', 16_000],
     ['claude-opus-5-5', 16_000],
-    ['claude-sonnet-5-5', 1000],
+    ['claude-sonnet-5-5', 16_000],
+    ['claude-haiku-5-5', 16_000],
     ['claude-haiku-4-5-20251001', 1000],
   ] as const)('defaults max_tokens for %s to %i when the request sets none', async (model, maxTokens) => {
     const fetchMock = vi.fn().mockResolvedValue(anthropicReply(model));

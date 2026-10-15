@@ -38,6 +38,12 @@ export interface ModelCatalogEntry {
   speedScore: number;
   qualityScore: number;
   costScore: number;
+  /**
+   * Served only when a request names this model. Recommendations and automatic
+   * routing skip it (for example, a model the adapter cannot yet use for every
+   * request shape that routing might send it).
+   */
+  explicitOnly?: boolean;
 }
 
 type SelectionHealthEntry = {
@@ -100,6 +106,7 @@ function entry(
   useCases: ModelRecommendationUseCase[],
   capabilities: ModelCapabilities,
   scores: { speed: number; quality: number; cost: number },
+  options: { explicitOnly?: boolean } = {},
 ): ModelCatalogEntry {
   return {
     provider,
@@ -110,6 +117,7 @@ function entry(
     speedScore: scores.speed,
     qualityScore: scores.quality,
     costScore: scores.cost,
+    ...(options.explicitOnly ? { explicitOnly: true } : {}),
   };
 }
 
@@ -124,7 +132,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.01,
     outputTokenCost: 0.05,
     description: 'GPT-6 Astra — OpenAI\'s flagship reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
-  }, { speed: 3, quality: 7, cost: 1 }),
+  }, { speed: 3, quality: 7, cost: 1 }, { explicitOnly: true }),
   entry('openai', 'gpt-5.6-sol', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
     maxContextLength: 1050000,
     supportsStreaming: true,
@@ -135,7 +143,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.004,
     outputTokenCost: 0.02,
     description: 'GPT-5.6 Sol — reasoning model; promotional price stated through at least 2026-11-21; prompts over 272K tokens bill 2x input and 1.5x output'
-  }, { speed: 3, quality: 7, cost: 2 }),
+  }, { speed: 3, quality: 7, cost: 2 }, { explicitOnly: true }),
   entry('openai', 'gpt-5.6-terra', 'active', ['BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
     maxContextLength: 1050000,
     supportsStreaming: true,
@@ -146,7 +154,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.002,
     outputTokenCost: 0.012,
     description: 'GPT-5.6 Terra — mid-tier reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
-  }, { speed: 4, quality: 6, cost: 3 }),
+  }, { speed: 4, quality: 6, cost: 3 }, { explicitOnly: true }),
   entry('openai', 'gpt-5.6-luna', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
     maxContextLength: 1050000,
     supportsStreaming: true,
@@ -157,7 +165,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.0002,
     outputTokenCost: 0.0012,
     description: 'GPT-5.6 Luna — low-cost reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
-  }, { speed: 5, quality: 5, cost: 5 }),
+  }, { speed: 5, quality: 5, cost: 5 }, { explicitOnly: true }),
   entry('openai', 'gpt-5.5', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING'], {
     maxContextLength: 1050000,
     supportsStreaming: true,
@@ -168,7 +176,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.005,
     outputTokenCost: 0.03,
     description: 'GPT-5.5 (alias of gpt-5.5-2026-04-23) — reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
-  }, { speed: 3, quality: 6, cost: 1 }),
+  }, { speed: 3, quality: 6, cost: 1 }, { explicitOnly: true }),
   entry('openai', 'gpt-4o', 'retired', ['HIGH_PERFORMANCE', 'TOOL_CALLING'], {
     maxContextLength: 128000,
     supportsStreaming: true,
@@ -179,7 +187,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.015,
     description: 'GPT-4o. Marked retired here only to keep it out of routing (the OpenAI adapter does not accept it); OpenAI has announced no shutdown for the gpt-4o alias, only for dated snapshots'
   }, { speed: 4, quality: 5, cost: 2 }),
-  entry('openai', 'gpt-4o-mini', 'compatibility', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT', 'HIGH_PERFORMANCE'], {
+  entry('openai', 'gpt-4o-mini', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT', 'HIGH_PERFORMANCE'], {
     maxContextLength: 128000,
     supportsStreaming: true,
     supportsTools: true,
@@ -236,7 +244,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.01,
     outputTokenCost: 0.05,
     description: 'Claude Fable 5.1 — top tier for demanding reasoning and long-horizon agentic work; adaptive thinking always on'
-  }, { speed: 2, quality: 7, cost: 1 }),
+  }, { speed: 2, quality: 7, cost: 1 }, { explicitOnly: true }),
   entry('anthropic', 'claude-opus-5-5', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
     maxContextLength: 1000000,
     supportsStreaming: true,
@@ -247,7 +255,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.004,
     outputTokenCost: 0.02,
     description: 'Claude Opus 5.5 — Anthropic\'s recommended starting model; adaptive thinking always on'
-  }, { speed: 3, quality: 7, cost: 2 }),
+  }, { speed: 3, quality: 7, cost: 2 }, { explicitOnly: true }),
   entry('anthropic', 'claude-sonnet-5-5', 'active', ['HIGH_PERFORMANCE', 'BALANCED', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
     maxContextLength: 1000000,
     supportsStreaming: true,
@@ -258,7 +266,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.002,
     outputTokenCost: 0.01,
     description: 'Claude Sonnet 5.5 — balanced speed and intelligence'
-  }, { speed: 4, quality: 6, cost: 4 }),
+  }, { speed: 4, quality: 6, cost: 4 }, { explicitOnly: true }),
   entry('anthropic', 'claude-haiku-5-5', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT'], {
     maxContextLength: 1000000,
     supportsStreaming: true,
@@ -269,8 +277,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.0001,
     outputTokenCost: 0.0005,
     description: 'Claude Haiku 5.5 — fastest tier; prompts over 100K tokens bill at 5x these rates'
-  }, { speed: 5, quality: 5, cost: 5 }),
-  entry('anthropic', 'claude-opus-4-6', 'compatibility', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
+  }, { speed: 5, quality: 5, cost: 5 }, { explicitOnly: true }),
+  entry('anthropic', 'claude-opus-4-6', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
     maxContextLength: 1000000,
     supportsStreaming: true,
     supportsTools: true,
@@ -280,7 +288,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.025,
     description: 'Claude Opus 4.6 (legacy on the Claude API; retirement not sooner than 2027-02-05)'
   }, { speed: 2, quality: 7, cost: 1 }),
-  entry('anthropic', 'claude-sonnet-4-6', 'compatibility', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING', 'BALANCED'], {
+  entry('anthropic', 'claude-sonnet-4-6', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING', 'BALANCED'], {
     maxContextLength: 1000000,
     supportsStreaming: true,
     supportsTools: true,
@@ -308,7 +316,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.015,
     description: 'Claude Sonnet 4 (retired on the Claude API 2026-06-15)'
   }, { speed: 3, quality: 4, cost: 3 }),
-  entry('anthropic', 'claude-haiku-4-5-20251001', 'compatibility', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT'], {
+  entry('anthropic', 'claude-haiku-4-5-20251001', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
@@ -554,7 +562,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.000351,
     outputTokenCost: 0.000555,
     description: 'Workers AI SEA-LION v4 27B — Gemma-based model for Southeast Asian languages; explicit requests only'
-  }, { speed: 4, quality: 4, cost: 4 }),
+  }, { speed: 4, quality: 4, cost: 4 }, { explicitOnly: true }),
   entry('cloudflare', '@cf/moonshotai/kimi-k2.7-code', 'active', ['BALANCED', 'TOOL_CALLING'], {
     maxContextLength: 262144,
     supportsVision: true,
@@ -1082,6 +1090,7 @@ function isCompatible(entry: ModelCatalogEntry, context: ModelSelectionContext, 
   const request = context.request;
 
   if (entry.lifecycle === 'retired') return false;
+  if (entry.explicitOnly) return false;
 
   // Thinking/reasoning models output chain-of-thought traces rather than direct
   // responses. Exclude them from every pool except RESEARCH, where the caller

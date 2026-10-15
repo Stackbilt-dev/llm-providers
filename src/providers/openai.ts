@@ -135,6 +135,10 @@ interface OpenAIResponse {
   system_fingerprint?: string;
 }
 
+/** Models billed at 2x input and 1.5x output for the whole request when the prompt exceeds 272K tokens. */
+const LONG_PROMPT_MODELS = new Set(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']);
+const LONG_PROMPT_THRESHOLD = 272_000;
+
 /** GPT-5 and later, and o-series models, are reasoning models on Chat Completions. */
 export function isOpenAIReasoningModel(model: string): boolean {
   return /^(gpt-[5-9]|o\d)/.test(model);
@@ -246,6 +250,19 @@ export class OpenAIProvider extends BaseProvider {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Responses name a dated snapshot (e.g. gpt-5.5-2026-04-23), so price an
+   * unknown ID by its alias, and apply the long-prompt rate.
+   */
+  protected calculateCost(inputTokens: number, outputTokens: number, model: string): number {
+    const capabilities = this.getModelCapabilities();
+    const priced = capabilities[model] ? model : model.replace(/-\d{4}-\d{2}-\d{2}$/, '');
+    const cost = super.calculateCost(inputTokens, outputTokens, priced);
+    if (!LONG_PROMPT_MODELS.has(priced) || inputTokens <= LONG_PROMPT_THRESHOLD) return cost;
+    const { inputTokenCost, outputTokenCost } = capabilities[priced];
+    return (inputTokens / 1000) * inputTokenCost * 2 + (outputTokens / 1000) * outputTokenCost * 1.5;
   }
 
   protected getModelCapabilities(): Record<string, ModelCapabilities> {

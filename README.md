@@ -2,7 +2,7 @@
 
 Development status and resume notes: [issue sweep checkpoint](docs/maintenance/issue-sweep.md). The checkpoint identifies APIs and fixes that are still unreleased.
 
-A Cloudflare-first LLM router: Workers AI models are the primary route, and OpenAI, Anthropic, Cerebras, Groq and NVIDIA NIM serve as secondary providers behind the same interface, with automatic failover, graduated circuit breakers, cost tracking, and intelligent retry. When Workers AI is configured, catalog routing ranks a Workers AI model first for every use case. Built for Cloudflare Workers but runs anywhere with a standard `fetch` API. Extracted from a production orchestration platform handling 80K+ LOC across multiple services.
+A Cloudflare-first LLM router: Workers AI models are the primary route, and OpenAI, Anthropic, Cerebras, Groq and NVIDIA NIM serve as secondary providers behind the same interface, with automatic failover, graduated circuit breakers, cost tracking, and intelligent retry. When Workers AI is configured and healthy, catalog routing ranks a Workers AI model first for every use case; breaker state, ledger pressure and request requirements (for example vision) can still move a request to another provider. Built for Cloudflare Workers but runs anywhere with a standard `fetch` API. Extracted from a production orchestration platform handling 80K+ LOC across multiple services.
 
 ## Features
 
@@ -156,9 +156,9 @@ const llm = LLMProviders.fromEnv(env, {
 
 | Provider | Models | Streaming | Tools | Notes |
 |----------|--------|-----------|-------|-------|
-| **Cloudflare** (primary) | GLM-5.3 / 5.3 Flash / 5.2 / 4.7 Flash, Kimi K2.6 / K2.7 Code, DeepSeek V4 Flash / Pro, GPT-OSS 120B / 20B, Gemma 4 26B, Qwen 3.8 27B / 3 30B / 2.5 Coder, Llama 4 Scout / 3.3 70B Fast / 3.2 / 3.1 8B FP8, Nemotron-3 120B, Granite 4.0 Micro, Mistral Small 3.1, SEA-LION v4, DeepSeek-R1-Distill, QwQ-32B; plus `deepseek/deepseek-v4-pro` and `anthropic/claude-opus-4.8` from the AI Gateway unified catalog | Yes | Most current models (see catalog `supportsTools`) | Default is request-aware and catalog-driven; thinking models (DeepSeek-R1, QwQ, GLM-4.7 Flash) are RESEARCH-only. Kimi, GLM-5.x and DeepSeek V4 need a Workers Paid plan or AI Gateway credits. Models Cloudflare deprecated (Llama 3.1/3 8B, Llama 3.1 70B, Mistral 7B, Phi-2, Qwen 1.5, TinyLlama, OpenChat, Kimi K2.5, Gemma 3) are still accepted when named but are never auto-routed |
-| **OpenAI** | GPT-6 Astra, GPT-5.6 Sol / Terra / Luna, GPT-5.5; GPT-4o Mini (shutdown 2027-01-14); GPT-4, GPT-4 Turbo, GPT-3.5 Turbo (shutdown 2026-10-23, no longer auto-routed) | Yes | Yes | Default: `gpt-5.6-luna`. GPT-5 and later get `max_completion_tokens` and no `temperature` |
-| **Anthropic** | Claude Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5; legacy Opus 4.6, Sonnet 4.6, Haiku 4.5; retired 4 / 3.x IDs | Yes | Yes | Default: `claude-haiku-5-5`. Claude 5.x requests omit `temperature` (non-default values return 400) |
+| **Cloudflare** (primary) | GLM-5.3 / 5.3 Flash / 5.2 / 4.7 Flash, Kimi K2.6 / K2.7 Code, DeepSeek V4 Flash / Pro, GPT-OSS 120B / 20B, Gemma 4 26B, Qwen 3.8 27B / 3 30B / 2.5 Coder, Llama 4 Scout / 3.3 70B Fast / 3.2 / 3.1 8B FP8, Nemotron-3 120B, Granite 4.0 Micro, Mistral Small 3.1, SEA-LION v4 (explicit requests only), DeepSeek-R1-Distill, QwQ-32B; plus `deepseek/deepseek-v4-pro` and `anthropic/claude-opus-4.8` from the AI Gateway unified catalog | Yes | Most current models (see catalog `supportsTools`) | Default is request-aware and catalog-driven; thinking models (DeepSeek-R1, QwQ, GLM-4.7 Flash) are RESEARCH-only. Kimi, GLM-5.x and DeepSeek V4 need a Workers Paid plan or AI Gateway credits. Models Cloudflare deprecated (Llama 3.1/3 8B, Llama 3.1 70B, Mistral 7B, Phi-2, Qwen 1.5, TinyLlama, OpenChat, Kimi K2.5, Gemma 3) are still accepted when named but are never auto-routed |
+| **OpenAI** | GPT-4o Mini (shutdown 2027-01-14); GPT-6 Astra, GPT-5.6 Sol / Terra / Luna, GPT-5.5 (explicit requests only); GPT-4, GPT-4 Turbo, GPT-3.5 Turbo (shutdown 2026-10-23, no longer auto-routed) | Yes | Yes | Default: `gpt-4o-mini`. GPT-5 and later get `max_completion_tokens` (which includes reasoning tokens) and no `temperature` |
+| **Anthropic** | Opus 4.6, Sonnet 4.6, Haiku 4.5 (legacy at Anthropic); Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5 (explicit requests only); retired 4 / 3.x IDs | Yes | Yes | Default: `claude-haiku-4-5-20251001`. Claude 5.x requests omit `temperature` and default `max_tokens` to 16,000; Fable 5.1, Opus 5.5 and Sonnet 5.5 reject forced tool choice. JSON mode prefills `{` only on models that accept it |
 | **Cerebras** | GPT-OSS 120B, ZAI-GLM 4.7, LLaMA 3.1 8B *(deprecated 2026-05-27)*, Qwen 3 235B *(deprecated 2026-05-27)* | Yes | GLM, Qwen, GPT-OSS | ~2,200 tok/s |
 | **Groq** | LLaMA 3.3 70B Versatile, LLaMA 3.1 8B Instant, GPT-OSS 120B, Compound, Compound Mini | Yes | LLaMA 3.3 70B, GPT-OSS 120B | Ultra-fast inference; Compound systems run built-in tools |
 | **NVIDIA NIM** | Llama 3.3/3.1 70B, Llama 4 Maverick, Nemotron 70B/49B/253B, Mistral Large 2, DeepSeek V4 Flash/Pro | Yes | Llama, Nemotron, Mistral Large 2 | Costs $0 placeholder — dev-tier credits; set real rates in `CreditLedger` |
@@ -555,11 +555,11 @@ MODELS.CF_GLM_5_3_FLASH;        // '@cf/zai-org/glm-5.3-flash'
 MODELS.CF_KIMI_K2_6;            // '@cf/moonshotai/kimi-k2.6'
 MODELS.CF_GPT_OSS_120B;         // '@cf/openai/gpt-oss-120b'
 MODELS.CF_GEMMA_4_26B;          // '@cf/google/gemma-4-26b-a4b-it'
-MODELS.CLAUDE_OPUS_5_5;         // 'claude-opus-5-5'
-MODELS.CLAUDE_SONNET_5_5;       // 'claude-sonnet-5-5'
-MODELS.CLAUDE_HAIKU_5_5;        // 'claude-haiku-5-5'
-MODELS.GPT_6_ASTRA;             // 'gpt-6-astra'
-MODELS.GPT_5_6_LUNA;            // 'gpt-5.6-luna'
+MODELS.CLAUDE_SONNET_4_6;       // 'claude-sonnet-4-6'
+MODELS.CLAUDE_HAIKU_4_5;        // 'claude-haiku-4-5-20251001'
+MODELS.GPT_4O_MINI;             // 'gpt-4o-mini' (shutdown 2027-01-14)
+MODELS.CLAUDE_OPUS_5_5;         // 'claude-opus-5-5' (explicit requests only)
+MODELS.GPT_6_ASTRA;             // 'gpt-6-astra' (explicit requests only)
 MODELS.CEREBRAS_ZAI_GLM_4_7;    // 'zai-glm-4.7'
 MODELS.GROQ_COMPOUND;           // 'groq/compound' (RESEARCH; built-in tools)
 MODELS.GROQ_COMPOUND_MINI;      // 'groq/compound-mini'
@@ -590,7 +590,7 @@ Do not await `completion` before consuming or cancelling the stream. Reported pa
 ```typescript
 const stream = await llm.generateResponseStream({
   messages: [{ role: 'user', content: 'Tell me a story.' }],
-  model: 'claude-haiku-5-5',
+  model: 'claude-haiku-4-5-20251001',
 });
 
 const reader = stream.getReader();
@@ -689,7 +689,7 @@ Pass a provider-agnostic `cache` hint on any request. The library translates it 
 const response = await llm.generateResponse({
   messages: [{ role: 'user', content: 'Summarize the context.' }],
   systemPrompt: 'You are an expert at analyzing long documents. [... 10KB of stable context ...]',
-  model: 'claude-haiku-5-5',
+  model: 'claude-haiku-4-5-20251001',
   cache: {
     strategy: 'provider-prefix',   // mark the stable prefix for caching
     cacheablePrefix: 'auto',       // cache system prompt + tools (default)
