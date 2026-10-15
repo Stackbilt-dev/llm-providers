@@ -300,19 +300,24 @@ const hookMethodNames: ReadonlySet<string> = new Set(HOOK_METHODS);
  */
 export function guardHooks(hooks: ObservabilityHooks, onError?: HookErrorReporter): ObservabilityHooks {
   if (guardedHooks.has(hooks)) return hooks;
-  // Stable wrapper per handler, so `guarded.onX === guarded.onX` holds.
-  const wrappers = new WeakMap<Function, Function>();
+  // Stable wrapper per (method, handler), so `guarded.onX === guarded.onX` holds and a
+  // function shared by several hooks reports failures under the method that failed.
+  const wrappers = new Map<string, { handler: Function; wrapper: Function }>();
+  // The private target stays extensible; every trap below reads or writes `hooks`.
   const guarded = new Proxy(Object.create(null) as ObservabilityHooks, {
     get(_target, property) {
       const value: unknown = Reflect.get(hooks, property, hooks);
       if (typeof property !== 'string' || !hookMethodNames.has(property) || typeof value !== 'function') return value;
-      let wrapper = wrappers.get(value);
-      if (!wrapper) {
-        wrapper = (event: unknown) => invokeHandler(hooks, property, value, event, onError);
-        wrappers.set(value, wrapper);
+      let cached = wrappers.get(property);
+      if (cached?.handler !== value) {
+        cached = { handler: value, wrapper: (event: unknown) => invokeHandler(hooks, property, value, event, onError) };
+        wrappers.set(property, cached);
       }
-      return wrapper;
+      return cached.wrapper;
     },
+    set(_target, property, value) { return Reflect.set(hooks, property, value, hooks); },
+    deleteProperty(_target, property) { return Reflect.deleteProperty(hooks, property); },
+    defineProperty(_target, property, descriptor) { return Reflect.defineProperty(hooks, property, descriptor); },
     has(_target, property) { return property in hooks; },
     ownKeys() { return Reflect.ownKeys(hooks); },
     getOwnPropertyDescriptor(_target, property) {
@@ -320,6 +325,9 @@ export function guardHooks(hooks: ObservabilityHooks, onError?: HookErrorReporte
       // The private target has no own properties, so every reported one must be configurable.
       return descriptor ? { ...descriptor, configurable: true } : undefined;
     },
+    getPrototypeOf() { return Reflect.getPrototypeOf(hooks); },
+    // Freezing the view would contradict the forwarding traps; freeze the caller's object instead.
+    preventExtensions() { return false; },
   });
   guardedHooks.add(guarded);
   return guarded;

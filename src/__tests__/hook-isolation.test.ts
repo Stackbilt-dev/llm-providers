@@ -215,6 +215,33 @@ describe('guardHooks', () => {
     expect(onFallback).toHaveBeenCalledOnce();
   });
 
+  it('reports a shared handler under the method that failed', () => {
+    const reports: string[] = [];
+    const send = vi.fn(() => { throw new Error('sink down'); });
+    const guarded = guardHooks({ onRequestStart: send, onRequestEnd: send }, method => { reports.push(method); });
+    guarded.onRequestStart?.({ provider: 'p', model: 'm', timestamp: 0 });
+    guarded.onRequestEnd?.({ provider: 'p', model: 'm', durationMs: 1, usage: ok('p').usage, timestamp: 0 });
+    expect(reports).toEqual(['onRequestStart', 'onRequestEnd']);
+  });
+
+  it('forwards writes, deletes and the prototype to the caller object', () => {
+    class Hooks { onFallback() {} }
+    const raw = new Hooks() as Hooks & ObservabilityHooks;
+    const guarded = guardHooks(raw);
+    const onRetry = vi.fn();
+    guarded.onRetry = onRetry;
+    expect(raw.onRetry).toBe(onRetry);
+    delete guarded.onRetry;
+    expect('onRetry' in raw).toBe(false);
+    expect(guarded).toBeInstanceOf(Hooks);
+  });
+
+  it('refuses to be frozen rather than breaking later reads', () => {
+    const guarded = guardHooks({ onFallback: vi.fn() });
+    expect(() => Object.freeze(guarded)).toThrow(TypeError);
+    expect(Object.keys(guarded)).toEqual(['onFallback']);
+  });
+
   it('is idempotent, so factory-built adapters are not double wrapped', () => {
     const guarded = guardHooks({ onRequestStart: vi.fn() });
     expect(guardHooks(guarded)).toBe(guarded);
