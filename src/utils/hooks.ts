@@ -230,26 +230,6 @@ export interface ObservabilityHooks {
 /** Silent hooks — default. */
 export const noopHooks: ObservabilityHooks = {};
 
-/**
- * Merge multiple hook implementations. Each matching handler is called
- * in order. Errors in one handler don't block others.
- */
-export function composeHooks(...implementations: ObservabilityHooks[]): ObservabilityHooks {
-  const composed: ObservabilityHooks = {};
-
-  for (const method of HOOK_METHODS) {
-    const owners = implementations.filter(impl => typeof impl[method] === 'function');
-
-    if (owners.length > 0) {
-      (composed as Record<string, Function>)[method] = (event: unknown) => {
-        for (const owner of owners) invokeHook(owner, method, event);
-      };
-    }
-  }
-
-  return composed;
-}
-
 const HOOK_METHODS = [
   'onRequestStart', 'onRequestEnd', 'onCache', 'onRequestError',
   'onRetry', 'onFallback', 'onCircuitStateChange',
@@ -258,29 +238,83 @@ const HOOK_METHODS = [
   'onImageAnalysisAttempt', 'onImageAnalysisComplete',
 ] as const;
 
-/** Call one handler with its owner as `this`; sync throws and async rejections are swallowed. */
-function invokeHook(owner: ObservabilityHooks, method: typeof HOOK_METHODS[number], event: unknown): void {
+// Compile-time check: adding a hook to ObservabilityHooks without listing it here fails typecheck.
+type MissingHookMethods = Exclude<keyof ObservabilityHooks, typeof HOOK_METHODS[number]>;
+const hookMethodsAreExhaustive: [MissingHookMethods] extends [never] ? true : MissingHookMethods = true;
+void hookMethodsAreExhaustive;
+
+/** Receives a handler failure that was contained; must not throw itself. */
+export type HookErrorReporter = (method: string, error: unknown) => void;
+
+/** Call one handler with `owner` as `this`; sync throws and async rejections are contained. */
+function invokeHandler(
+  owner: object, method: string, handler: Function, event: unknown, onError?: HookErrorReporter
+): void {
+  const report = (error: unknown) => {
+    try { onError?.(method, error); } catch { /* Reporting is best effort. */ }
+  };
   try {
-    const handler = owner[method] as ((event: unknown) => unknown) | undefined;
-    if (typeof handler !== 'function') return;
-    const result = handler.call(owner, event);
+    const result: unknown = handler.call(owner, event);
     if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
-      (result as PromiseLike<unknown>).then(undefined, () => {});
+      (result as PromiseLike<unknown>).then(undefined, report);
     }
-  } catch {
+  } catch (error) {
     // Observability must not break the request path.
+    report(error);
   }
 }
 
 /**
- * Wrap a caller's hooks so no handler can throw into the request path.
- * Handlers are looked up at call time, so later mutation of `hooks` is seen.
- * Internal: the factory routes every lifecycle event through this (#116).
+ * Merge multiple hook implementations. Each matching handler is called
+ * in order. Errors in one handler (thrown or rejected) don't block others.
+ * Handlers are captured when composing and called with their implementation as `this`.
  */
-export function guardHooks(hooks: ObservabilityHooks): ObservabilityHooks {
-  const guarded: ObservabilityHooks = {};
+export function composeHooks(...implementations: ObservabilityHooks[]): ObservabilityHooks {
+  const composed: ObservabilityHooks = {};
+
   for (const method of HOOK_METHODS) {
-    (guarded as Record<string, Function>)[method] = (event: unknown) => invokeHook(hooks, method, event);
+    const handlers = implementations
+      .filter(impl => typeof impl[method] === 'function')
+      .map(impl => ({ owner: impl, handler: impl[method] as Function }));
+
+    if (handlers.length > 0) {
+      (composed as Record<string, Function>)[method] = (event: unknown) => {
+        for (const { owner, handler } of handlers) invokeHandler(owner, method, handler, event);
+      };
+    }
   }
+
+  return composed;
+}
+
+const guardedHooks = new WeakSet<object>();
+
+/**
+ * Wrap a caller's hooks so no handler can throw or reject into the request path.
+ * Reads pass through to `hooks` at call time: only methods the caller defined
+ * are present, later mutation is seen, and handlers keep `hooks` as `this`.
+ * Internal: the factory and every adapter route lifecycle events through this (#116).
+ */
+export function guardHooks(hooks: ObservabilityHooks, onError?: HookErrorReporter): ObservabilityHooks {
+  if (guardedHooks.has(hooks)) return hooks;
+  const guarded = new Proxy(hooks, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function' || typeof property !== 'string') return value;
+      return (event: unknown) => invokeHandler(target, property, value, event, onError);
+    },
+  });
+  guardedHooks.add(guarded);
   return guarded;
+}
+
+/** Report each failing hook method once per reporter, so a broken sink cannot flood logs. */
+export function warnOnceHookErrors(warn: (message: string, error: unknown) => void, source: string): HookErrorReporter {
+  const reported = new Set<string>();
+  return (method, error) => {
+    if (reported.has(method)) return;
+    reported.add(method);
+    warn(`[${source}] Observability hook ${method} failed; further failures are not logged:`,
+      error instanceof Error ? error.message : error);
+  };
 }

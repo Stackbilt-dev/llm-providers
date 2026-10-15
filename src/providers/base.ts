@@ -18,6 +18,7 @@ import type {
 import type { CfGatewayConfig } from '../types.js';
 import type { Logger } from '../utils/logger.js';
 import { noopLogger } from '../utils/logger.js';
+import { guardHooks, warnOnceHookErrors } from '../utils/hooks.js';
 import { RetryManager } from '../utils/retry.js';
 import { CircuitBreaker } from '../utils/circuit-breaker.js';
 import { CostTracker } from '../utils/cost-tracker.js';
@@ -103,6 +104,11 @@ export abstract class BaseProvider implements LLMProvider {
     };
 
     this.logger = config.logger ?? noopLogger;
+    // Directly constructed adapters get the same hook isolation as the factory (#116).
+    if (config.hooks) {
+      this.config.hooks = guardHooks(config.hooks,
+        warnOnceHookErrors((message, error) => this.logger.warn(message, error), this.constructor.name));
+    }
 
     this.retryManager = new RetryManager({
       maxRetries: this.config.maxRetries,

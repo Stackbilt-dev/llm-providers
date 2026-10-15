@@ -133,7 +133,7 @@ await llm.analyzeImage({
 });
 ```
 
-Hooks are observers only. The factory isolates every lifecycle hook: a handler that throws or returns a rejected promise cannot trigger fallback, replay a completed request, change breaker health or skip usage/quota recording. Handlers are called with your hooks object as `this`. `onRetry`, `onCircuitStateChange` and `onBudgetThreshold` are declared but not yet emitted (#116).
+Hooks are observers only. The factory and directly constructed adapters isolate every lifecycle hook: a handler that throws or returns a rejected promise cannot trigger fallback, replay a completed request, change breaker health, skip usage/quota recording or raise an unhandled rejection. Each failing hook is reported once through `logger.warn`. Handlers are called with your hooks object as `this`. `onRetry`, `onCircuitStateChange` and `onBudgetThreshold` are declared but not yet emitted (#116).
 
 Each physical provider call produces an `ImageAnalysisAttemptEvent`; provider retries and cross-provider fallbacks are separate attempts. `ImageAnalysisCompleteEvent` totals tokens, attempt latency, provider-reported cost, catalog-estimated cost, and unknown-cost attempts. Prompts, image content, credentials, raw provider payloads, and error messages are not included. Sensitive metadata keys and non-scalar values are dropped.
 
