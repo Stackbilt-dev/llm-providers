@@ -536,7 +536,7 @@ export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebr
  */
 export const MODELS = {
   // OpenAI models
-  /** Not routed by this package. OpenAI's dated gpt-4o snapshots shut down 2026-10-23 and 2027-01-14. */
+  /** Not accepted by the OpenAI adapter or routed by this package. OpenAI has announced shutdowns only for dated gpt-4o snapshots. */
   GPT_4O: 'gpt-4o',
   GPT_4O_MINI: 'gpt-4o-mini',
   /** @deprecated OpenAI shuts this model down on 2026-10-23. */
@@ -565,7 +565,7 @@ export const MODELS = {
   CLAUDE_3_OPUS: 'claude-3-opus-20240229',
   /** @deprecated Retired on the Claude API 2025-07-21. */
   CLAUDE_3_SONNET: 'claude-3-sonnet-20240229',
-  /** @deprecated Retired on the Claude API 2026-04-20. Use CLAUDE_HAIKU_4_5. */
+  /** @deprecated Retired on the Claude API 2026-04-20; not accepted by AnthropicProvider. Use CLAUDE_HAIKU_4_5. */
   CLAUDE_3_HAIKU: 'claude-3-haiku-20240307',
 
   // Cloudflare models

@@ -122,7 +122,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.005,
     outputTokenCost: 0.015,
-    description: 'GPT-4o (not routed by this package; dated snapshots shut down 2026-10-23 and 2027-01-14)'
+    description: 'GPT-4o. Marked retired here only to keep it out of routing (the OpenAI adapter does not accept it); OpenAI has announced no shutdown for the gpt-4o alias, only for dated snapshots'
   }, { speed: 4, quality: 5, cost: 2 }),
   entry('openai', 'gpt-4o-mini', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT', 'HIGH_PERFORMANCE'], {
     maxContextLength: 128000,
@@ -172,7 +172,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
   }, { speed: 3, quality: 2, cost: 3 }),
 
   entry('anthropic', 'claude-opus-4-6', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
-    maxContextLength: 200000,
+    maxContextLength: 1000000,
     supportsStreaming: true,
     supportsTools: true,
     supportsVision: true,
@@ -182,7 +182,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Claude Opus 4.6'
   }, { speed: 2, quality: 7, cost: 1 }),
   entry('anthropic', 'claude-sonnet-4-6', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING', 'BALANCED'], {
-    maxContextLength: 200000,
+    maxContextLength: 1000000,
     supportsStreaming: true,
     supportsTools: true,
     supportsVision: true,
@@ -242,8 +242,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
-    inputTokenCost: 0.00025,
-    outputTokenCost: 0.00125,
+    inputTokenCost: 0.0008,
+    outputTokenCost: 0.004,
     description: 'Claude 3.5 Haiku (retired on the Claude API 2026-02-19)'
   }, { speed: 4, quality: 3, cost: 4 }),
   entry('anthropic', 'claude-3-opus-20240229', 'retired', ['HIGH_PERFORMANCE'], {
@@ -1245,21 +1245,23 @@ function resolveRoutingInfo(
 
   // When a specific model is pinned, report on that model rather than recommending.
   if (request.model) {
-    const hosts = getProvidersForCatalogModel(request.model);
+    // Report the vendor wire ID, so previously published invalid IDs resolve like the real ones.
+    const model = resolveModelId(request.model);
+    const hosts = getProvidersForCatalogModel(model);
     const provider = hosts.find(host => availableProviders.includes(host)
-      && (request.builtInTools ?? []).every(tool => modelSupportsBuiltInTools(request.model!, host, tool.type)))
+      && (request.builtInTools ?? []).every(tool => modelSupportsBuiltInTools(model, host, tool.type)))
       ?? (hosts.length === 0 ? availableProviders[0] : undefined);
-    if (!provider && strict) throw new NoRouteError(`No configured provider serves model '${request.model}' with its requested built-in tools`);
+    if (!provider && strict) throw new NoRouteError(`No configured provider serves model '${model}' with its requested built-in tools`);
     // Compatibility: describe the catalog host when no configured host matches.
     const entry = provider
-      ? MODEL_CATALOG.find(candidate => candidate.model === request.model && candidate.provider === provider)
-      : getCatalogEntry(request.model);
-    const reported = (provider ?? entry?.provider ?? getProviderForCatalogModel(request.model)
+      ? MODEL_CATALOG.find(candidate => candidate.model === model && candidate.provider === provider)
+      : getCatalogEntry(model);
+    const reported = (provider ?? entry?.provider ?? getProviderForCatalogModel(model)
       ?? availableProviders[0] ?? 'anthropic') as ProviderName;
     return {
       useCase,
       provider: reported,
-      model: request.model,
+      model,
       catalogEntry: entry,
       estimatedInputTokens,
       requiresTools,

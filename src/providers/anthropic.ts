@@ -278,7 +278,7 @@ export class AnthropicProvider extends BaseProvider {
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
     return {
       'claude-opus-4-6': {
-        maxContextLength: 200000,
+        maxContextLength: 1000000,
         supportsStreaming: true,
         supportsTools: true,
         supportsVision: true,
@@ -289,7 +289,7 @@ export class AnthropicProvider extends BaseProvider {
         description: 'Claude Opus 4.6 - Latest, highest intelligence and capability'
       },
       'claude-sonnet-4-6': {
-        maxContextLength: 200000,
+        maxContextLength: 1000000,
         supportsStreaming: true,
         supportsTools: true,
         supportsVision: true,
@@ -351,8 +351,8 @@ export class AnthropicProvider extends BaseProvider {
         supportsTools: true,
         supportsBatching: false,
         supportsPromptCache: true,
-        inputTokenCost: 0.00025, // $0.25 per 1M tokens
-        outputTokenCost: 0.00125, // $1.25 per 1M tokens
+        inputTokenCost: 0.0008, // $0.80 per 1M tokens
+        outputTokenCost: 0.004, // $4 per 1M tokens
         description: 'Claude 3.5 Haiku - Fast and cost-effective'
       },
       'claude-3-opus-20240229': {
@@ -660,6 +660,31 @@ export class AnthropicProvider extends BaseProvider {
     let cacheCreationInputTokens: number | undefined;
     let cacheCreation1hInputTokens: number | undefined;
 
+    // message_start and message_delta usage are cumulative snapshots; the latest value of each field wins.
+    const readUsage = (usage: unknown): void => {
+      if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return;
+      const usageObj = usage as Record<string, unknown>;
+      if (typeof usageObj['input_tokens'] === 'number') {
+        inputTokens = usageObj['input_tokens'];
+        sawUsage = true;
+      }
+      if (typeof usageObj['output_tokens'] === 'number') {
+        outputTokens = usageObj['output_tokens'];
+        sawUsage = true;
+      }
+      if (typeof usageObj['cache_read_input_tokens'] === 'number') {
+        cacheReadInputTokens = usageObj['cache_read_input_tokens'];
+      }
+      if (typeof usageObj['cache_creation_input_tokens'] === 'number') {
+        cacheCreationInputTokens = usageObj['cache_creation_input_tokens'];
+      }
+      const split = usageObj['cache_creation'];
+      if (split && typeof split === 'object' && !Array.isArray(split)
+        && typeof (split as Record<string, unknown>)['ephemeral_1h_input_tokens'] === 'number') {
+        cacheCreation1hInputTokens = (split as Record<string, number>)['ephemeral_1h_input_tokens'];
+      }
+    };
+
     const currentUsage = (): TokenUsage | undefined => {
       if (!sawUsage) return undefined;
 
@@ -701,40 +726,12 @@ export class AnthropicProvider extends BaseProvider {
           const usage = message && typeof message === 'object' && !Array.isArray(message)
             ? (message as Record<string, unknown>)['usage']
             : undefined;
-          if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
-            const usageObj = usage as Record<string, unknown>;
-            if (typeof usageObj['input_tokens'] === 'number') {
-              inputTokens = usageObj['input_tokens'];
-              sawUsage = true;
-            }
-            if (typeof usageObj['output_tokens'] === 'number') {
-              outputTokens = usageObj['output_tokens'];
-              sawUsage = true;
-            }
-            if (typeof usageObj['cache_read_input_tokens'] === 'number') {
-              cacheReadInputTokens = usageObj['cache_read_input_tokens'];
-            }
-            if (typeof usageObj['cache_creation_input_tokens'] === 'number') {
-              cacheCreationInputTokens = usageObj['cache_creation_input_tokens'];
-            }
-            const split = usageObj['cache_creation'];
-            if (split && typeof split === 'object' && !Array.isArray(split)
-              && typeof (split as Record<string, unknown>)['ephemeral_1h_input_tokens'] === 'number') {
-              cacheCreation1hInputTokens = (split as Record<string, number>)['ephemeral_1h_input_tokens'];
-            }
-          }
+          readUsage(usage);
           return {};
         }
 
         if (event['type'] === 'message_delta') {
-          const usage = event['usage'];
-          if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
-            const usageObj = usage as Record<string, unknown>;
-            if (typeof usageObj['output_tokens'] === 'number') {
-              outputTokens = usageObj['output_tokens'];
-              sawUsage = true;
-            }
-          }
+          readUsage(event['usage']);
           return {};
         }
 
