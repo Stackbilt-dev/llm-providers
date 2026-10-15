@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.22.1] — 2026-10-15
+
 ### Fixed
 - Vendor model IDs and prices (#112, phase 1), checked against primary vendor docs on 2026-10-15:
   - Anthropic 4.6 models use their real dateless IDs (`claude-opus-4-6`, `claude-sonnet-4-6`), and Claude Opus 4 uses `claude-opus-4-20250514`. The invalid `-20250618` IDs earlier releases published are still accepted: adapters, catalog lookups, routing preflight, gateway plans, the factory (quota checks, hooks, cache keys) and `CreditLedger` spend and per-model budgets all translate them to the real ID. `MODELS.CLAUDE_OPUS_4_6`, `CLAUDE_SONNET_4_6` and `CLAUDE_OPUS_4` now hold the real IDs. Because `MODELS` is `as const`, their literal TypeScript types change; code that pins the old literal strings, or compares persisted values against `MODELS.*`, needs updating. The old values never worked against the Anthropic API.
