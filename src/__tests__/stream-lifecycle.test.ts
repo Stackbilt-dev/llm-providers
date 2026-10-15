@@ -343,6 +343,15 @@ describe('managed factory lifecycle', () => {
     expect(await text).toBe('t0t1t2t3t4t5t6t7');
   });
 
+  it('the open timeout starts when the stream is first read, not when it is built', async () => {
+    vi.useFakeTimers();
+    const { provider, run } = cf(bytes(textFrame + 'data:[DONE]\n\n'), 20);
+    const stream = await provider.streamResponse({ ...request, model: cfModel });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(run).not.toHaveBeenCalled();
+    expect(await drain(stream)).toBe('hello');
+  });
+
   it('the provider timeout still fails a stream that never opens', async () => {
     vi.useFakeTimers();
     const run = vi.fn(() => new Promise(() => {}));

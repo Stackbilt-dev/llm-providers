@@ -65,7 +65,8 @@ describe('configured-provider routing snapshots', () => {
       .not.toThrow();
     const plan = getGatewayRoutePlan({ messages, model: 'gpt-4o-mini' }, ['cloudflare']);
     expect(plan.selectedProvider).toBe('openai');
-    expect(plan.executable).toBe(true);
+    expect(plan.executable).toBe(false);
+    expect(getGatewayRoutePlan({ messages, model: 'gpt-4o-mini' }, ['openai']).executable).toBe(true);
   });
 
   it('the client snapshot only reports configured providers, unlike the catalog helper', () => {

@@ -100,18 +100,19 @@ export function createProviderStream(options: ProviderStreamOptions): ReadableSt
   const stream = new ReadableStream<string>({
     start(value) {
       controller = value;
-      if (options.timeoutMs && options.timeoutMs > 0) {
-        timer = setTimeout(() => finish(new TimeoutError(options.provider,
-          `Stream open timeout after ${options.timeoutMs}ms`)), options.timeoutMs);
-      }
-      if (options.bodyTimeoutMs && options.bodyTimeoutMs > 0) {
-        bodyTimer = setTimeout(() => finish(new TimeoutError(options.provider,
-          `Stream timeout after ${options.bodyTimeoutMs}ms`)), options.bodyTimeoutMs);
-      }
     },
     async pull() {
       try {
         if (!opening) opening = (async () => {
+          // Deadlines start when the request is actually sent (first demand), not at construction.
+          if (options.timeoutMs && options.timeoutMs > 0) {
+            timer = setTimeout(() => finish(new TimeoutError(options.provider,
+              `Stream open timeout after ${options.timeoutMs}ms`)), options.timeoutMs);
+          }
+          if (options.bodyTimeoutMs && options.bodyTimeoutMs > 0) {
+            bodyTimer = setTimeout(() => finish(new TimeoutError(options.provider,
+              `Stream timeout after ${options.bodyTimeoutMs}ms`)), options.bodyTimeoutMs);
+          }
           const source = await options.open(abort.signal);
           // The provider timeout covers opening only; long generations may keep streaming.
           if (timer !== undefined) { clearTimeout(timer); timer = undefined; }

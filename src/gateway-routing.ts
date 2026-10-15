@@ -76,7 +76,9 @@ export function getGatewayRoutePlan(
   const warnings = routeWarnings(routing, requirements, capabilities, cache);
 
   return {
-    executable: !degradations.some(degradation => degradation.action === 'failed'),
+    // A plan for a host outside the configured set cannot be dispatched as described.
+    executable: !degradations.some(degradation => degradation.action === 'failed')
+      && (availableProviders === undefined || availableProviders.includes(routing.provider)),
     canonicalRequest,
     legacyRequest,
     routing,
