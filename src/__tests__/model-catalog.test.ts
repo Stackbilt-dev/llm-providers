@@ -168,8 +168,8 @@ describe('getRoutingInfo', () => {
 
   it('returns deprecation warning for a compatibility-lifecycle model', () => {
     const info = getRoutingInfo(
-      { messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4' },
-      ['openai']
+      { messages: [{ role: 'user', content: 'hi' }], model: 'qwen-3-235b-a22b-instruct-2507' },
+      ['cerebras']
     );
     expect(info.modelLifecycle).toBe('compatibility');
     expect(info.deprecationWarning).toBeTruthy();
@@ -444,9 +444,11 @@ describe('new CF Workers AI models (v1.16.0)', () => {
     }
   });
 
-  it('prefers the current DeepSeek V4 Flash lane for Cloudflare long-context routing', () => {
+  it('routes Cloudflare long-context requests to an active 1M-context model', () => {
     const ranked = rankModels('LONG_CONTEXT', ['cloudflare']);
-    expect(ranked[0]?.model).toBe('@cf/deepseek-ai/deepseek-v4-flash-0731');
+    expect(ranked[0]?.lifecycle).toBe('active');
+    expect(ranked[0]?.capabilities.maxContextLength).toBeGreaterThanOrEqual(1_048_576);
+    expect(ranked.slice(0, 3).map(entry => entry.model)).toContain('@cf/deepseek-ai/deepseek-v4-flash-0731');
   });
 });
 
@@ -472,7 +474,7 @@ describe('current CF Workers AI models (August 2026)', () => {
   });
 
   it('records the documented context windows and vision capabilities', () => {
-    expect(getCatalogEntry('@cf/deepseek-ai/deepseek-v4-flash-0731')?.capabilities.maxContextLength).toBe(1_310_720);
+    expect(getCatalogEntry('@cf/deepseek-ai/deepseek-v4-flash-0731')?.capabilities.maxContextLength).toBe(1_048_576);
     expect(getCatalogEntry('@cf/deepseek-ai/deepseek-v4-pro-0813')?.capabilities.maxContextLength).toBe(1_048_576);
     expect(getCatalogEntry('@cf/zai-org/glm-5.3')?.capabilities.maxContextLength).toBe(1_048_576);
     expect(getCatalogEntry('@cf/qwen/qwen3.8-27b')?.capabilities.supportsVision).toBe(true);

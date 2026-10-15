@@ -38,6 +38,12 @@ export interface ModelCatalogEntry {
   speedScore: number;
   qualityScore: number;
   costScore: number;
+  /**
+   * Served only when a request names this model. Recommendations and automatic
+   * routing skip it (for example, a model the adapter cannot yet use for every
+   * request shape that routing might send it).
+   */
+  explicitOnly?: boolean;
 }
 
 type SelectionHealthEntry = {
@@ -100,6 +106,7 @@ function entry(
   useCases: ModelRecommendationUseCase[],
   capabilities: ModelCapabilities,
   scores: { speed: number; quality: number; cost: number },
+  options: { explicitOnly?: boolean } = {},
 ): ModelCatalogEntry {
   return {
     provider,
@@ -110,10 +117,66 @@ function entry(
     speedScore: scores.speed,
     qualityScore: scores.quality,
     costScore: scores.cost,
+    ...(options.explicitOnly ? { explicitOnly: true } : {}),
   };
 }
 
 export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
+  entry('openai', 'gpt-6-astra', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
+    maxContextLength: 1050000,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: false,
+    inputTokenCost: 0.01,
+    outputTokenCost: 0.05,
+    description: 'GPT-6 Astra — OpenAI\'s flagship reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
+  }, { speed: 3, quality: 7, cost: 1 }, { explicitOnly: true }),
+  entry('openai', 'gpt-5.6-sol', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
+    maxContextLength: 1050000,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: false,
+    inputTokenCost: 0.004,
+    outputTokenCost: 0.02,
+    description: 'GPT-5.6 Sol — reasoning model; promotional price stated through at least 2026-11-21; prompts over 272K tokens bill 2x input and 1.5x output'
+  }, { speed: 3, quality: 7, cost: 2 }, { explicitOnly: true }),
+  entry('openai', 'gpt-5.6-terra', 'active', ['BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
+    maxContextLength: 1050000,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: false,
+    inputTokenCost: 0.002,
+    outputTokenCost: 0.012,
+    description: 'GPT-5.6 Terra — mid-tier reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
+  }, { speed: 4, quality: 6, cost: 3 }, { explicitOnly: true }),
+  entry('openai', 'gpt-5.6-luna', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION'], {
+    maxContextLength: 1050000,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: false,
+    inputTokenCost: 0.0002,
+    outputTokenCost: 0.0012,
+    description: 'GPT-5.6 Luna — low-cost reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
+  }, { speed: 5, quality: 5, cost: 5 }, { explicitOnly: true }),
+  entry('openai', 'gpt-5.5', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING'], {
+    maxContextLength: 1050000,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsVision: true,
+    supportsBatching: false,
+    inputTokenCost: 0.005,
+    outputTokenCost: 0.03,
+    description: 'GPT-5.5 (alias of gpt-5.5-2026-04-23) — reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
+  }, { speed: 3, quality: 6, cost: 1 }, { explicitOnly: true }),
   entry('openai', 'gpt-4o', 'retired', ['HIGH_PERFORMANCE', 'TOOL_CALLING'], {
     maxContextLength: 128000,
     supportsStreaming: true,
@@ -132,45 +195,89 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.00015,
     outputTokenCost: 0.0006,
-    description: 'Modern OpenAI baseline'
+    description: 'GPT-4o mini (deprecated 2027-01-14, when OpenAI shuts it down; replacement gpt-6-luna)'
   }, { speed: 5, quality: 4, cost: 5 }),
-  entry('openai', 'gpt-4-turbo', 'compatibility', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
+  entry('openai', 'gpt-4-turbo', 'retired', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
     maxContextLength: 128000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.01,
     outputTokenCost: 0.03,
-    description: 'Compatibility OpenAI GPT-4 Turbo (deprecated 2026-10-23)'
+    description: 'GPT-4 Turbo (deprecated 2026-10-23, when OpenAI shuts it down; replacement gpt-5.6-sol)'
   }, { speed: 3, quality: 4, cost: 2 }),
-  entry('openai', 'gpt-4', 'compatibility', ['HIGH_PERFORMANCE'], {
+  entry('openai', 'gpt-4', 'retired', ['HIGH_PERFORMANCE'], {
     maxContextLength: 8192,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.03,
     outputTokenCost: 0.06,
-    description: 'Compatibility GPT-4 (deprecated 2026-10-23)'
+    description: 'GPT-4 (deprecated 2026-10-23, when OpenAI shuts it down; replacement gpt-5.6-sol)'
   }, { speed: 2, quality: 4, cost: 1 }),
-  entry('openai', 'gpt-3.5-turbo', 'compatibility', ['COST_EFFECTIVE'], {
+  entry('openai', 'gpt-3.5-turbo', 'retired', ['COST_EFFECTIVE'], {
     maxContextLength: 16385,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.0005,
     outputTokenCost: 0.0015,
-    description: 'Compatibility GPT-3.5 Turbo (deprecated 2026-10-23)'
+    description: 'GPT-3.5 Turbo (deprecated 2026-10-23, when OpenAI shuts it down; replacement gpt-5.6-terra)'
   }, { speed: 4, quality: 2, cost: 3 }),
-  entry('openai', 'gpt-3.5-turbo-16k', 'compatibility', ['LONG_CONTEXT'], {
+  entry('openai', 'gpt-3.5-turbo-16k', 'retired', ['LONG_CONTEXT'], {
     maxContextLength: 16385,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.001,
     outputTokenCost: 0.002,
-    description: 'Compatibility GPT-3.5 Turbo 16k'
+    description: 'GPT-3.5 Turbo 16k (no longer a valid OpenAI model ID; gpt-3.5-turbo-16k-0613 shut down 2024-09-13)'
   }, { speed: 3, quality: 2, cost: 3 }),
 
+  entry('anthropic', 'claude-fable-5-1', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
+    maxContextLength: 1000000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsVision: true,
+    supportsBatching: false,
+    supportsPromptCache: true,
+    inputTokenCost: 0.01,
+    outputTokenCost: 0.05,
+    description: 'Claude Fable 5.1 — top tier for demanding reasoning and long-horizon agentic work; adaptive thinking always on'
+  }, { speed: 2, quality: 7, cost: 1 }, { explicitOnly: true }),
+  entry('anthropic', 'claude-opus-5-5', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
+    maxContextLength: 1000000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsVision: true,
+    supportsBatching: false,
+    supportsPromptCache: true,
+    inputTokenCost: 0.004,
+    outputTokenCost: 0.02,
+    description: 'Claude Opus 5.5 — Anthropic\'s recommended starting model; adaptive thinking always on'
+  }, { speed: 3, quality: 7, cost: 2 }, { explicitOnly: true }),
+  entry('anthropic', 'claude-sonnet-5-5', 'active', ['HIGH_PERFORMANCE', 'BALANCED', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
+    maxContextLength: 1000000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsVision: true,
+    supportsBatching: false,
+    supportsPromptCache: true,
+    inputTokenCost: 0.002,
+    outputTokenCost: 0.01,
+    description: 'Claude Sonnet 5.5 — balanced speed and intelligence'
+  }, { speed: 4, quality: 6, cost: 4 }, { explicitOnly: true }),
+  entry('anthropic', 'claude-haiku-5-5', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT'], {
+    maxContextLength: 1000000,
+    supportsStreaming: true,
+    supportsTools: true,
+    supportsVision: true,
+    supportsBatching: false,
+    supportsPromptCache: true,
+    inputTokenCost: 0.0001,
+    outputTokenCost: 0.0005,
+    description: 'Claude Haiku 5.5 — fastest tier; prompts over 100K tokens bill at 5x these rates'
+  }, { speed: 5, quality: 5, cost: 5 }, { explicitOnly: true }),
   entry('anthropic', 'claude-opus-4-6', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
     maxContextLength: 1000000,
     supportsStreaming: true,
@@ -179,7 +286,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.005,
     outputTokenCost: 0.025,
-    description: 'Claude Opus 4.6'
+    description: 'Claude Opus 4.6 (legacy on the Claude API; retirement not sooner than 2027-02-05)'
   }, { speed: 2, quality: 7, cost: 1 }),
   entry('anthropic', 'claude-sonnet-4-6', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING', 'BALANCED'], {
     maxContextLength: 1000000,
@@ -189,7 +296,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.003,
     outputTokenCost: 0.015,
-    description: 'Claude Sonnet 4.6'
+    description: 'Claude Sonnet 4.6 (legacy on the Claude API; retirement not sooner than 2027-02-17)'
   }, { speed: 3, quality: 6, cost: 3 }),
   entry('anthropic', 'claude-opus-4-20250514', 'retired', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
@@ -217,7 +324,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.001,
     outputTokenCost: 0.005,
-    description: 'Claude Haiku 4.5'
+    description: 'Claude Haiku 4.5 (legacy on the Claude API; retirement not sooner than 2026-10-15, no notice yet)'
   }, { speed: 4, quality: 4, cost: 5 }),
   entry('anthropic', 'claude-3-7-sonnet-20250219', 'retired', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
@@ -265,68 +372,68 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Claude 3 Sonnet (retired on the Claude API 2025-07-21)'
   }, { speed: 3, quality: 3, cost: 2 }),
 
-  entry('cloudflare', '@cf/meta/llama-3.1-8b-instruct', 'compatibility', ['COST_EFFECTIVE'], {
+  entry('cloudflare', '@cf/meta/llama-3.1-8b-instruct', 'retired', ['COST_EFFECTIVE'], {
     maxContextLength: 8192,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.000282,
     outputTokenCost: 0.000827,
-    description: 'Workers AI Llama 3.1 8B'
+    description: 'Workers AI Llama 3.1 8B (deprecated on Workers AI 2026-05-30; no longer in the model catalog)'
   }, { speed: 5, quality: 2, cost: 5 }),
-  entry('cloudflare', '@cf/meta/llama-3.1-70b-instruct', 'compatibility', ['HIGH_PERFORMANCE'], {
+  entry('cloudflare', '@cf/meta/llama-3.1-70b-instruct', 'retired', ['HIGH_PERFORMANCE'], {
     maxContextLength: 8192,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.0000005,
     outputTokenCost: 0.0000005,
-    description: 'Workers AI Llama 3.1 70B'
+    description: 'Workers AI Llama 3.1 70B (deprecated on Workers AI 2026-05-30; no longer in the model catalog)'
   }, { speed: 3, quality: 4, cost: 4 }),
-  entry('cloudflare', '@cf/meta/llama-3-8b-instruct', 'compatibility', ['COST_EFFECTIVE'], {
+  entry('cloudflare', '@cf/meta/llama-3-8b-instruct', 'retired', ['COST_EFFECTIVE'], {
     maxContextLength: 8192,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.000282,
     outputTokenCost: 0.000827,
-    description: 'Workers AI Llama 3 8B'
+    description: 'Workers AI Llama 3 8B (deprecated on Workers AI 2026-05-30; no longer in the model catalog)'
   }, { speed: 4, quality: 2, cost: 5 }),
-  entry('cloudflare', '@cf/meta/llama-2-7b-chat-int8', 'compatibility', ['COST_EFFECTIVE'], {
+  entry('cloudflare', '@cf/meta/llama-2-7b-chat-int8', 'retired', ['COST_EFFECTIVE'], {
     maxContextLength: 4096,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.00000005,
     outputTokenCost: 0.00000005,
-    description: 'Workers AI Llama 2 7B'
+    description: 'Workers AI Llama 2 7B (deprecated on Workers AI 2026-05-30; no longer in the model catalog)'
   }, { speed: 4, quality: 1, cost: 5 }),
-  entry('cloudflare', '@cf/microsoft/phi-2', 'compatibility', ['COST_EFFECTIVE'], {
+  entry('cloudflare', '@cf/microsoft/phi-2', 'retired', ['COST_EFFECTIVE'], {
     maxContextLength: 2048,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.00000002,
     outputTokenCost: 0.00000002,
-    description: 'Workers AI Phi-2'
+    description: 'Workers AI Phi-2 (deprecated on Workers AI 2026-05-30; no longer in the model catalog)'
   }, { speed: 4, quality: 1, cost: 5 }),
-  entry('cloudflare', '@cf/mistral/mistral-7b-instruct-v0.1', 'compatibility', ['BALANCED'], {
+  entry('cloudflare', '@cf/mistral/mistral-7b-instruct-v0.1', 'retired', ['BALANCED'], {
     maxContextLength: 8192,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.00011,
     outputTokenCost: 0.00019,
-    description: 'Workers AI Mistral 7B'
+    description: 'Workers AI Mistral 7B (deprecated on Workers AI 2026-05-30; no longer in the model catalog)'
   }, { speed: 4, quality: 2, cost: 5 }),
-  entry('cloudflare', '@cf/openchat/openchat-3.5-0106', 'compatibility', ['BALANCED'], {
+  entry('cloudflare', '@cf/openchat/openchat-3.5-0106', 'retired', ['BALANCED'], {
     maxContextLength: 8192,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.0000001,
     outputTokenCost: 0.0000001,
-    description: 'Workers AI OpenChat 3.5'
+    description: 'Workers AI OpenChat 3.5 (deprecated on Workers AI 2025-10-01; no longer in the model catalog)'
   }, { speed: 4, quality: 2, cost: 5 }),
   entry('cloudflare', '@cf/openai/gpt-oss-120b', 'active', ['TOOL_CALLING', 'HIGH_PERFORMANCE'], {
     maxContextLength: 128000,
@@ -339,7 +446,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Workers AI GPT-OSS 120B — OpenAI open-weight 117B/5.1B-active MoE, near o4-mini class (not Phi-4)'
   }, { speed: 4, quality: 6, cost: 4 }),
   entry('cloudflare', '@cf/moonshotai/kimi-k2.6', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT', 'VISION', 'BALANCED'], {
-    maxContextLength: 262100,
+    maxContextLength: 262144,
     supportsStreaming: true,
     supportsTools: true,
     toolCalling: true,
@@ -350,7 +457,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Workers AI Kimi K2.6 — 1T/32B-active MoE, frontier-scale agent model; vision, 262K context, tool calling (Moonshot self-reported benchmarks)'
   }, { speed: 3, quality: 6, cost: 5 }),
   entry('cloudflare', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', 'active', ['COST_EFFECTIVE', 'BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING'], {
-    maxContextLength: 131072,
+    maxContextLength: 24000,
     supportsStreaming: true,
     supportsTools: true,
     toolCalling: true,
@@ -369,11 +476,10 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.0003,
     description: 'Workers AI GPT-OSS 20B — lightweight tool-calling model; cost-effective complement to gpt-oss-120b'
   }, { speed: 5, quality: 4, cost: 5 }),
-  entry('cloudflare', '@cf/qwen/qwen2.5-coder-32b-instruct', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING'], {
+  entry('cloudflare', '@cf/qwen/qwen2.5-coder-32b-instruct', 'active', ['COST_EFFECTIVE', 'BALANCED'], {
     maxContextLength: 32768,
     supportsStreaming: true,
-    supportsTools: true,
-    toolCalling: true,
+    supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.00066,
     outputTokenCost: 0.001,
@@ -391,7 +497,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Workers AI Mistral Small 3.1 24B — vision + tool calling; weakest of the active CF set'
   }, { speed: 4, quality: 3, cost: 5 }),
   entry('cloudflare', '@cf/qwen/qwen3-30b-a3b-fp8', 'active', ['BALANCED', 'HIGH_PERFORMANCE'], {
-    maxContextLength: 40960,
+    maxContextLength: 32768,
     supportsStreaming: true,
     supportsTools: true,
     toolCalling: true,
@@ -412,7 +518,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Workers AI Qwen 3.8 27B — vision-language model for reasoning and multi-turn function calling with 262K context'
   }, { speed: 4, quality: 5, cost: 3 }),
   entry('cloudflare', '@cf/meta/llama-3.2-1b-instruct', 'active', ['COST_EFFECTIVE'], {
-    maxContextLength: 131072,
+    maxContextLength: 60000,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
@@ -421,7 +527,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Workers AI Llama 3.2 1B — ultra-cheap tiny model for simple classification and summary'
   }, { speed: 5, quality: 2, cost: 5 }),
   entry('cloudflare', '@cf/meta/llama-3.2-3b-instruct', 'active', ['COST_EFFECTIVE'], {
-    maxContextLength: 131072,
+    maxContextLength: 80000,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
@@ -429,8 +535,37 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.000335,
     description: 'Workers AI Llama 3.2 3B — cheap small model, step up from 1B'
   }, { speed: 5, quality: 3, cost: 5 }),
+  entry('cloudflare', '@cf/meta/llama-3.1-8b-instruct-fp8', 'active', ['COST_EFFECTIVE'], {
+    maxContextLength: 32000,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: false,
+    inputTokenCost: 0.000152,
+    outputTokenCost: 0.000287,
+    description: 'Workers AI Llama 3.1 8B FP8 — the listed Llama 3.1 8B variant after the 2026-05-30 deprecations'
+  }, { speed: 5, quality: 3, cost: 5 }),
+  entry('cloudflare', '@cf/ibm-granite/granite-4.0-h-micro', 'active', ['COST_EFFECTIVE'], {
+    maxContextLength: 131000,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: false,
+    inputTokenCost: 0.000017,
+    outputTokenCost: 0.000112,
+    description: 'Workers AI IBM Granite 4.0 H Micro — very low cost small model with function calling'
+  }, { speed: 5, quality: 3, cost: 5 }),
+  entry('cloudflare', '@cf/aisingapore/gemma-sea-lion-v4-27b-it', 'active', [], {
+    maxContextLength: 128000,
+    supportsStreaming: true,
+    supportsTools: false,
+    supportsBatching: false,
+    inputTokenCost: 0.000351,
+    outputTokenCost: 0.000555,
+    description: 'Workers AI SEA-LION v4 27B — Gemma-based model for Southeast Asian languages; explicit requests only'
+  }, { speed: 4, quality: 4, cost: 4 }, { explicitOnly: true }),
   entry('cloudflare', '@cf/moonshotai/kimi-k2.7-code', 'active', ['BALANCED', 'TOOL_CALLING'], {
-    maxContextLength: 131072,
+    maxContextLength: 262144,
+    supportsVision: true,
     supportsStreaming: true,
     supportsTools: true,
     toolCalling: true,
@@ -451,23 +586,23 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Workers AI GLM-4.7-Flash — 30B/3B-active MoE CoT model; emits <think> reasoning traces, RESEARCH-only routing'
   }, { speed: 5, quality: 5, cost: 5 }),
   entry('cloudflare', 'deepseek/deepseek-v4-pro', 'active', ['HIGH_PERFORMANCE', 'BALANCED'], {
-    maxContextLength: 128000,
+    maxContextLength: 131072,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
-    description: 'Workers AI DeepSeek V4 Pro — frontier-class reasoning and coding, near gpt-oss-120b tier'
-  }, { speed: 3, quality: 6, cost: 5 }),
+    inputTokenCost: 0.00174,
+    outputTokenCost: 0.00348,
+    description: 'DeepSeek V4 Pro via the AI Gateway unified catalog (served by Fireworks; not a Workers AI model). For Workers AI use @cf/deepseek-ai/deepseek-v4-pro-0813'
+  }, { speed: 3, quality: 6, cost: 3 }),
   entry('cloudflare', '@cf/deepseek-ai/deepseek-v4-flash-0731', 'active', ['BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
-    maxContextLength: 1310720,
+    maxContextLength: 1048576,
     supportsStreaming: true,
     supportsTools: true,
     toolCalling: true,
     supportsBatching: true,
     inputTokenCost: 0.00044,
     outputTokenCost: 0.00132,
-    description: 'Workers AI DeepSeek V4 Flash 0731 — fast hosted reasoning and agentic model; 1.31M context and function calling'
+    description: 'Workers AI DeepSeek V4 Flash 0731 — fast hosted reasoning and agentic model; 1M context and function calling'
   }, { speed: 4, quality: 6, cost: 4 }),
   entry('cloudflare', '@cf/deepseek-ai/deepseek-v4-pro-0813', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 1048576,
@@ -479,50 +614,50 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.00396,
     description: 'Workers AI DeepSeek V4 Pro 0813 — hosted long-horizon reasoning and agentic model; 1M context and function calling'
   }, { speed: 3, quality: 6, cost: 3 }),
-  entry('cloudflare', '@cf/tinyllama/tinyllama-1.1b-chat-v1.0', 'compatibility', ['COST_EFFECTIVE'], {
+  entry('cloudflare', '@cf/tinyllama/tinyllama-1.1b-chat-v1.0', 'retired', ['COST_EFFECTIVE'], {
     maxContextLength: 2048,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.00000001,
     outputTokenCost: 0.00000001,
-    description: 'Workers AI TinyLlama'
+    description: 'Workers AI TinyLlama (deprecated on Workers AI 2025-10-01; no longer in the model catalog)'
   }, { speed: 5, quality: 1, cost: 5 }),
-  entry('cloudflare', '@cf/qwen/qwen1.5-0.5b-chat', 'compatibility', ['COST_EFFECTIVE'], {
+  entry('cloudflare', '@cf/qwen/qwen1.5-0.5b-chat', 'retired', ['COST_EFFECTIVE'], {
     maxContextLength: 2048,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.00000001,
     outputTokenCost: 0.00000001,
-    description: 'Workers AI Qwen 1.5 0.5B'
+    description: 'Workers AI Qwen 1.5 0.5B (deprecated on Workers AI 2025-10-01; no longer in the model catalog)'
   }, { speed: 5, quality: 1, cost: 5 }),
-  entry('cloudflare', '@cf/qwen/qwen1.5-1.8b-chat', 'compatibility', ['COST_EFFECTIVE'], {
+  entry('cloudflare', '@cf/qwen/qwen1.5-1.8b-chat', 'retired', ['COST_EFFECTIVE'], {
     maxContextLength: 4096,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.00000002,
     outputTokenCost: 0.00000002,
-    description: 'Workers AI Qwen 1.5 1.8B'
+    description: 'Workers AI Qwen 1.5 1.8B (deprecated on Workers AI 2025-10-01; no longer in the model catalog)'
   }, { speed: 5, quality: 1, cost: 5 }),
-  entry('cloudflare', '@cf/qwen/qwen1.5-14b-chat-awq', 'compatibility', ['BALANCED'], {
+  entry('cloudflare', '@cf/qwen/qwen1.5-14b-chat-awq', 'retired', ['BALANCED'], {
     maxContextLength: 8192,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.0000002,
     outputTokenCost: 0.0000002,
-    description: 'Workers AI Qwen 1.5 14B'
+    description: 'Workers AI Qwen 1.5 14B (deprecated on Workers AI 2025-10-01; no longer in the model catalog)'
   }, { speed: 4, quality: 3, cost: 4 }),
-  entry('cloudflare', '@cf/qwen/qwen1.5-7b-chat-awq', 'compatibility', ['BALANCED'], {
+  entry('cloudflare', '@cf/qwen/qwen1.5-7b-chat-awq', 'retired', ['BALANCED'], {
     maxContextLength: 8192,
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
     inputTokenCost: 0.0000001,
     outputTokenCost: 0.0000001,
-    description: 'Workers AI Qwen 1.5 7B'
+    description: 'Workers AI Qwen 1.5 7B (deprecated on Workers AI 2025-10-01; no longer in the model catalog)'
   }, { speed: 4, quality: 2, cost: 4 }),
   entry('cloudflare', '@cf/google/gemma-4-26b-a4b-it', 'active', ['COST_EFFECTIVE', 'VISION', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 256000,
@@ -594,9 +729,9 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: false,
     supportsTools: false,
     supportsBatching: false,
-    inputTokenCost: 0,
-    outputTokenCost: 0,
-    description: 'Cloudflare-managed Anthropic Claude Opus 4.8 — 1M context, external billing via CF dashboard; not a native CF model'
+    inputTokenCost: 0.005,
+    outputTokenCost: 0.025,
+    description: 'Claude Opus 4.8 via the AI Gateway unified catalog (not a Workers AI model); 1M context. Anthropic lists Opus 4.8 as legacy'
   }, { speed: 2, quality: 7, cost: 3 }),
   entry('cloudflare', '@cf/zai-org/glm-5.2', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 262144,
@@ -955,6 +1090,7 @@ function isCompatible(entry: ModelCatalogEntry, context: ModelSelectionContext, 
   const request = context.request;
 
   if (entry.lifecycle === 'retired') return false;
+  if (entry.explicitOnly) return false;
 
   // Thinking/reasoning models output chain-of-thought traces rather than direct
   // responses. Exclude them from every pool except RESEARCH, where the caller

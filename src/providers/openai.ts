@@ -95,6 +95,7 @@ interface OpenAIRequest {
   messages: OpenAIMessage[];
   temperature?: number;
   max_tokens?: number;
+  max_completion_tokens?: number;
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
   tools?: OpenAITool[];
@@ -134,9 +135,23 @@ interface OpenAIResponse {
   system_fingerprint?: string;
 }
 
+/** Models billed at 2x input and 1.5x output for the whole request when the prompt exceeds 272K tokens. */
+const LONG_PROMPT_MODELS = new Set(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']);
+const LONG_PROMPT_THRESHOLD = 272_000;
+
+/** GPT-5 and later, and o-series models, are reasoning models on Chat Completions. */
+export function isOpenAIReasoningModel(model: string): boolean {
+  return /^(gpt-[5-9]|o\d)/.test(model);
+}
+
 export class OpenAIProvider extends BaseProvider {
   name = 'openai';
   models = [
+    'gpt-6-astra',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-5.5',
     'gpt-4o-mini',
     'gpt-4-turbo',
     'gpt-4',
@@ -237,8 +252,76 @@ export class OpenAIProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Responses name a dated snapshot (e.g. gpt-5.5-2026-04-23), so price an
+   * unknown ID by its alias, and apply the long-prompt rate.
+   */
+  protected calculateCost(inputTokens: number, outputTokens: number, model: string): number {
+    const capabilities = this.getModelCapabilities();
+    const priced = capabilities[model] ? model : model.replace(/-\d{4}-\d{2}-\d{2}$/, '');
+    const cost = super.calculateCost(inputTokens, outputTokens, priced);
+    if (!LONG_PROMPT_MODELS.has(priced) || inputTokens <= LONG_PROMPT_THRESHOLD) return cost;
+    const { inputTokenCost, outputTokenCost } = capabilities[priced];
+    return (inputTokens / 1000) * inputTokenCost * 2 + (outputTokens / 1000) * outputTokenCost * 1.5;
+  }
+
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
     return {
+      'gpt-6-astra': {
+        maxContextLength: 1050000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: false,
+        inputTokenCost: 0.01,
+        outputTokenCost: 0.05,
+        description: 'GPT-6 Astra — OpenAI\'s flagship reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
+      },
+      'gpt-5.6-sol': {
+        maxContextLength: 1050000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: false,
+        inputTokenCost: 0.004,
+        outputTokenCost: 0.02,
+        description: 'GPT-5.6 Sol — reasoning model; promotional price stated through at least 2026-11-21; prompts over 272K tokens bill 2x input and 1.5x output'
+      },
+      'gpt-5.6-terra': {
+        maxContextLength: 1050000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: false,
+        inputTokenCost: 0.002,
+        outputTokenCost: 0.012,
+        description: 'GPT-5.6 Terra — mid-tier reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
+      },
+      'gpt-5.6-luna': {
+        maxContextLength: 1050000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: false,
+        inputTokenCost: 0.0002,
+        outputTokenCost: 0.0012,
+        description: 'GPT-5.6 Luna — low-cost reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
+      },
+      'gpt-5.5': {
+        maxContextLength: 1050000,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsVision: true,
+        supportsBatching: false,
+        inputTokenCost: 0.005,
+        outputTokenCost: 0.03,
+        description: 'GPT-5.5 (alias of gpt-5.5-2026-04-23) — reasoning model; prompts over 272K tokens bill 2x input and 1.5x output'
+      },
       'gpt-4o-mini': {
         maxContextLength: 128000,
         supportsStreaming: true,
@@ -247,7 +330,7 @@ export class OpenAIProvider extends BaseProvider {
         supportsBatching: false,
         inputTokenCost: 0.00015, // $0.15 per 1M tokens
         outputTokenCost: 0.0006, // $0.60 per 1M tokens
-        description: 'GPT-4 Omni Mini - Cost-effective version'
+        description: 'GPT-4o mini - deprecated by OpenAI; shutdown 2027-01-14'
       },
       'gpt-4-turbo': {
         maxContextLength: 128000,
@@ -256,7 +339,7 @@ export class OpenAIProvider extends BaseProvider {
         supportsBatching: false,
         inputTokenCost: 0.01, // $10 per 1M tokens
         outputTokenCost: 0.03, // $30 per 1M tokens
-        description: 'GPT-4 Turbo - High performance model'
+        description: 'GPT-4 Turbo - OpenAI shuts it down 2026-10-23'
       },
       'gpt-4': {
         maxContextLength: 8192,
@@ -265,7 +348,7 @@ export class OpenAIProvider extends BaseProvider {
         supportsBatching: false,
         inputTokenCost: 0.03, // $30 per 1M tokens
         outputTokenCost: 0.06, // $60 per 1M tokens
-        description: 'GPT-4 - Original high-capability model'
+        description: 'GPT-4 - OpenAI shuts it down 2026-10-23'
       },
       'gpt-3.5-turbo': {
         maxContextLength: 16385,
@@ -274,7 +357,7 @@ export class OpenAIProvider extends BaseProvider {
         supportsBatching: false,
         inputTokenCost: 0.0005, // $0.50 per 1M tokens
         outputTokenCost: 0.0015, // $1.50 per 1M tokens
-        description: 'GPT-3.5 Turbo - Fast and cost-effective'
+        description: 'GPT-3.5 Turbo - OpenAI shuts it down 2026-10-23'
       },
       'gpt-3.5-turbo-16k': {
         maxContextLength: 16385,
@@ -283,7 +366,7 @@ export class OpenAIProvider extends BaseProvider {
         supportsBatching: false,
         inputTokenCost: 0.001, // $1 per 1M tokens
         outputTokenCost: 0.002, // $2 per 1M tokens
-        description: 'GPT-3.5 Turbo 16k - Extended context'
+        description: 'GPT-3.5 Turbo 16k - no longer a valid OpenAI model ID'
       }
     };
   }
@@ -371,14 +454,21 @@ export class OpenAIProvider extends BaseProvider {
       messages.push(openaiMessage);
     }
 
+    const model = request.model || this.getDefaultModel(request);
     const openaiRequest: OpenAIRequest = {
-      model: request.model || this.getDefaultModel(request),
+      model,
       messages,
-      temperature: request.temperature,
-      max_tokens: request.maxTokens,
       stream: request.stream,
       seed: request.seed
     };
+    if (isOpenAIReasoningModel(model)) {
+      // Reasoning models take max_completion_tokens (which also covers reasoning
+      // tokens) and do not accept a non-default temperature.
+      openaiRequest.max_completion_tokens = request.maxTokens;
+    } else {
+      openaiRequest.temperature = request.temperature;
+      openaiRequest.max_tokens = request.maxTokens;
+    }
 
     // Add tools if provided
     if (request.tools && request.tools.length > 0) {

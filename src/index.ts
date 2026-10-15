@@ -536,24 +536,37 @@ export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebr
  */
 export const MODELS = {
   // OpenAI models
+  GPT_6_ASTRA: 'gpt-6-astra',
+  GPT_5_6_SOL: 'gpt-5.6-sol',
+  GPT_5_6_TERRA: 'gpt-5.6-terra',
+  GPT_5_6_LUNA: 'gpt-5.6-luna',
+  GPT_5_5: 'gpt-5.5',
   /** Not accepted by the OpenAI adapter or routed by this package. OpenAI has announced shutdowns only for dated gpt-4o snapshots. */
   GPT_4O: 'gpt-4o',
+  /** @deprecated OpenAI shuts this model down on 2027-01-14 and names gpt-6-luna as the replacement (not yet supported by this adapter). */
   GPT_4O_MINI: 'gpt-4o-mini',
-  /** @deprecated OpenAI shuts this model down on 2026-10-23. */
+  /** @deprecated OpenAI shuts this model down on 2026-10-23. Use GPT_5_6_SOL. */
   GPT_4_TURBO: 'gpt-4-turbo',
-  /** @deprecated OpenAI shuts this model down on 2026-10-23. */
+  /** @deprecated OpenAI shuts this model down on 2026-10-23. Use GPT_5_6_SOL. */
   GPT_4: 'gpt-4',
-  /** @deprecated OpenAI shuts this model down on 2026-10-23. */
+  /** @deprecated OpenAI shuts this model down on 2026-10-23. Use GPT_5_6_TERRA. */
   GPT_3_5_TURBO: 'gpt-3.5-turbo',
 
   // Anthropic models
   // Claude model IDs are dateless from the 4.6 generation on.
+  CLAUDE_FABLE_5_1: 'claude-fable-5-1',
+  CLAUDE_OPUS_5_5: 'claude-opus-5-5',
+  CLAUDE_SONNET_5_5: 'claude-sonnet-5-5',
+  CLAUDE_HAIKU_5_5: 'claude-haiku-5-5',
+  /** Legacy on the Claude API; retirement not sooner than 2027-02-05. */
   CLAUDE_OPUS_4_6: 'claude-opus-4-6',
+  /** Legacy on the Claude API; retirement not sooner than 2027-02-17. */
   CLAUDE_SONNET_4_6: 'claude-sonnet-4-6',
   /** @deprecated Retired on the Claude API 2026-06-15. */
   CLAUDE_OPUS_4: 'claude-opus-4-20250514',
   /** @deprecated Retired on the Claude API 2026-06-15. */
   CLAUDE_SONNET_4: 'claude-sonnet-4-20250514',
+  /** Legacy on the Claude API; retirement not sooner than 2026-10-15. */
   CLAUDE_HAIKU_4_5: 'claude-haiku-4-5-20251001',
   /** @deprecated Retired on the Claude API 2026-02-19. */
   CLAUDE_3_7_SONNET: 'claude-3-7-sonnet-20250219',
@@ -568,11 +581,28 @@ export const MODELS = {
   /** @deprecated Retired on the Claude API 2026-04-20; not accepted by AnthropicProvider. Use CLAUDE_HAIKU_4_5. */
   CLAUDE_3_HAIKU: 'claude-3-haiku-20240307',
 
-  // Cloudflare models
+  // Cloudflare Workers AI models
+  CF_GLM_5_3: '@cf/zai-org/glm-5.3',
+  CF_GLM_5_3_FLASH: '@cf/zai-org/glm-5.3-flash',
+  CF_KIMI_K2_6: '@cf/moonshotai/kimi-k2.6',
+  CF_DEEPSEEK_V4_PRO: '@cf/deepseek-ai/deepseek-v4-pro-0813',
+  CF_DEEPSEEK_V4_FLASH: '@cf/deepseek-ai/deepseek-v4-flash-0731',
+  CF_GPT_OSS_120B: '@cf/openai/gpt-oss-120b',
+  CF_GPT_OSS_20B: '@cf/openai/gpt-oss-20b',
+  CF_GEMMA_4_26B: '@cf/google/gemma-4-26b-a4b-it',
+  CF_QWEN_3_8_27B: '@cf/qwen/qwen3.8-27b',
+  CF_LLAMA_3_3_70B_FAST: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  CF_LLAMA_3_1_8B_FP8: '@cf/meta/llama-3.1-8b-instruct-fp8',
+  CF_GRANITE_4_MICRO: '@cf/ibm-granite/granite-4.0-h-micro',
+  /** @deprecated Deprecated on Workers AI 2026-05-30. Use CF_LLAMA_3_1_8B_FP8. */
   LLAMA_3_1_8B: '@cf/meta/llama-3.1-8b-instruct',
+  /** @deprecated Deprecated on Workers AI 2026-05-30. Use CF_LLAMA_3_3_70B_FAST. */
   LLAMA_3_1_70B: '@cf/meta/llama-3.1-70b-instruct',
+  /** @deprecated Deprecated on Workers AI 2026-05-30. Use CF_LLAMA_3_1_8B_FP8. */
   LLAMA_3_8B: '@cf/meta/llama-3-8b-instruct',
+  /** @deprecated Deprecated on Workers AI 2026-05-30. */
   MISTRAL_7B: '@cf/mistral/mistral-7b-instruct-v0.1',
+  /** @deprecated Deprecated on Workers AI 2025-10-01. */
   TINY_LLAMA: '@cf/tinyllama/tinyllama-1.1b-chat-v1.0',
 
   // Cerebras models

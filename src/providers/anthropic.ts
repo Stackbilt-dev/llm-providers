@@ -147,9 +147,58 @@ interface AnthropicResponse {
   };
 }
 
+/** Models that return a 400 for a non-default temperature, top_p or top_k (Claude 4.7 and later). */
+const FIXED_SAMPLING_MODELS = new Set(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']);
+
+/** Cache-read price as a fraction of the input price, where it is not the standard 0.1. */
+const CACHE_READ_MULTIPLIER: Record<string, number> = {
+  'claude-fable-5-1': 0.025,
+  'claude-opus-5-5': 0.05,
+  'claude-sonnet-5-5': 0.05,
+};
+
+/** Prompt size (input plus cache tokens) above which a model bills at its long-prompt rate. */
+const LONG_PROMPT_THRESHOLD: Record<string, number> = { 'claude-haiku-5-5': 100_000 };
+const LONG_PROMPT_MULTIPLIER = 5;
+
+/**
+ * Default max_tokens when the request sets none. Claude 5.x models think by
+ * default (Fable 5.1 and Opus 5.5 always), and thinking counts against
+ * max_tokens, so 1000 could leave no room for the answer. 16,000 stays below the
+ * size where non-streaming requests risk long-request timeouts.
+ */
+const THINKING_DEFAULT_MAX_TOKENS: Record<string, number> = {
+  'claude-fable-5-1': 16_000,
+  'claude-opus-5-5': 16_000,
+  'claude-sonnet-5-5': 16_000,
+  'claude-haiku-5-5': 16_000,
+};
+
+function defaultMaxTokens(model: string): number {
+  return THINKING_DEFAULT_MAX_TOKENS[model] ?? 1000;
+}
+
+/** Models that reject a final assistant turn (prefill) with a 400: Claude 4.6 and later. */
+const NO_PREFILL_MODELS = new Set([
+  'claude-opus-4-6', 'claude-sonnet-4-6',
+  'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5',
+]);
+
+/** Whether JSON mode can prefill '{' for this model. */
+function usesJsonPrefill(model: string): boolean {
+  return !NO_PREFILL_MODELS.has(model);
+}
+
+/** Models that reject tool_choice "any" and "tool" with a 400. */
+const NO_FORCED_TOOL_CHOICE_MODELS = new Set(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5']);
+
 export class AnthropicProvider extends BaseProvider {
   name = 'anthropic';
   models = [
+    'claude-fable-5-1',
+    'claude-opus-5-5',
+    'claude-sonnet-5-5',
+    'claude-haiku-5-5',
     'claude-opus-4-6',
     'claude-sonnet-4-6',
     'claude-opus-4-20250514',
@@ -194,7 +243,8 @@ export class AnthropicProvider extends BaseProvider {
     this.validateRequest(request);
 
     const startTime = Date.now();
-    const jsonMode = request.response_format?.type === 'json_object';
+    const jsonMode = request.response_format?.type === 'json_object'
+      && usesJsonPrefill(resolveModelId(request.model || this.getDefaultModel(request)));
 
     try {
       const response = await this.executeWithResiliency(async () => {
@@ -250,7 +300,7 @@ export class AnthropicProvider extends BaseProvider {
     const inputTokens = request.messages.reduce((sum, msg) =>
       sum + Math.ceil(msg.content.length / 4), 0
     );
-    const outputTokens = request.maxTokens || 1000;
+    const outputTokens = request.maxTokens || defaultMaxTokens(model);
 
     return this.calculateCost(inputTokens, outputTokens, model);
   }
@@ -277,6 +327,50 @@ export class AnthropicProvider extends BaseProvider {
 
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
     return {
+      'claude-fable-5-1': {
+        maxContextLength: 1000000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsVision: true,
+        supportsBatching: false,
+        supportsPromptCache: true,
+        inputTokenCost: 0.01,
+        outputTokenCost: 0.05,
+        description: 'Claude Fable 5.1 — top tier for demanding reasoning and long-horizon agentic work; adaptive thinking always on'
+      },
+      'claude-opus-5-5': {
+        maxContextLength: 1000000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsVision: true,
+        supportsBatching: false,
+        supportsPromptCache: true,
+        inputTokenCost: 0.004,
+        outputTokenCost: 0.02,
+        description: 'Claude Opus 5.5 — Anthropic\'s recommended starting model; adaptive thinking always on'
+      },
+      'claude-sonnet-5-5': {
+        maxContextLength: 1000000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsVision: true,
+        supportsBatching: false,
+        supportsPromptCache: true,
+        inputTokenCost: 0.002,
+        outputTokenCost: 0.01,
+        description: 'Claude Sonnet 5.5 — balanced speed and intelligence'
+      },
+      'claude-haiku-5-5': {
+        maxContextLength: 1000000,
+        supportsStreaming: true,
+        supportsTools: true,
+        supportsVision: true,
+        supportsBatching: false,
+        supportsPromptCache: true,
+        inputTokenCost: 0.0001,
+        outputTokenCost: 0.0005,
+        description: 'Claude Haiku 5.5 — fastest tier; prompts over 100K tokens bill at 5x these rates'
+      },
       'claude-opus-4-6': {
         maxContextLength: 1000000,
         supportsStreaming: true,
@@ -286,7 +380,7 @@ export class AnthropicProvider extends BaseProvider {
         supportsPromptCache: true,
         inputTokenCost: 0.005, // $5 per 1M tokens
         outputTokenCost: 0.025, // $25 per 1M tokens
-        description: 'Claude Opus 4.6 - Latest, highest intelligence and capability'
+        description: 'Claude Opus 4.6 - legacy; retirement not sooner than 2027-02-05'
       },
       'claude-sonnet-4-6': {
         maxContextLength: 1000000,
@@ -297,7 +391,7 @@ export class AnthropicProvider extends BaseProvider {
         supportsPromptCache: true,
         inputTokenCost: 0.003, // $3 per 1M tokens
         outputTokenCost: 0.015, // $15 per 1M tokens
-        description: 'Claude Sonnet 4.6 - Latest balanced performance model'
+        description: 'Claude Sonnet 4.6 - legacy; retirement not sooner than 2027-02-17'
       },
       'claude-opus-4-20250514': {
         maxContextLength: 200000,
@@ -325,7 +419,7 @@ export class AnthropicProvider extends BaseProvider {
         supportsPromptCache: true,
         inputTokenCost: 0.001, // $1 per 1M tokens
         outputTokenCost: 0.005, // $5 per 1M tokens
-        description: 'Claude Haiku 4.5 - Fast and cost-effective'
+        description: 'Claude Haiku 4.5 - legacy; retirement not sooner than 2026-10-15'
       },
       'claude-3-7-sonnet-20250219': {
         maxContextLength: 200000,
@@ -439,18 +533,23 @@ export class AnthropicProvider extends BaseProvider {
       messages.push(anthropicMessage);
     }
 
-    // Add prefilled assistant message for JSON mode
-    if (jsonMode) {
+    const model = resolveModelId(request.model || this.getDefaultModel(request));
+
+    // Add prefilled assistant message for JSON mode on models that accept one;
+    // later models rely on the system-prompt instruction alone.
+    if (jsonMode && usesJsonPrefill(model)) {
       messages.push({ role: 'assistant', content: '{' });
     }
-
     const anthropicRequest: AnthropicRequest = {
-      model: resolveModelId(request.model || this.getDefaultModel(request)),
+      model,
       messages,
-      max_tokens: request.maxTokens || 1000,
-      temperature: request.temperature,
+      max_tokens: request.maxTokens || defaultMaxTokens(model),
       stream: request.stream
     };
+    // Claude 4.7 and later reject a non-default temperature with a 400.
+    if (!FIXED_SAMPLING_MODELS.has(anthropicRequest.model)) {
+      anthropicRequest.temperature = request.temperature;
+    }
 
     // Add system prompt if provided
     const systemMessage = request.messages.find(m => m.role === 'system');
@@ -653,6 +752,8 @@ export class AnthropicProvider extends BaseProvider {
 
     const anthropicRequest = { ...this.formatRequest(request), stream: true };
     const model = anthropicRequest.model;
+    // JSON mode prefilled '{' on this model: restore it on the first text, as generateResponse does.
+    let restoreBrace = request.response_format?.type === 'json_object' && usesJsonPrefill(model);
     let sawUsage = false;
     let inputTokens = 0;
     let outputTokens = 0;
@@ -754,6 +855,10 @@ export class AnthropicProvider extends BaseProvider {
           throw new SchemaDriftError('anthropic', 'content_block_delta.delta.text', 'string', actual);
         }
 
+        if (restoreBrace) {
+          restoreBrace = false;
+          if (!text.startsWith('{')) return { text: '{' + text };
+        }
         return { text };
       },
       usage: currentUsage,
@@ -782,13 +887,22 @@ export class AnthropicProvider extends BaseProvider {
   /** Accept the invalid model IDs earlier releases published, validating the real one. */
   protected validateRequest(request: LLMRequest): void {
     super.validateRequest(request.model ? { ...request, model: resolveModelId(request.model) } : request);
+    const model = resolveModelId(request.model || this.getDefaultModel(request));
+    const forced = request.toolChoice === 'required' || typeof request.toolChoice === 'object';
+    if (forced && request.tools?.length && NO_FORCED_TOOL_CHOICE_MODELS.has(model)) {
+      throw new ConfigurationError(
+        this.name,
+        `${model} does not support forced tool choice; use toolChoice 'auto' and say in the prompt when to call the tool`
+      );
+    }
   }
 
   /**
    * Token cost including prompt caching. `input` excludes cached tokens on the
-   * Claude API. Multipliers on the base input rate: reads 0.1x, 5-minute
-   * writes 1.25x, 1-hour writes 2x (platform.claude.com/docs/en/about-claude/pricing,
-   * checked 2026-10-15; the listed models all use these standard multipliers).
+   * Claude API. Multipliers on the base input rate: reads 0.1x (lower on some
+   * models, see CACHE_READ_MULTIPLIER), 5-minute writes 1.25x, 1-hour writes 2x
+   * (platform.claude.com/docs/en/about-claude/pricing, checked 2026-10-15).
+   * Haiku 5.5 bills every rate at 5x when the prompt, cache included, exceeds 100K tokens.
    */
   private costWithCache(
     input: number, output: number, model: string,
@@ -798,7 +912,10 @@ export class AnthropicProvider extends BaseProvider {
     const capabilities = this.getModelCapabilities()[model];
     if (!capabilities) return base;
     const write1h = Math.min(cacheWrite1h, cacheWrite);
-    const cachedInputUnits = cacheRead * 0.1 + (cacheWrite - write1h) * 1.25 + write1h * 2;
-    return base + (cachedInputUnits / 1000) * capabilities.inputTokenCost;
+    const readMultiplier = CACHE_READ_MULTIPLIER[model] ?? 0.1;
+    const cachedInputUnits = cacheRead * readMultiplier + (cacheWrite - write1h) * 1.25 + write1h * 2;
+    const cost = base + (cachedInputUnits / 1000) * capabilities.inputTokenCost;
+    const longPrompt = input + cacheRead + cacheWrite > LONG_PROMPT_THRESHOLD[model];
+    return longPrompt ? cost * LONG_PROMPT_MULTIPLIER : cost;
   }
 }
