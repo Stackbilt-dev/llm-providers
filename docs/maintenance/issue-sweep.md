@@ -4,7 +4,7 @@ Checkpoint: 2026-10-15. Repository: `Stackbilt-dev/llm-providers`.
 
 ## Resume here
 
-The sweep below is **merged to `main`** and is versioned as 1.22.0 by release PR [#121](https://github.com/Stackbilt-dev/llm-providers/pull/121) (npm publish is a separate operator step): [#119](https://github.com/Stackbilt-dev/llm-providers/pull/119) (sweep plus review fixes) and [#120](https://github.com/Stackbilt-dev/llm-providers/pull/120) (#116 hook isolation). Each went through adversarial review rounds; review-driven compatibility fixes are recorded in the 1.22.0 CHANGELOG entry. The issues stay open for the remaining scope in the table. No live or billable vendor requests were made.
+The sweep below is **merged to `main`** and was released as 1.22.0 by release PR [#121](https://github.com/Stackbilt-dev/llm-providers/pull/121) and published to npm; 1.22.1 (#122) and 1.23.0 (#123) followed. Sweep PRs: [#119](https://github.com/Stackbilt-dev/llm-providers/pull/119) (sweep plus review fixes) and [#120](https://github.com/Stackbilt-dev/llm-providers/pull/120) (#116 hook isolation). Each went through adversarial review rounds; review-driven compatibility fixes are recorded in the 1.22.0 CHANGELOG entry. The issues stay open for the remaining scope in the table. No live or billable vendor requests were made.
 
 1. Inspect `git status --short`. Preserve the pre-existing `src/__tests__/factory.test.ts` modification; its diff is line-ending-only when checked with `--ignore-space-at-eol`.
 2. #112 phase 1 shipped in 1.22.1; phase 2 (current models, Workers AI deprecations, reasoning-model request parameters, `explicitOnly`) shipped in 1.23.0 via [#123](https://github.com/Stackbilt-dev/llm-providers/pull/123). Next: #124 (Anthropic `tool_use_id`, tool error text and Claude 5.x thinking blocks in tool loops; prerequisite for routing the 5.x models), then #109 atomic spend reservations (needs a design pass first).
@@ -49,13 +49,13 @@ Main changes: [factory](../../src/factory.ts), [public exports](../../src/index.
 
 New utilities: [response cache identity/validation](../../src/utils/response-cache.ts), [provider SSE lifecycle](../../src/utils/provider-stream.ts), [resilience context](../../src/utils/resilience-context.ts).
 
-New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts) (45 tests), [stream lifecycle](../../src/__tests__/stream-lifecycle.test.ts) (35), [context ownership/recovery](../../src/__tests__/resilience-context.test.ts) (12), [canonical identity/routing](../../src/__tests__/canonical-identity-routing.test.ts) (9). Existing schema-drift tests now reset breaker history between cases; gateway diagnostic tests check failed-plan executability. The pre-existing factory test file was preserved.
+New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts) (45 tests), [stream lifecycle](../../src/__tests__/stream-lifecycle.test.ts) (35), [context ownership/recovery](../../src/__tests__/resilience-context.test.ts) (12), [canonical identity/routing](../../src/__tests__/canonical-identity-routing.test.ts) (9). Existing schema-drift tests now reset breaker history between cases; gateway diagnostic tests check failed-plan executability. The pre-existing factory test file was preserved. Later releases added [catalog accuracy](../../src/__tests__/catalog-accuracy.test.ts) (1.22.1) and [model refresh](../../src/__tests__/model-refresh.test.ts) (1.23.0, 125 tests).
 
 ## Validation evidence
 
 Host: Windows/PowerShell, Node `v24.19.0`, npm `11.17.0`.
 
-- `npm test`: **605 passing tests across 27 files**.
+- `npm test`: **789 passing tests across 30 files** at 1.23.0 (605 across 27 when the sweep landed).
 - `npm run typecheck`: passed.
 - `npm run test:worker-import`: build and browser/Worker-targeted bundle smoke passed.
 - Packed artifact: unpacked in a temporary directory, verified 33 JavaScript maps have complete nonempty `sourcesContent`, and required the packed entrypoint to verify all new public exports and client methods. The Linux-oriented `npm run test:package` shell script itself was not run on this Windows host; its artifact checks were exercised manually.
