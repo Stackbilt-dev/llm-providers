@@ -763,7 +763,7 @@ describe('LLMProviderFactory', () => {
         expect.objectContaining({
           images: [{ data: 'abc123', mimeType: 'image/jpeg' }],
           // claude-sonnet-4-6 (quality:6) wins vision routing over haiku (quality:4) after score recalibration
-          model: 'claude-sonnet-4-6-20250618'
+          model: 'claude-sonnet-4-6'
         }),
         expect.objectContaining({ onAttempt: expect.any(Function) })
       );
@@ -854,7 +854,7 @@ describe('LLMProviderFactory', () => {
         const response = {
           message: 'fallback answer',
           usage: { inputTokens: 10, outputTokens: 6, totalTokens: 16, cost: 0.002 },
-          model: 'claude-sonnet-4-6-20250618',
+          model: 'claude-sonnet-4-6',
           provider: 'anthropic',
           responseTime: 7,
         } as LLMResponse;

@@ -23,7 +23,7 @@ import {
   RateLimitError,
   SchemaDriftError
 } from '../errors.js';
-import { getProviderDefaultModel } from '../model-catalog.js';
+import { getProviderDefaultModel, resolveModelId } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { joinReasoning } from '../utils/reasoning.js';
 
@@ -142,15 +142,17 @@ interface AnthropicResponse {
     cache_read_input_tokens?: number;
     /** Tokens written to a new cache_control breakpoint (cache miss/create). */
     cache_creation_input_tokens?: number;
+    /** Split of cache writes by TTL; 1-hour writes are billed at a higher rate. */
+    cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number };
   };
 }
 
 export class AnthropicProvider extends BaseProvider {
   name = 'anthropic';
   models = [
-    'claude-opus-4-6-20250618',
-    'claude-sonnet-4-6-20250618',
-    'claude-opus-4-20250618',
+    'claude-opus-4-6',
+    'claude-sonnet-4-6',
+    'claude-opus-4-20250514',
     'claude-sonnet-4-20250514',
     'claude-haiku-4-5-20251001',
     'claude-3-7-sonnet-20250219',
@@ -239,7 +241,7 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   estimateCost(request: LLMRequest): number {
-    const model = request.model || this.getDefaultModel(request);
+    const model = resolveModelId(request.model || this.getDefaultModel(request));
     const capabilities = this.getModelCapabilities()[model];
 
     if (!capabilities) return 0;
@@ -275,19 +277,19 @@ export class AnthropicProvider extends BaseProvider {
 
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
     return {
-      'claude-opus-4-6-20250618': {
-        maxContextLength: 200000,
+      'claude-opus-4-6': {
+        maxContextLength: 1000000,
         supportsStreaming: true,
         supportsTools: true,
         supportsVision: true,
         supportsBatching: false,
         supportsPromptCache: true,
-        inputTokenCost: 0.015, // $15 per 1M tokens
-        outputTokenCost: 0.075, // $75 per 1M tokens
+        inputTokenCost: 0.005, // $5 per 1M tokens
+        outputTokenCost: 0.025, // $25 per 1M tokens
         description: 'Claude Opus 4.6 - Latest, highest intelligence and capability'
       },
-      'claude-sonnet-4-6-20250618': {
-        maxContextLength: 200000,
+      'claude-sonnet-4-6': {
+        maxContextLength: 1000000,
         supportsStreaming: true,
         supportsTools: true,
         supportsVision: true,
@@ -297,14 +299,14 @@ export class AnthropicProvider extends BaseProvider {
         outputTokenCost: 0.015, // $15 per 1M tokens
         description: 'Claude Sonnet 4.6 - Latest balanced performance model'
       },
-      'claude-opus-4-20250618': {
+      'claude-opus-4-20250514': {
         maxContextLength: 200000,
         supportsStreaming: true,
         supportsTools: true,
         supportsBatching: false,
         inputTokenCost: 0.015, // $15 per 1M tokens
         outputTokenCost: 0.075, // $75 per 1M tokens
-        description: 'Claude Opus 4 - Highest level of intelligence and capability'
+        description: 'Claude Opus 4 - retired on the Claude API 2026-06-15'
       },
       'claude-sonnet-4-20250514': {
         maxContextLength: 200000,
@@ -349,8 +351,8 @@ export class AnthropicProvider extends BaseProvider {
         supportsTools: true,
         supportsBatching: false,
         supportsPromptCache: true,
-        inputTokenCost: 0.00025, // $0.25 per 1M tokens
-        outputTokenCost: 0.00125, // $1.25 per 1M tokens
+        inputTokenCost: 0.0008, // $0.80 per 1M tokens
+        outputTokenCost: 0.004, // $4 per 1M tokens
         description: 'Claude 3.5 Haiku - Fast and cost-effective'
       },
       'claude-3-opus-20240229': {
@@ -443,7 +445,7 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     const anthropicRequest: AnthropicRequest = {
-      model: request.model || this.getDefaultModel(request),
+      model: resolveModelId(request.model || this.getDefaultModel(request)),
       messages,
       max_tokens: request.maxTokens || 1000,
       temperature: request.temperature,
@@ -566,10 +568,13 @@ export class AnthropicProvider extends BaseProvider {
       inputTokens: data.usage.input_tokens,
       outputTokens: data.usage.output_tokens,
       totalTokens: data.usage.input_tokens + data.usage.output_tokens,
-      cost: this.calculateCost(
+      cost: this.costWithCache(
         data.usage.input_tokens,
         data.usage.output_tokens,
-        data.model
+        data.model,
+        data.usage.cache_read_input_tokens,
+        data.usage.cache_creation_input_tokens,
+        data.usage.cache_creation?.ephemeral_1h_input_tokens
       ),
       costProvenance: 'catalog_estimate',
       tokenProvenance: 'provider_reported',
@@ -653,6 +658,32 @@ export class AnthropicProvider extends BaseProvider {
     let outputTokens = 0;
     let cacheReadInputTokens: number | undefined;
     let cacheCreationInputTokens: number | undefined;
+    let cacheCreation1hInputTokens: number | undefined;
+
+    // message_start and message_delta usage are cumulative snapshots; the latest value of each field wins.
+    const readUsage = (usage: unknown): void => {
+      if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return;
+      const usageObj = usage as Record<string, unknown>;
+      if (typeof usageObj['input_tokens'] === 'number') {
+        inputTokens = usageObj['input_tokens'];
+        sawUsage = true;
+      }
+      if (typeof usageObj['output_tokens'] === 'number') {
+        outputTokens = usageObj['output_tokens'];
+        sawUsage = true;
+      }
+      if (typeof usageObj['cache_read_input_tokens'] === 'number') {
+        cacheReadInputTokens = usageObj['cache_read_input_tokens'];
+      }
+      if (typeof usageObj['cache_creation_input_tokens'] === 'number') {
+        cacheCreationInputTokens = usageObj['cache_creation_input_tokens'];
+      }
+      const split = usageObj['cache_creation'];
+      if (split && typeof split === 'object' && !Array.isArray(split)
+        && typeof (split as Record<string, unknown>)['ephemeral_1h_input_tokens'] === 'number') {
+        cacheCreation1hInputTokens = (split as Record<string, number>)['ephemeral_1h_input_tokens'];
+      }
+    };
 
     const currentUsage = (): TokenUsage | undefined => {
       if (!sawUsage) return undefined;
@@ -661,7 +692,8 @@ export class AnthropicProvider extends BaseProvider {
         inputTokens,
         outputTokens,
         totalTokens: inputTokens + outputTokens,
-        cost: this.calculateCost(inputTokens, outputTokens, model),
+        cost: this.costWithCache(inputTokens, outputTokens, model,
+          cacheReadInputTokens, cacheCreationInputTokens, cacheCreation1hInputTokens),
         costProvenance: 'catalog_estimate',
         tokenProvenance: 'provider_reported',
       };
@@ -694,35 +726,12 @@ export class AnthropicProvider extends BaseProvider {
           const usage = message && typeof message === 'object' && !Array.isArray(message)
             ? (message as Record<string, unknown>)['usage']
             : undefined;
-          if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
-            const usageObj = usage as Record<string, unknown>;
-            if (typeof usageObj['input_tokens'] === 'number') {
-              inputTokens = usageObj['input_tokens'];
-              sawUsage = true;
-            }
-            if (typeof usageObj['output_tokens'] === 'number') {
-              outputTokens = usageObj['output_tokens'];
-              sawUsage = true;
-            }
-            if (typeof usageObj['cache_read_input_tokens'] === 'number') {
-              cacheReadInputTokens = usageObj['cache_read_input_tokens'];
-            }
-            if (typeof usageObj['cache_creation_input_tokens'] === 'number') {
-              cacheCreationInputTokens = usageObj['cache_creation_input_tokens'];
-            }
-          }
+          readUsage(usage);
           return {};
         }
 
         if (event['type'] === 'message_delta') {
-          const usage = event['usage'];
-          if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
-            const usageObj = usage as Record<string, unknown>;
-            if (typeof usageObj['output_tokens'] === 'number') {
-              outputTokens = usageObj['output_tokens'];
-              sawUsage = true;
-            }
-          }
+          readUsage(event['usage']);
           return {};
         }
 
@@ -750,7 +759,7 @@ export class AnthropicProvider extends BaseProvider {
       usage: currentUsage,
       onError: error => {
         if (error instanceof SchemaDriftError) this.config.hooks?.onSchemaDrift?.({
-          provider: this.name, model: request.model, requestId: request.requestId,
+          provider: this.name, model, requestId: request.requestId,
           path: error.path, expected: error.expected, actual: error.actual, timestamp: Date.now(),
         });
       },
@@ -768,5 +777,28 @@ export class AnthropicProvider extends BaseProvider {
 
   private getDefaultModel(request: LLMRequest): string {
     return getProviderDefaultModel('anthropic', request);
+  }
+
+  /** Accept the invalid model IDs earlier releases published, validating the real one. */
+  protected validateRequest(request: LLMRequest): void {
+    super.validateRequest(request.model ? { ...request, model: resolveModelId(request.model) } : request);
+  }
+
+  /**
+   * Token cost including prompt caching. `input` excludes cached tokens on the
+   * Claude API. Multipliers on the base input rate: reads 0.1x, 5-minute
+   * writes 1.25x, 1-hour writes 2x (platform.claude.com/docs/en/about-claude/pricing,
+   * checked 2026-10-15; the listed models all use these standard multipliers).
+   */
+  private costWithCache(
+    input: number, output: number, model: string,
+    cacheRead = 0, cacheWrite = 0, cacheWrite1h = 0
+  ): number {
+    const base = this.calculateCost(input, output, model);
+    const capabilities = this.getModelCapabilities()[model];
+    if (!capabilities) return base;
+    const write1h = Math.min(cacheWrite1h, cacheWrite);
+    const cachedInputUnits = cacheRead * 0.1 + (cacheWrite - write1h) * 1.25 + write1h * 2;
+    return base + (cachedInputUnits / 1000) * capabilities.inputTokenCost;
   }
 }

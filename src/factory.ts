@@ -66,6 +66,7 @@ import {
   inferUseCaseFromRequest,
   rankModels,
   getExecutableRoutingInfo as describeRouting,
+  resolveModelId,
   type RoutingInfo,
   type ProviderName,
   type ModelRecommendationUseCase,
@@ -340,6 +341,16 @@ function cacheObservabilityForResponse(
   return Object.keys(cache).length > 0 ? cache : undefined;
 }
 
+/**
+ * Quota checks, hooks, cache keys and planning all see the vendor wire ID, so a
+ * previously published invalid ID is checked and recorded under the same model (#112).
+ */
+function withResolvedModel(request: LLMRequest): LLMRequest {
+  if (!request.model) return request;
+  const model = resolveModelId(request.model);
+  return model === request.model ? request : { ...request, model };
+}
+
 export class LLMProviderFactory {
   private providers: Map<string, LLMProvider> = new Map();
   private config: ProviderFactoryConfig;
@@ -420,6 +431,7 @@ export class LLMProviderFactory {
     request: LLMRequest,
     imageContext?: ImageAnalysisContext
   ): Promise<LLMResponse> {
+    request = withResolvedModel(request);
     const responseCacheKey = this.config.responseCache ? await deriveResponseCacheKey(
       request, this.config.responseCacheNamespace ?? '', {
         providers: Object.entries({
@@ -835,6 +847,7 @@ export class LLMProviderFactory {
   }
 
   async generateManagedResponseStream(request: LLMRequest): Promise<ManagedTextStream> {
+    request = withResolvedModel(request);
     const selectionPlan = this.buildProviderPlan({ ...request, stream: true });
     const providerChain = selectionPlan.chain;
     const providerModels = selectionPlan.providerModels;
@@ -1219,6 +1232,7 @@ export class LLMProviderFactory {
 
   /** Use the execution planner and current admission checks for a preflight snapshot. */
   getRoutingInfo(request: LLMRequest): RoutingInfo {
+    request = withResolvedModel(request);
     const plan = this.buildProviderPlan(request);
     const selected = plan.chain.find(name => this.providers.has(name)
       && !this.resilienceContext.exhaustion.isExhausted(name)
