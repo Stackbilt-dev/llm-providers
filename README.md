@@ -581,7 +581,7 @@ await stream.pipeTo(new WritableStream({ write: text => console.log(text) }));
 const result = await completion; // { outcome, emittedChars, usage }
 ```
 
-Do not await `completion` before consuming or cancelling the stream. Reported partial usage survives errors and cancellation; otherwise factory accounting retains the preflight cost estimate and marks it estimated. A stream that fails before producing output is charged only for usage the provider actually reported; estimates are not recorded, and the fallback provider that serves the request records its own usage. Quota recording is awaited. A settlement failure rejects `completion` (and is logged) but never errors text that was already delivered, so legacy `generateResponseStream()` callers are unaffected by a ledger outage; a settlement failure before output does not block fallback. `onRequestEnd` includes the terminal `outcome` for managed streaming; cancellation leaves breaker health unchanged.
+Do not await `completion` before consuming or cancelling the stream. Reported partial usage survives errors and cancellation; otherwise factory accounting retains the preflight cost estimate and marks it estimated. A stream that fails before producing output is charged only for usage the provider actually reported; estimates are not recorded, and the fallback provider that serves the request records its own usage. Quota recording is awaited. A settlement failure rejects `completion` (and is logged) but never errors text that was already delivered, so legacy `generateResponseStream()` callers are unaffected by a ledger outage; a settlement failure before output does not block fallback. For factory streams (managed or `generateResponseStream()`), `onRequestEnd` includes `outcome` and fires on success, error and cancellation once output has started; a provider that fails before output emits it only if it reported real usage, otherwise only `onRequestError`. Filter on `outcome === 'success'` to count successes. Streams are demand-driven, so a stream dropped without being read to the end or cancelled is never settled; cancellation leaves breaker health unchanged.
 
 ```typescript
 const stream = await llm.generateResponseStream({
@@ -896,7 +896,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `ToolLoopAbortSignal` | `{ abort: true; reason?: string }` — return from `onIteration` to stop the loop and throw `ToolLoopAbortedError` |
 | `RoutingInfo` | Pre-flight routing snapshot: useCase, provider, model, estimatedInputTokens, lifecycle, deprecationWarning |
 | `ManagedTextStream` / `StreamCompletion` | Text stream plus awaited terminal accounting; outcome, emitted characters and usage |
-| `GatewayRoutePlan` | Gateway diagnostics and cache/capability reports; `executable: false` marks failed capability checks |
+| `GatewayRoutePlan` | Gateway diagnostics and cache/capability reports; `executable: false` marks failed capability checks or a host outside `availableProviders` |
 | `ModelWorkloadClass` | Gateway-friendly workload class: `summary`, `planning`, `code_draft`, `long_context`, `tool_loop`, `vision`, `research`, `cost_effective`, `balanced`, `high_performance` |
 | `ModelPreferenceMap` | Optional provider+workload override map for workload-aware recommendation APIs |
 | `CircuitBreakerSnapshot` / `CircuitBreakerManagerSnapshot` | Serializable reliability state for external persistence |

@@ -5,10 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.22.0] — 2026-10-15
+
 ### Added
 - Managed streaming: `generateManagedResponseStream()` exposes terminal outcome, emitted character count and settled usage. Its completion promise can be passed to `ctx.waitUntil()`.
 - Client-local resilience state (#111, compatible phase): use `stateScope: 'client'` or share an explicit `ResilienceContext` across clients and direct adapters.
-- Explicit `normalizeCanonicalRequest()` and `normalizeLegacyRequest()` boundaries preserve identity without inferring an ambiguous request shape (#113, first phase). Client `getRoutingInfo()` uses the dispatch planner; shared model IDs resolve against configured hosts.
+- Explicit `normalizeCanonicalRequest()` and `normalizeLegacyRequest()` boundaries preserve identity without inferring an ambiguous request shape (#113, first phase).
+- `llm.getRoutingInfo(request)` / `LLMProviderFactory.getRoutingInfo(request)` (new): a preflight snapshot from the client's own dispatch planner and admission state. Shared model IDs resolve against configured hosts. Throws the new `NoRouteError` (code `NO_ROUTE`, a `ConfigurationError`) when no configured provider can serve the request.
+- Exported types `ManagedTextStream` and `StreamCompletion`; `RequestEndEvent.outcome` (`'success' | 'error' | 'cancelled'`).
+- `responseCacheNamespace` factory option to separate factory response-cache keys per application or policy revision.
+- Per-provider `enableCircuitBreaker` on `ProviderConfig`; `stateScope` and `resilienceContext` on `fromEnv` overrides.
+- `CircuitBreaker.beginExecution()` for callers that settle an execution later (used by streaming health).
+- `CacheObservability.factory.usageKind` (`'historical'` on hits) and `currentChargeUsd` (0 on hits).
 - `streamBodyTimeout` provider option: opt-in total deadline for a streaming response, including its body.
 - `GatewayRoutePlan.executable` (optional field, always set by `getGatewayRoutePlan()`).
 - Factory `onCache` emits a `bypass` event when the response cache is skipped, including when a request identity cannot be hashed (for example a `Date` in `metadata`).
@@ -17,7 +25,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 - Factory response-cache keys are now versioned (v2), so entries written by 1.21 are not reused after upgrading. `cache.strategy: 'off'` and `'provider-prefix'` now also bypass the factory response cache.
 - Legacy request normalization joins every system message with blank lines (previously only the first was kept) unless `systemPrompt` is set.
 - Local quota-hook denials throw `QuotaDeniedError`, a subclass of `QuotaExceededError` with the same `QUOTA_EXCEEDED` code, so existing checks keep matching. Denials no longer mark the provider exhausted or trigger fallback.
-- Catalog `getRoutingInfo()` prefers a configured host for shared model IDs, but still returns a result (the catalog host) when no configured provider matches. Only the client `llm.getRoutingInfo()` throws `NoRouteError`.
+- Catalog `getRoutingInfo()` prefers a configured host for shared model IDs, but still returns a result (the catalog host) when no configured provider matches.
+- Streaming `onRequestEnd` is no longer success-only. Once output has started it fires on success, error and cancellation, with `outcome` and `finishReason` set to `'error'` or `'cancelled'` for failures, including plain `generateResponseStream()` calls. A provider that fails before any output emits `onRequestEnd` (`outcome: 'error'`) only if it reported real usage; otherwise only `onRequestError` fires. With fallback, one logical request can therefore produce one `onRequestEnd` per failed provider that reported usage, plus one for the provider that served it. Filter on `outcome === 'success'` to count successes, and use `onRequestError` to count failures.
+- Factory streams are now demand-driven. 1.21 read the whole upstream stream as soon as it opened, so cost, quota and `onRequestEnd` were recorded even if the caller never read it. A stream that is dropped without being read to the end or cancelled is now never settled or accounted. Read it to completion or call `cancel()`, and use `generateManagedResponseStream()` with `ctx.waitUntil(completion)` where accounting must complete.
+- An explicit factory `enableCircuitBreaker: false` now also turns off the adapters' own breakers (1.21 left them running). A per-provider `enableCircuitBreaker` takes precedence over the factory value; leaving both unset keeps 1.21 behavior.
+- Breakers no longer count caller or account errors as provider-health failures: authentication, invalid request, model not found, token limit, content policy, configuration, quota, and tool-loop abort/limit errors.
 
 ### Documentation
 - Updated public API reference, cache-layer policy, gateway diagnostic limitations, managed stream accounting and client-state/retry semantics. Clarified that KV snapshots and ledger monetary budgets do not provide atomic admission.
