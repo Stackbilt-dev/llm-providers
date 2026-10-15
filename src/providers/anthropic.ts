@@ -161,6 +161,21 @@ const CACHE_READ_MULTIPLIER: Record<string, number> = {
 const LONG_PROMPT_THRESHOLD: Record<string, number> = { 'claude-haiku-5-5': 100_000 };
 const LONG_PROMPT_MULTIPLIER = 5;
 
+/**
+ * Default max_tokens when the request sets none. Fable 5.1 and Opus 5.5 always
+ * think, and thinking counts against max_tokens, so 1000 could leave no room for
+ * the answer. 16,000 stays below the size where non-streaming requests risk
+ * long-request timeouts.
+ */
+const ALWAYS_THINKING_DEFAULT_MAX_TOKENS: Record<string, number> = {
+  'claude-fable-5-1': 16_000,
+  'claude-opus-5-5': 16_000,
+};
+
+function defaultMaxTokens(model: string): number {
+  return ALWAYS_THINKING_DEFAULT_MAX_TOKENS[model] ?? 1000;
+}
+
 export class AnthropicProvider extends BaseProvider {
   name = 'anthropic';
   models = [
@@ -268,7 +283,7 @@ export class AnthropicProvider extends BaseProvider {
     const inputTokens = request.messages.reduce((sum, msg) =>
       sum + Math.ceil(msg.content.length / 4), 0
     );
-    const outputTokens = request.maxTokens || 1000;
+    const outputTokens = request.maxTokens || defaultMaxTokens(model);
 
     return this.calculateCost(inputTokens, outputTokens, model);
   }
@@ -506,10 +521,11 @@ export class AnthropicProvider extends BaseProvider {
       messages.push({ role: 'assistant', content: '{' });
     }
 
+    const model = resolveModelId(request.model || this.getDefaultModel(request));
     const anthropicRequest: AnthropicRequest = {
-      model: resolveModelId(request.model || this.getDefaultModel(request)),
+      model,
       messages,
-      max_tokens: request.maxTokens || 1000,
+      max_tokens: request.maxTokens || defaultMaxTokens(model),
       stream: request.stream
     };
     // Claude 4.7 and later reject a non-default temperature with a 400.

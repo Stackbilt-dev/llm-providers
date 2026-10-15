@@ -204,6 +204,30 @@ describe('Anthropic models', () => {
     expect(sentBody(fetchMock)).not.toHaveProperty('temperature');
   });
 
+  it.each([
+    ['claude-fable-5-1', 16_000],
+    ['claude-opus-5-5', 16_000],
+    ['claude-sonnet-5-5', 1000],
+    ['claude-haiku-4-5-20251001', 1000],
+  ] as const)('defaults max_tokens for %s to %i when the request sets none', async (model, maxTokens) => {
+    const fetchMock = vi.fn().mockResolvedValue(anthropicReply(model));
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new AnthropicProvider({ apiKey: 'k', maxRetries: 0 });
+    await provider.generateResponse({ ...request, model });
+    expect(sentBody(fetchMock).max_tokens).toBe(maxTokens);
+    // Preflight cost estimates assume the same output budget.
+    const outPerToken = getCatalogEntry(model)!.capabilities.outputTokenCost / 1000;
+    expect(provider.estimateCost({ ...request, model })).toBeCloseTo(2 * getCatalogEntry(model)!.capabilities.inputTokenCost / 1000 + maxTokens * outPerToken, 8);
+  });
+
+  it('keeps an explicit maxTokens for always-thinking models', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(anthropicReply('claude-opus-5-5'));
+    vi.stubGlobal('fetch', fetchMock);
+    await new AnthropicProvider({ apiKey: 'k', maxRetries: 0 })
+      .generateResponse({ ...request, model: 'claude-opus-5-5', maxTokens: 300 });
+    expect(sentBody(fetchMock).max_tokens).toBe(300);
+  });
+
   it('still sends temperature to Claude 4.6', async () => {
     const fetchMock = vi.fn().mockResolvedValue(anthropicReply('claude-sonnet-4-6'));
     vi.stubGlobal('fetch', fetchMock);

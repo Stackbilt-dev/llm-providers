@@ -20,6 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 - Claude Opus 4.6, Sonnet 4.6 and Haiku 4.5 are `compatibility` (Anthropic lists them as legacy), so responses from them carry a deprecation warning.
 - OpenAI requests to reasoning models (GPT-5 and later, o-series) send `max_completion_tokens` instead of `max_tokens` and omit `temperature`.
 - Anthropic requests to Claude 5.x models omit `temperature`; these models return 400 for non-default sampling parameters.
+- Requests to Claude Fable 5.1 and Opus 5.5 that set no `maxTokens` default to `max_tokens: 16000` instead of 1000, because these models always think and thinking counts against `max_tokens`. Preflight cost estimates use the same default, so they are higher for these models.
 
 ### Fixed
 - Workers AI context windows: Llama 3.3 70B FP8 Fast 24,000 (was 131,072), Llama 3.2 1B 60,000, Llama 3.2 3B 80,000, Qwen3 30B 32,768, Kimi K2.6 and K2.7 Code 262,144, DeepSeek V4 Flash 1,048,576 (was 1,310,720). Kimi K2.7 Code supports vision.
