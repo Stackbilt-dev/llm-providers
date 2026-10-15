@@ -17,6 +17,7 @@ import {
 } from '../model-catalog';
 import { LLMProviders, MODELS } from '../index';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
+import { CreditLedger } from '../utils/credit-ledger';
 import type { LLMRequest } from '../types';
 
 const request: LLMRequest = { messages: [{ role: 'user', content: 'hello' }] };
@@ -471,10 +472,15 @@ describe('explicit-only models through the factory', () => {
     expect(sentBody(fetchMock)).not.toHaveProperty('tool_choice');
   });
 
-  it('prices the default gpt-4o-mini by its dated snapshot (was $0 in 1.22)', async () => {
+  it('records real spend in the ledger for the default gpt-4o-mini (was $0 in 1.22)', async () => {
+    // Responses name the dated snapshot, which 1.22 could not price.
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(openaiReply('gpt-4o-mini-2024-07-18', 1000, 1000)));
-    const response = await new OpenAIProvider({ apiKey: 'k', maxRetries: 0 }).generateResponse({ ...request, model: 'gpt-4o-mini' });
+    const ledger = new CreditLedger();
+    const llm = new LLMProviders({ openai: { apiKey: 'k', maxRetries: 0 }, stateScope: 'client', ledger });
+    const response = await llm.generateResponse(request);
+    expect(response.provider).toBe('openai');
     expect(response.usage.cost).toBeCloseTo(0.00015 + 0.0006, 8);
+    expect(ledger.totalSpend()).toBeCloseTo(0.00015 + 0.0006, 8);
   });
 });
 

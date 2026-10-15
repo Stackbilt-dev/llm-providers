@@ -42,7 +42,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ### Known limitations
 - Claude 5.x thinking blocks are not passed back with tool results, which Anthropic requires for multi-turn tool use. This is why the 5.x models are explicit-only. The adapter also sends `tool_result` blocks without `tool_use_id`, which likely breaks multi-turn tool use on every Claude model (#124).
 - `gpt-6-luna` and `gpt-6.1-sol` are not supported yet (tool-calling restrictions on Chat Completions).
-- The 16,000-token `max_tokens` default for Claude 5.x does not change the 30-second default `timeout`, which covers the whole non-streaming response. Long thinking responses from Fable 5.1 or Opus 5.5 can exceed it; set a larger `timeout` on the Anthropic provider config or use streaming.
+- The 16,000-token `max_tokens` default for Claude 5.x does not change the 30-second default `timeout`. It times the wait for response headers, which for a non-streaming request arrive when the response is complete. Long thinking responses from Fable 5.1 or Opus 5.5 can exceed it, and a timeout is retried (`maxRetries`, default 3), so one request can take about two minutes before fallback and each attempt may be billed. Set a larger `timeout` on the Anthropic provider config or use streaming.
 
 ## [1.22.1] — 2026-10-15
 
