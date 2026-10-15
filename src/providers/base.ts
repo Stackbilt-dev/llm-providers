@@ -19,9 +19,10 @@ import type { CfGatewayConfig } from '../types.js';
 import type { Logger } from '../utils/logger.js';
 import { noopLogger } from '../utils/logger.js';
 import { RetryManager } from '../utils/retry.js';
-import { CircuitBreaker, defaultCircuitBreakerManager } from '../utils/circuit-breaker.js';
+import { CircuitBreaker } from '../utils/circuit-breaker.js';
 import { CostTracker } from '../utils/cost-tracker.js';
-import { defaultLatencyHistogram } from '../utils/latency-histogram.js';
+import { createProviderStream, type ProviderStreamOptions } from '../utils/provider-stream.js';
+import { defaultResilienceContext } from '../utils/resilience-context.js';
 import { ConfigurationError, TimeoutError, InvalidRequestError, CfGatewayInvalidConfigError } from '../errors.js';
 
 /** Per-provider path suffix on the Cloudflare AI Gateway base URL. */
@@ -160,7 +161,13 @@ export abstract class BaseProvider implements LLMProvider {
     const timeout = timeoutMs || this.config.timeout || 30000;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    let timedOut = false;
+    const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
+    // A caller signal composes with, rather than replaces, the header timeout.
+    const callerSignal = options.signal;
+    const forwardAbort = () => controller.abort(callerSignal?.reason);
+    if (callerSignal?.aborted) forwardAbort();
+    else callerSignal?.addEventListener('abort', forwardAbort, { once: true });
 
     try {
       const response = await fetch(url, {
@@ -174,11 +181,13 @@ export abstract class BaseProvider implements LLMProvider {
       });
 
       clearTimeout(timeoutId);
+      callerSignal?.removeEventListener('abort', forwardAbort);
       return response;
     } catch (error) {
       clearTimeout(timeoutId);
+      callerSignal?.removeEventListener('abort', forwardAbort);
 
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (timedOut || (!callerSignal?.aborted && error instanceof Error && error.name === 'AbortError')) {
         throw new TimeoutError(this.name, `Request timeout after ${timeout}ms`);
       }
 
@@ -193,22 +202,45 @@ export abstract class BaseProvider implements LLMProvider {
     operation: () => Promise<T>,
     options?: ProviderExecutionOptions
   ): Promise<T> {
-    return this.getCircuitBreaker().execute(
-      () => this.retryManager.execute(operation, 'provider request', result => {
-        try {
-          options?.onAttempt?.({
-            attempt: result.attempt,
-            outcome: result.outcome,
-            durationMs: result.durationMs,
-            willRetry: result.willRetry,
-            response: result.value as LLMResponse | undefined,
-            error: result.error,
-          });
-        } catch {
-          // Observability callbacks must not affect provider execution.
-        }
-      })
-    );
+    const execute = () => this.retryManager.execute(operation, 'provider request', result => {
+      try {
+        options?.onAttempt?.({
+          attempt: result.attempt,
+          outcome: result.outcome,
+          durationMs: result.durationMs,
+          willRetry: result.willRetry,
+          response: result.value as LLMResponse | undefined,
+          error: result.error,
+        });
+      } catch {
+        // Observability callbacks must not affect provider execution.
+      }
+      });
+    return this.config.enableCircuitBreaker === false ? execute() : this.getCircuitBreaker().execute(execute);
+  }
+
+  /** Streaming health settles on drain/error; cancellation is neutral. */
+  protected createStream(options: ProviderStreamOptions): ReadableStream<string> {
+    let execution: ReturnType<CircuitBreaker['beginExecution']> | undefined;
+    let dispatched = false;
+    const startedAt = Date.now();
+    return createProviderStream({
+      ...options,
+      bodyTimeoutMs: options.bodyTimeoutMs ?? this.config.streamBodyTimeout,
+      open: async signal => {
+        if (this.config.enableCircuitBreaker !== false) execution = this.getCircuitBreaker().beginExecution();
+        dispatched = true;
+        return options.open(signal);
+      },
+      onFinish: (outcome, error) => {
+        if (outcome === 'success') execution?.success();
+        else if (outcome === 'error') execution?.failure(error);
+        else execution?.cancel();
+        if (dispatched && outcome !== 'cancelled') this.updateMetrics(Date.now() - startedAt,
+          outcome === 'success', options.usage()?.cost ?? 0);
+        options.onFinish?.(outcome, error);
+      },
+    });
   }
 
   /**
@@ -237,7 +269,7 @@ export abstract class BaseProvider implements LLMProvider {
     this.metrics.totalCost += cost;
 
     // Record to latency histogram for percentile tracking
-    defaultLatencyHistogram.record(this.name, measuredLatency);
+    (this.config.resilienceContext ?? defaultResilienceContext).latency.record(this.name, measuredLatency);
   }
 
   /**
@@ -300,14 +332,11 @@ export abstract class BaseProvider implements LLMProvider {
   }
 
   /**
-   * Providers share the named singleton breaker so factory-level routing and
-   * per-provider execution observe the same failure history.
+   * Factory planning and adapter execution share the injected account context.
+   * Direct providers retain the global context unless one is supplied.
    */
   protected getCircuitBreaker(): CircuitBreaker {
-    if (this.circuitBreaker.name !== this.name) {
-      this.circuitBreaker = defaultCircuitBreakerManager.getBreaker(this.name);
-    }
-
+    this.circuitBreaker = (this.config.resilienceContext ?? defaultResilienceContext).circuitBreakers.getBreaker(this.name);
     return this.circuitBreaker;
   }
 

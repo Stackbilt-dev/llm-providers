@@ -23,6 +23,24 @@ node <<'NODE'
 const p = require('@stackbilt/llm-providers');
 const pkg = require('./node_modules/@stackbilt/llm-providers/package.json');
 
+const fs = require('node:fs');
+const path = require('node:path');
+const dist = path.join('node_modules', '@stackbilt', 'llm-providers', 'dist');
+function checkSourceMaps(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) checkSourceMaps(file);
+    else if (entry.name.endsWith('.js.map')) {
+      const map = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!map.sourcesContent || map.sourcesContent.length !== map.sources.length ||
+          map.sourcesContent.some(source => typeof source !== 'string' || source.length === 0)) {
+        throw new Error(`Missing embedded source in ${file}`);
+      }
+    }
+  }
+}
+checkSourceMaps(dist);
+
 if (!p || !p.LLMProviders) throw new Error('Missing LLMProviders from require');
 if (p.VERSION !== pkg.version) throw new Error('VERSION does not match package.json');
 NODE

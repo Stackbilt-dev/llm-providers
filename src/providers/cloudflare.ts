@@ -19,11 +19,12 @@ import { BaseProvider } from './base.js';
 import {
   ConfigurationError,
   InvalidRequestError,
-  ModelNotFoundError
+  ModelNotFoundError,
+  SchemaDriftError
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
-import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
+import { readChatStreamEvent } from '../utils/provider-stream.js';
 import { extractThinkBlocks, joinReasoning } from '../utils/reasoning.js';
 
 /**
@@ -1252,7 +1253,7 @@ export class CloudflareProvider extends BaseProvider {
     result: WorkersAIResult,
     model: string,
     request: LLMRequest,
-    content: string
+    content: string | number
   ): TokenUsage {
     const payload = this.unwrapResult(result);
     const usage = payload?.usage;
@@ -1298,7 +1299,7 @@ export class CloudflareProvider extends BaseProvider {
     const estimatedInputTokens =
       (request.systemPrompt ? Math.ceil(request.systemPrompt.length / 4) : 0) +
       request.messages.reduce((sum, message) => sum + Math.ceil(message.content.length / 4), 0);
-    const estimatedOutputTokens = Math.ceil(content.length / 4);
+    const estimatedOutputTokens = Math.ceil((typeof content === 'number' ? content : content.length) / 4);
 
     return {
       inputTokens: estimatedInputTokens,
@@ -1385,68 +1386,35 @@ export class CloudflareProvider extends BaseProvider {
 
     const model = request.model || this.getRecommendedModel(request);
     const cloudflareRequest = { ...this.formatRequest(request, model), stream: true };
-    const usageTracker = createStreamUsageTracker();
     let finalUsage: TokenUsage | undefined;
-    let streamedContent = '';
-
-    const resolveUsage = () => {
-      usageTracker.resolve(
-        finalUsage ?? this.extractUsage({ response: streamedContent }, model, request, streamedContent)
-      );
-    };
-
-    const stream = new ReadableStream<string>({
-      start: async (controller) => {
-        try {
-          const stream = await this.runModel(model, cloudflareRequest, request);
-
-          if (stream instanceof ReadableStream) {
-            const reader = stream.getReader();
-
-            while (true) {
-              const { done, value } = await reader.read();
-
-              if (done) {
-                break;
-              }
-
-              // Handle different chunk formats
-              if (typeof value === 'string') {
-                streamedContent += value;
-                controller.enqueue(value);
-              } else if (value != null && typeof value === 'object') {
-                const chunk = value as WorkersAIResult;
-                if (chunk.usage) {
-                  finalUsage = this.extractUsage(chunk, model, request, streamedContent);
-                }
-                if (typeof chunk.response === 'string') {
-                  streamedContent += chunk.response;
-                  controller.enqueue(chunk.response);
-                }
-              }
-            }
-          } else {
-            // Non-streaming response, send all at once
-            const content = typeof stream === 'string' ? stream : this.extractText(stream as WorkersAIResult);
-            if (typeof stream === 'object' && stream !== null && !Array.isArray(stream)) {
-              const result = stream as WorkersAIResult;
-              if (result.usage) {
-                finalUsage = this.extractUsage(result, model, request, content);
-              }
-            }
-            streamedContent += content;
-            controller.enqueue(content);
-          }
-          resolveUsage();
-          controller.close();
-        } catch (error) {
-          usageTracker.resolve(undefined);
-          controller.error(this.wrapCFError(error));
+    let streamedChars = 0;
+    return this.createStream({
+      provider: this.name,
+      timeoutMs: this.config.timeout,
+      open: () => this.runModel(model, cloudflareRequest, request),
+      event: value => {
+        let text: string | undefined;
+        if (typeof value === 'string') text = value;
+        else if (value && typeof value === 'object' && !Array.isArray(value)) {
+          const chunk = value as WorkersAIResult;
+          text = readChatStreamEvent(this.name, chunk).text;
+          if (text === undefined && (chunk.response !== undefined || chunk.content !== undefined
+            || chunk.output_text !== undefined || chunk.output !== undefined
+            || chunk.choices?.[0]?.message !== undefined)) text = this.extractText(chunk);
+          if (chunk.usage) finalUsage = this.extractUsage(chunk, model, request, streamedChars);
         }
-      }
+        if (text) streamedChars += text.length;
+        return { text };
+      },
+      usage: () => finalUsage ?? this.extractUsage({}, model, request, streamedChars),
+      mapError: error => this.wrapCFError(error),
+      onError: error => {
+        if (error instanceof SchemaDriftError) this.config.hooks?.onSchemaDrift?.({
+          provider: this.name, model: request.model, requestId: request.requestId,
+          path: error.path, expected: error.expected, actual: error.actual, timestamp: Date.now(),
+        });
+      },
     });
-
-    return attachStreamUsage(stream, usageTracker.promise);
   }
 
   /**

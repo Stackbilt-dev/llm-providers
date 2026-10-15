@@ -41,6 +41,11 @@ export interface GatewayRouteCachePlan {
 }
 
 export interface GatewayRoutePlan {
+  /**
+   * False when this diagnostic plan reports a required capability failure.
+   * Always set by getGatewayRoutePlan(); optional so hand-built plans stay valid.
+   */
+  executable?: boolean;
   canonicalRequest: CanonicalLLMRequest;
   legacyRequest: LLMRequest;
   routing: RoutingInfo;
@@ -62,7 +67,8 @@ export function getGatewayRoutePlan(
 ): GatewayRoutePlan {
   const canonicalRequest = normalizeLLMRequest(request);
   const legacyRequest = canonicalToLLMRequest(canonicalRequest);
-  const routing = getRoutingInfo(legacyRequest, availableProviders, context);
+  // Diagnostic: always returns a plan; failed capabilities set `executable: false`.
+  const routing: RoutingInfo = getRoutingInfo(legacyRequest, availableProviders, context);
   const requirements = routeRequirements(canonicalRequest);
   const capabilities = capabilityReport(routing.catalogEntry?.capabilities);
   const cache = cachePlan(canonicalRequest.metadata?.cache, capabilities);
@@ -70,6 +76,9 @@ export function getGatewayRoutePlan(
   const warnings = routeWarnings(routing, requirements, capabilities, cache);
 
   return {
+    // A plan for a host outside the configured set cannot be dispatched as described.
+    executable: !degradations.some(degradation => degradation.action === 'failed')
+      && (availableProviders === undefined || availableProviders.includes(routing.provider)),
     canonicalRequest,
     legacyRequest,
     routing,

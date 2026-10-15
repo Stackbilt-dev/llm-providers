@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- Managed streaming: `generateManagedResponseStream()` exposes terminal outcome, emitted character count and settled usage. Its completion promise can be passed to `ctx.waitUntil()`.
+- Client-local resilience state (#111, compatible phase): use `stateScope: 'client'` or share an explicit `ResilienceContext` across clients and direct adapters.
+- Explicit `normalizeCanonicalRequest()` and `normalizeLegacyRequest()` boundaries preserve identity without inferring an ambiguous request shape (#113, first phase). Client `getRoutingInfo()` uses the dispatch planner; shared model IDs resolve against configured hosts.
+- `streamBodyTimeout` provider option: opt-in total deadline for a streaming response, including its body.
+- `GatewayRoutePlan.executable` (optional field, always set by `getGatewayRoutePlan()`).
+- Factory `onCache` emits a `bypass` event when the response cache is skipped, including when a request identity cannot be hashed (for example a `Date` in `metadata`).
+
+### Changed
+- Factory response-cache keys are now versioned (v2), so entries written by 1.21 are not reused after upgrading. `cache.strategy: 'off'` and `'provider-prefix'` now also bypass the factory response cache.
+- Legacy request normalization joins every system message with blank lines (previously only the first was kept) unless `systemPrompt` is set.
+- Local quota-hook denials throw `QuotaDeniedError`, a subclass of `QuotaExceededError` with the same `QUOTA_EXCEEDED` code, so existing checks keep matching. Denials no longer mark the provider exhausted or trigger fallback.
+- Catalog `getRoutingInfo()` prefers a configured host for shared model IDs, but still returns a result (the catalog host) when no configured provider matches. Only the client `llm.getRoutingInfo()` throws `NoRouteError`.
+
+### Documentation
+- Updated public API reference, cache-layer policy, gateway diagnostic limitations, managed stream accounting and client-state/retry semantics. Clarified that KV snapshots and ledger monetary budgets do not provide atomic admission.
+- Added [the issue sweep checkpoint](docs/maintenance/issue-sweep.md) with implementation/remaining scope, validation evidence, release implications and GitHub progress-comment links. Historical issue exports are labeled separately.
+
+### Fixed
+- Streaming transport/lifecycle (#110): all adapters share incremental byte SSE framing, honor downstream demand and cancellation, settle partial usage on error, and apply a body deadline. HTTP cancellation aborts pending fetches. Factory accounting is awaited and exposed on every terminal path; streaming health now updates breakers at completion.
+- Breaker policy (#111): disabled breakers bypass adapter execution; rejected calls cannot indefinitely postpone recovery; caller, authentication, local policy and account-quota errors do not degrade provider service health.
+- Tenant-safe factory response caching (#108): versioned SHA-256 identities include semantic inputs, tenant, namespace, provider options, and routing policy. Cache bypass strategies are honored, invalid entries are ignored, and hits identify historical usage and check current quota policy.
+- Local quota denial (#109, first patch): `QuotaDeniedError` terminates regular, streaming, and image requests without exhausting a provider or applying fallback rules. Atomic spend reservations remain future work.
+- Published JavaScript sourcemaps (#94) embed original TypeScript source via `inlineSources`.
+
 ## [1.21.0] — 2026-09-01
 
 ### Added

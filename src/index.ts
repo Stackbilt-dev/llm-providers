@@ -48,6 +48,8 @@ export type {
   LLMError,
   StreamChunk,
   StreamResponse,
+  StreamCompletion,
+  ManagedTextStream,
   QuotaHook,
   QuotaCheckInput,
   QuotaCheckResult,
@@ -70,6 +72,8 @@ export type {
 export {
   canonicalToLLMRequest,
   normalizeLLMRequest,
+  normalizeLegacyRequest,
+  normalizeCanonicalRequest,
   normalizeLLMResponse,
 } from './canonical.js';
 export type {
@@ -165,6 +169,7 @@ export {
   LLMProviderError,
   RateLimitError,
   QuotaExceededError,
+  QuotaDeniedError,
   AuthenticationError,
   InvalidRequestError,
   ModelNotFoundError,
@@ -174,6 +179,7 @@ export {
   ContentFilterError,
   TokenLimitError,
   ConfigurationError,
+  NoRouteError,
   CfGatewayInvalidConfigError,
   CircuitBreakerOpenError,
   SchemaDriftError,
@@ -228,6 +234,7 @@ export type { ExhaustionEntry, ExhaustionRegistrySnapshot } from './utils/exhaus
 
 // Latency histogram
 export { LatencyHistogram, defaultLatencyHistogram } from './utils/latency-histogram.js';
+export { ResilienceContext } from './utils/resilience-context.js';
 export type { LatencySummary } from './utils/latency-histogram.js';
 
 // Utility classes
@@ -272,6 +279,8 @@ export type {
  * Overrides for `LLMProviders.fromEnv()` auto-discovery.
  */
 export interface FromEnvOverrides {
+  stateScope?: ProviderFactoryConfig['stateScope'];
+  resilienceContext?: ProviderFactoryConfig['resilienceContext'];
   defaultProvider?: ProviderFactoryConfig['defaultProvider'];
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
@@ -307,6 +316,8 @@ export class LLMProviders {
     overrides: FromEnvOverrides = {}
   ): LLMProviders {
     const config: ProviderFactoryConfig = {};
+    config.stateScope = overrides.stateScope;
+    config.resilienceContext = overrides.resilienceContext;
 
     if (typeof env.ANTHROPIC_API_KEY === 'string' && env.ANTHROPIC_API_KEY) {
       config.anthropic = { apiKey: env.ANTHROPIC_API_KEY };
@@ -384,6 +395,14 @@ export class LLMProviders {
 
   async generateResponseStream(request: LLMRequest): Promise<ReadableStream<string>> {
     return this.factory.generateResponseStream(request);
+  }
+
+  async generateManagedResponseStream(request: LLMRequest): Promise<import('./types.js').ManagedTextStream> {
+    return this.factory.generateManagedResponseStream(request);
+  }
+
+  getRoutingInfo(request: LLMRequest): import('./model-catalog.js').RoutingInfo {
+    return this.factory.getRoutingInfo(request);
   }
 
   async generateResponseWithTools(

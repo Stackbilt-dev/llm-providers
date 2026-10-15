@@ -152,11 +152,15 @@ const MODEL_USE_CASES = new Set<string>([
 
 export function normalizeLLMRequest(request: LLMRequest | CanonicalLLMRequest): CanonicalLLMRequest {
   if (isCanonicalLLMRequest(request)) {
-    return normalizeCanonicalInput(request);
+    return normalizeCanonicalRequest(request);
   }
+  return normalizeLegacyRequest(request);
+}
 
+/** Explicit legacy boundary; nested metadata is always caller custom metadata. */
+export function normalizeLegacyRequest(request: LLMRequest): CanonicalLLMRequest {
   const legacyMetadata = copyRecord(request.metadata);
-  const systemMessage = request.messages.find(message => message.role === 'system');
+  const systemMessages = request.messages.filter(message => message.role === 'system');
   const output = normalizeOutputFormat(request.response_format);
   const media = request.images?.map(imageToMediaPart);
   const providerOptions = normalizeProviderOptions(request);
@@ -167,7 +171,7 @@ export function normalizeLLMRequest(request: LLMRequest | CanonicalLLMRequest): 
     messages: request.messages
       .filter(message => message.role !== 'system')
       .map(copyMessage),
-    system: request.systemPrompt ?? systemMessage?.content,
+    system: request.systemPrompt ?? (systemMessages.length ? systemMessages.map(message => message.content).join('\n\n') : undefined),
     model: request.model,
     stream: request.stream,
     sampling: {
@@ -274,7 +278,8 @@ function isCanonicalLLMRequest(request: LLMRequest | CanonicalLLMRequest): reque
   );
 }
 
-function normalizeCanonicalInput(request: CanonicalLLMRequest): CanonicalLLMRequest {
+/** Explicit canonical boundary, including messages + metadata-only requests. */
+export function normalizeCanonicalRequest(request: CanonicalLLMRequest): CanonicalLLMRequest {
   return {
     ...request,
     messages: request.messages.map(copyMessage),

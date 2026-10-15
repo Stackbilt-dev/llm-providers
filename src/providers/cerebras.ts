@@ -13,7 +13,7 @@ import {
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
-import { attachStreamUsage, createStreamUsageTracker } from '../utils/stream-usage.js';
+import { readChatStreamEvent } from '../utils/provider-stream.js';
 import { joinReasoning } from '../utils/reasoning.js';
 
 // Cerebras serves the OpenAI /chat/completions contract. See groq.ts for the
@@ -292,121 +292,43 @@ export class CerebrasProvider extends BaseProvider {
    */
   async streamResponse(request: LLMRequest): Promise<ReadableStream<string>> {
     this.validateRequest(request);
-
-    const cerebrasRequest = {
-      ...this.formatRequest(request),
-      stream: true,
+    const body = {
+      ...this.formatRequest(request), stream: true,
       stream_options: { include_usage: true }
     };
-    const hooks = this.config.hooks;
-    const providerName = this.name;
-    const usageTracker = createStreamUsageTracker();
-    const model = cerebrasRequest.model;
     let finalUsage: TokenUsage | undefined;
-
-    const stream = new ReadableStream<string>({
-      start: async (controller) => {
-        try {
-          const response = await this.makeCerebrasRequest('/chat/completions', cerebrasRequest, 'POST', request);
-
-          if (!response.ok) {
-            throw await LLMErrorFactory.fromFetchResponse('cerebras', response);
-          }
-
-          const reader = response.body?.getReader();
-          if (!reader) {
-            throw new Error('No response body');
-          }
-
-          const decoder = new TextDecoder();
-          let buffer = '';
-
-          const emitDrift = (path: string, expected: string, actual: string): void => {
-            hooks?.onSchemaDrift?.({
-              provider: providerName,
-              model: request.model,
-              requestId: request.requestId,
-              path,
-              expected,
-              actual,
-              timestamp: Date.now(),
-            });
-          };
-
-          while (true) {
-            const { done, value } = await reader.read();
-
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-              if (!line.startsWith('data: ')) continue;
-
-              const data = line.slice(6).trim();
-              if (data === '[DONE]' || data === '') {
-                if (data === '[DONE]') {
-                  usageTracker.resolve(finalUsage);
-                  controller.close();
-                  return;
-                }
-                continue;
-              }
-
-              let parsed: unknown;
-              try {
-                parsed = JSON.parse(data);
-              } catch {
-                const err = new SchemaDriftError('cerebras', 'sse.chunk', 'valid-json', 'malformed-json');
-                emitDrift('sse.chunk', 'valid-json', 'malformed-json');
-                controller.error(err);
-                reader.cancel().catch(() => {});
-                return;
-              }
-
-              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-              const chunk = parsed as Record<string, unknown>;
-              const parsedUsage = this.parseOpenAICompatibleStreamUsage(chunk['usage'], model);
-              if (parsedUsage) finalUsage = parsedUsage;
-
-              const choices = chunk['choices'];
-              if (!Array.isArray(choices) || choices.length === 0) continue;
-              const delta = (choices[0] as Record<string, unknown>)['delta'];
-              if (!delta || typeof delta !== 'object' || Array.isArray(delta)) continue;
-              const content = (delta as Record<string, unknown>)['content'];
-
-              if (content === undefined || content === null) continue;
-              if (typeof content !== 'string') {
-                const actual = String(typeof content);
-                emitDrift('sse.choices[0].delta.content', 'string', actual);
-                controller.error(new SchemaDriftError('cerebras', 'sse.choices[0].delta.content', 'string', actual));
-                reader.cancel().catch(() => {});
-                return;
-              }
-
-              if (content) controller.enqueue(content);
-            }
-          }
-
-          usageTracker.resolve(finalUsage);
-          controller.close();
-        } catch (error) {
-          usageTracker.resolve(undefined);
-          controller.error(error);
+    return this.createStream({
+      provider: this.name,
+      timeoutMs: this.config.timeout,
+      open: async signal => {
+        const response = await this.makeCerebrasRequest('/chat/completions', body, 'POST', request, signal);
+        if (!response.ok) throw await LLMErrorFactory.fromFetchResponse(this.name, response);
+        if (!response.body) throw new Error('No response body');
+        return response.body;
+      },
+      event: value => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          const usage = this.parseOpenAICompatibleStreamUsage((value as Record<string, unknown>).usage, body.model);
+          if (usage) finalUsage = usage;
         }
-      }
+        return readChatStreamEvent(this.name, value);
+      },
+      usage: () => finalUsage,
+      onError: error => {
+        if (error instanceof SchemaDriftError) this.config.hooks?.onSchemaDrift?.({
+          provider: this.name, model: request.model, requestId: request.requestId,
+          path: error.path, expected: error.expected, actual: error.actual, timestamp: Date.now(),
+        });
+      },
     });
-
-    return attachStreamUsage(stream, usageTracker.promise);
   }
 
   private async makeCerebrasRequest(
     endpoint: string,
     body: CerebrasRequest | null,
     method: string = 'POST',
-    request?: LLMRequest
+    request?: LLMRequest,
+    signal?: AbortSignal
   ): Promise<Response> {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.apiKey}`,
@@ -417,6 +339,7 @@ export class CerebrasProvider extends BaseProvider {
 
     const options: RequestInit = {
       method,
+      signal,
       headers
     };
 

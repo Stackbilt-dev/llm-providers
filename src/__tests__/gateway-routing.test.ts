@@ -95,6 +95,7 @@ describe('getGatewayRoutePlan', () => {
     }, ['groq']);
 
     expect(plan.requirements.builtInTools).toEqual(['web_search']);
+    expect(plan.executable).toBe(false);
     expect(plan.degradations).toContainEqual({
       capability: 'builtInTools',
       action: 'failed',

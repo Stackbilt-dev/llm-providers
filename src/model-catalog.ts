@@ -1,5 +1,6 @@
 import type { CreditLedger } from './utils/credit-ledger.js';
 import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
+import { NoRouteError } from './errors.js';
 
 export type ProviderName = 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia';
 export type ModelLifecycle = 'active' | 'compatibility' | 'retired';
@@ -1193,6 +1194,29 @@ export function getRoutingInfo(
   availableProviders: ProviderName[] = [...PROVIDER_FALLBACK_ORDER],
   context: ModelSelectionContext = {}
 ): RoutingInfo {
+  return resolveRoutingInfo(request, availableProviders, context, false);
+}
+
+/**
+ * Strict variant for the client preflight: throws NoRouteError instead of
+ * describing a provider outside `availableProviders`. Internal; the public
+ * catalog helper above keeps its non-throwing contract.
+ */
+export function getExecutableRoutingInfo(
+  request: Partial<LLMRequest>,
+  availableProviders: ProviderName[],
+  context: ModelSelectionContext = {}
+): RoutingInfo {
+  return resolveRoutingInfo(request, availableProviders, context, true);
+}
+
+function resolveRoutingInfo(
+  request: Partial<LLMRequest>,
+  availableProviders: ProviderName[],
+  context: ModelSelectionContext,
+  strict: boolean
+): RoutingInfo {
+  if (strict && availableProviders.length === 0) throw new NoRouteError();
   const requiresTools = usesTools(request);
   const requiresVision = usesVision(request);
   const requestsStreaming = request.stream === true;
@@ -1203,13 +1227,20 @@ export function getRoutingInfo(
 
   // When a specific model is pinned, report on that model rather than recommending.
   if (request.model) {
-    const entry = getCatalogEntry(request.model);
-    const provider = (entry?.provider ??
-      getProviderForCatalogModel(request.model) ??
-      availableProviders[0]) as ProviderName;
+    const hosts = getProvidersForCatalogModel(request.model);
+    const provider = hosts.find(host => availableProviders.includes(host)
+      && (request.builtInTools ?? []).every(tool => modelSupportsBuiltInTools(request.model!, host, tool.type)))
+      ?? (hosts.length === 0 ? availableProviders[0] : undefined);
+    if (!provider && strict) throw new NoRouteError(`No configured provider serves model '${request.model}' with its requested built-in tools`);
+    // Compatibility: describe the catalog host when no configured host matches.
+    const entry = provider
+      ? MODEL_CATALOG.find(candidate => candidate.model === request.model && candidate.provider === provider)
+      : getCatalogEntry(request.model);
+    const reported = (provider ?? entry?.provider ?? getProviderForCatalogModel(request.model)
+      ?? availableProviders[0] ?? 'anthropic') as ProviderName;
     return {
       useCase,
-      provider,
+      provider: reported,
       model: request.model,
       catalogEntry: entry,
       estimatedInputTokens,

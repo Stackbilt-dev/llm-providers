@@ -1,6 +1,8 @@
 
 ## OSS Policy
 
+Current implementation checkpoint and resume instructions: [docs/maintenance/issue-sweep.md](docs/maintenance/issue-sweep.md). Check it and preserve existing working-tree changes before resuming issue work.
+
 This is a **public infrastructure package** governed by the Stackbilt OSS Infrastructure Package Update Policy.
 
 Rules:

@@ -28,6 +28,12 @@ import type { ObservabilityHooks, SchemaDriftEvent } from '../utils/hooks';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+// Streaming now records real breaker outcomes; each contract case owns its history.
+beforeEach(() => {
+  defaultCircuitBreakerManager.resetAll();
+  mockFetch.mockReset();
+});
+
 // ── validateSchema primitives ────────────────────────────────────────────
 
 describe('validateSchema', () => {
