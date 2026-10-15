@@ -117,6 +117,33 @@ describe('lifecycle hooks cannot change request outcomes (#116)', () => {
     expect(quotaHook.record).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['frozen', (fn: () => void) => Object.freeze({ onRequestEnd: fn })],
+    ['read-only via defineProperty', (fn: () => void) => Object.defineProperty({}, 'onRequestEnd', { value: fn, enumerable: true })],
+  ] as const)('%s hooks objects still receive events without replaying the call', async (_label, build) => {
+    vi.spyOn(OpenAIProvider.prototype, 'generateResponse').mockResolvedValue(ok('openai'));
+    const groq = vi.spyOn(GroqProvider.prototype, 'generateResponse').mockResolvedValue(ok('groq'));
+    const onRequestEnd = vi.fn();
+    const llm = new LLMProviders({ openai: { apiKey: 'k' }, groq: { apiKey: 'k' }, stateScope: 'client',
+      hooks: build(onRequestEnd) as ObservabilityHooks });
+
+    expect((await llm.generateResponse(request)).provider).toBe('openai');
+    expect(groq).not.toHaveBeenCalled();
+    expect(onRequestEnd).toHaveBeenCalledOnce();
+  });
+
+  it('class-instance hooks keep `this` through the factory guard', async () => {
+    vi.spyOn(OpenAIProvider.prototype, 'generateResponse').mockResolvedValue(ok('openai'));
+    class Collector {
+      events: string[] = [];
+      onRequestEnd(event: { provider: string }) { this.events.push(event.provider); }
+    }
+    const collector = new Collector();
+    const llm = new LLMProviders({ openai: { apiKey: 'k' }, stateScope: 'client', hooks: collector });
+    await llm.generateResponse(request);
+    expect(collector.events).toEqual(['openai']);
+  });
+
   it('logs each failing hook once instead of failing silently', async () => {
     vi.spyOn(OpenAIProvider.prototype, 'generateResponse').mockResolvedValue(ok('openai'));
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -146,6 +173,23 @@ describe('directly constructed adapters', () => {
     expect(onSchemaDrift).toHaveBeenCalledOnce();
     expect(unhandled).toEqual([]);
   });
+
+  it('re-guard hooks replaced through updateConfig', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('data:{broken}\n\n')); controller.close(); },
+    }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })));
+    const provider = new OpenAIProvider({ apiKey: 'k', enableCircuitBreaker: false });
+    const onSchemaDrift = vi.fn(async () => { throw new Error('drift sink down'); });
+    provider.updateConfig({ hooks: { onSchemaDrift } });
+
+    const unhandled = await unhandledDuring(async () => {
+      const reader = (await provider.streamResponse(request)).getReader();
+      await expect(reader.read()).rejects.toBeInstanceOf(SchemaDriftError);
+    });
+
+    expect(onSchemaDrift).toHaveBeenCalledOnce();
+    expect(unhandled).toEqual([]);
+  });
 });
 
 describe('guardHooks', () => {
@@ -157,6 +201,18 @@ describe('guardHooks', () => {
     raw.onFallback = late;
     guarded.onFallback?.({ fromProvider: 'a', toProvider: 'b', reason: 'x', timestamp: 0 });
     expect(late).toHaveBeenCalledOnce();
+  });
+
+  it('handles frozen hooks and keeps wrapper identity and introspection stable', () => {
+    const onFallback = vi.fn();
+    const guarded = guardHooks(Object.freeze({ onFallback }));
+    expect(guarded.onFallback).toBe(guarded.onFallback);
+    expect('onFallback' in guarded).toBe(true);
+    expect('onRetry' in guarded).toBe(false);
+    expect(Object.keys(guarded)).toEqual(['onFallback']);
+    expect(String(guarded)).toBe('[object Object]');
+    guarded.onFallback?.({ fromProvider: 'a', toProvider: 'b', reason: 'x', timestamp: 0 });
+    expect(onFallback).toHaveBeenCalledOnce();
   });
 
   it('is idempotent, so factory-built adapters are not double wrapped', () => {

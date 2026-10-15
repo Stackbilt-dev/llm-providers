@@ -104,11 +104,7 @@ export abstract class BaseProvider implements LLMProvider {
     };
 
     this.logger = config.logger ?? noopLogger;
-    // Directly constructed adapters get the same hook isolation as the factory (#116).
-    if (config.hooks) {
-      this.config.hooks = guardHooks(config.hooks,
-        warnOnceHookErrors((message, error) => this.logger.warn(message, error), this.constructor.name));
-    }
+    this.guardConfigHooks();
 
     this.retryManager = new RetryManager({
       maxRetries: this.config.maxRetries,
@@ -327,6 +323,14 @@ export abstract class BaseProvider implements LLMProvider {
    */
   updateConfig(config: Partial<ProviderConfig>): void {
     this.config = { ...this.config, ...config };
+    if (config.hooks) this.guardConfigHooks();
+  }
+
+  /** Directly constructed adapters get the same hook isolation as the factory (#116). */
+  private guardConfigHooks(): void {
+    if (!this.config.hooks) return;
+    this.config.hooks = guardHooks(this.config.hooks,
+      warnOnceHookErrors((message, error) => this.logger.warn(message, error), () => this.name));
   }
 
   /**

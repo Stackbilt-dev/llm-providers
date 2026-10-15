@@ -288,20 +288,37 @@ export function composeHooks(...implementations: ObservabilityHooks[]): Observab
 }
 
 const guardedHooks = new WeakSet<object>();
+const hookMethodNames: ReadonlySet<string> = new Set(HOOK_METHODS);
 
 /**
  * Wrap a caller's hooks so no handler can throw or reject into the request path.
- * Reads pass through to `hooks` at call time: only methods the caller defined
- * are present, later mutation is seen, and handlers keep `hooks` as `this`.
+ * Hook reads pass through to `hooks` at call time: only methods the caller
+ * defined are present, later mutation is seen, and handlers keep `hooks` as
+ * `this`. The proxy target is a private empty object, never `hooks` itself,
+ * so frozen or read-only hooks objects cannot trip Proxy invariants.
  * Internal: the factory and every adapter route lifecycle events through this (#116).
  */
 export function guardHooks(hooks: ObservabilityHooks, onError?: HookErrorReporter): ObservabilityHooks {
   if (guardedHooks.has(hooks)) return hooks;
-  const guarded = new Proxy(hooks, {
-    get(target, property, receiver) {
-      const value: unknown = Reflect.get(target, property, receiver);
-      if (typeof value !== 'function' || typeof property !== 'string') return value;
-      return (event: unknown) => invokeHandler(target, property, value, event, onError);
+  // Stable wrapper per handler, so `guarded.onX === guarded.onX` holds.
+  const wrappers = new WeakMap<Function, Function>();
+  const guarded = new Proxy(Object.create(null) as ObservabilityHooks, {
+    get(_target, property) {
+      const value: unknown = Reflect.get(hooks, property, hooks);
+      if (typeof property !== 'string' || !hookMethodNames.has(property) || typeof value !== 'function') return value;
+      let wrapper = wrappers.get(value);
+      if (!wrapper) {
+        wrapper = (event: unknown) => invokeHandler(hooks, property, value, event, onError);
+        wrappers.set(value, wrapper);
+      }
+      return wrapper;
+    },
+    has(_target, property) { return property in hooks; },
+    ownKeys() { return Reflect.ownKeys(hooks); },
+    getOwnPropertyDescriptor(_target, property) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(hooks, property);
+      // The private target has no own properties, so every reported one must be configurable.
+      return descriptor ? { ...descriptor, configurable: true } : undefined;
     },
   });
   guardedHooks.add(guarded);
@@ -309,12 +326,16 @@ export function guardHooks(hooks: ObservabilityHooks, onError?: HookErrorReporte
 }
 
 /** Report each failing hook method once per reporter, so a broken sink cannot flood logs. */
-export function warnOnceHookErrors(warn: (message: string, error: unknown) => void, source: string): HookErrorReporter {
+export function warnOnceHookErrors(
+  warn: (message: string, error: unknown) => void,
+  source: string | (() => string)
+): HookErrorReporter {
   const reported = new Set<string>();
   return (method, error) => {
     if (reported.has(method)) return;
     reported.add(method);
-    warn(`[${source}] Observability hook ${method} failed; further failures are not logged:`,
+    const name = typeof source === 'function' ? source() : source;
+    warn(`[${name}] Observability hook ${method} failed; further failures are not logged:`,
       error instanceof Error ? error.message : error);
   };
 }
