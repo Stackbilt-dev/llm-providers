@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LLMProviders, normalizeCanonicalRequest, normalizeLegacyRequest, normalizeLLMRequest,
-  canonicalToLLMRequest, getRoutingInfo, NoRouteError, ResilienceContext,
+  canonicalToLLMRequest, getRoutingInfo, getGatewayRoutePlan, NoRouteError, ResilienceContext,
 } from '../index';
 import { GroqProvider } from '../providers/groq';
 
@@ -55,13 +55,22 @@ describe('configured-provider routing snapshots', () => {
   it('selects the host capable of every requested built-in tool', () => {
     const info = getRoutingInfo({ messages, model: 'openai/gpt-oss-120b', builtInTools: [{ type: 'web_search' }] }, ['cerebras', 'groq']);
     expect(info.provider).toBe('groq');
-    expect(() => getRoutingInfo({ messages, model: 'openai/gpt-oss-120b', builtInTools: [{ type: 'browser_automation' }] }, ['groq']))
-      .toThrow(NoRouteError);
   });
 
-  it('does not describe a known unavailable provider or an empty provider set', () => {
-    expect(() => getRoutingInfo({ model: 'gpt-4o-mini' }, ['groq'])).toThrow(NoRouteError);
-    expect(() => getRoutingInfo({ messages }, [])).toThrow(NoRouteError);
+  it('keeps the public catalog helpers non-throwing for unconfigured hosts (1.x contract)', () => {
+    expect(getRoutingInfo({ model: 'gpt-4o-mini' }, ['groq'])).toMatchObject({ provider: 'openai', model: 'gpt-4o-mini' });
+    expect(getRoutingInfo({ model: 'gpt-4o-mini' }, ['cloudflare']).provider).toBe('openai');
+    expect(() => getRoutingInfo({ messages }, [])).not.toThrow();
+    expect(() => getRoutingInfo({ messages, model: 'openai/gpt-oss-120b', builtInTools: [{ type: 'browser_automation' }] }, ['groq']))
+      .not.toThrow();
+    const plan = getGatewayRoutePlan({ messages, model: 'gpt-4o-mini' }, ['cloudflare']);
+    expect(plan.selectedProvider).toBe('openai');
+    expect(plan.executable).toBe(true);
+  });
+
+  it('the client snapshot only reports configured providers, unlike the catalog helper', () => {
+    const llm = new LLMProviders({ groq: { apiKey: 'test' }, stateScope: 'client' });
+    expect(llm.getRoutingInfo({ messages, model: 'gpt-4o-mini' }).provider).toBe('groq');
   });
 
   it('the client snapshot uses the same plan as actual dispatch', async () => {

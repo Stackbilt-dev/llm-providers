@@ -35,8 +35,10 @@ Other open items are unchanged: #112 (vendor audit, next), #114 (failure demo/RE
 
 - New exports: `QuotaDeniedError`, `NoRouteError`, `ResilienceContext`, `normalizeCanonicalRequest`, `normalizeLegacyRequest`, `ManagedTextStream`, `StreamCompletion`.
 - Client/factory methods: `generateManagedResponseStream(request)` and `getRoutingInfo(request)`. Legacy `generateResponseStream(request)` returns only the managed result's string stream.
-- Managed completion: `{ outcome: 'success' | 'error' | 'cancelled', emittedChars, usage }`; resolves after required accounting, rejects on settlement failure. Consume/cancel the stream before awaiting completion. Attach the promise to `ctx.waitUntil` where appropriate.
-- Reported partial usage is retained; when unavailable, factory accounting conservatively uses the preflight cost estimate with estimated provenance. This is not an actual provider charge or an enforced USD cap.
+- Managed completion: `{ outcome: 'success' | 'error' | 'cancelled', emittedChars, usage }`; resolves after required accounting, rejects on settlement failure (logged; delivered text is never errored afterwards, and pre-output settlement failure does not block fallback). Consume/cancel the stream before awaiting completion. Attach the promise to `ctx.waitUntil` where appropriate.
+- Reported partial usage is retained; when unavailable after output began, factory accounting conservatively uses the preflight cost estimate with estimated provenance. This is not an actual provider charge or an enforced USD cap. Pre-output failures record only provider-reported (non-estimated) usage.
+- Provider `timeout` covers stream opening only; `streamBodyTimeout` is the opt-in whole-stream deadline.
+- `QuotaDeniedError` extends `QuotaExceededError` (code `QUOTA_EXCEEDED`, `localPolicy: true`). Catalog `getRoutingInfo()`/`getGatewayRoutePlan()` never throw; only the client `getRoutingInfo()` throws `NoRouteError`. The factory breaker default is unset, as in 1.21.
 - Streaming `onRequestEnd` receives `outcome`; partial errors can also emit `onRequestError`. Cancellation is neutral for breaker health. No post-output failover.
 - Global resilience state remains the compatibility default; explicit client state isolates health/exhaustion/cost analytics/latency. An explicit context wins over `stateScope`.
 - Metadata-only canonical input must use `normalizeCanonicalRequest`; the compatibility union helper defaults structurally ambiguous input to legacy. Legacy system messages join with blank lines unless `systemPrompt` overrides them.

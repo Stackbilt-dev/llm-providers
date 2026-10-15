@@ -135,6 +135,16 @@ describe('response cache isolation', () => {
     expect(cache.get).not.toHaveBeenCalled();
     expect(cache.put).not.toHaveBeenCalled();
   });
+
+  it('reports a bypass event when the request identity is not cacheable', async () => {
+    const onCache = vi.fn();
+    const { factory } = setup({ hooks: { onCache } });
+    await factory.generateResponse({ ...request, metadata: { at: new Date(0) } });
+    expect(onCache).toHaveBeenCalledWith(expect.objectContaining({
+      layer: 'factory-response', status: 'bypass',
+      cache: { factory: expect.objectContaining({ status: 'bypass', error: expect.any(String) }) },
+    }));
+  });
 });
 
 describe('local quota denial', () => {

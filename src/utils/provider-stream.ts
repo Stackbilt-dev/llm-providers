@@ -47,7 +47,10 @@ export interface ProviderStreamOptions {
   open(signal: AbortSignal): Promise<ReadableStream<unknown> | unknown>;
   event(value: unknown): { text?: string; done?: boolean };
   usage(): TokenUsage | undefined;
+  /** Deadline for opening the stream (headers / binding return); cleared once the source is available. */
   timeoutMs?: number;
+  /** Opt-in total deadline for the whole stream, including the body. Unset means no body deadline. */
+  bodyTimeoutMs?: number;
   onError?(error: unknown): void;
   onFinish?(outcome: 'success' | 'error' | 'cancelled', error?: unknown): void;
   mapError?(error: unknown): unknown;
@@ -65,6 +68,7 @@ export function createProviderStream(options: ProviderStreamOptions): ReadableSt
   let terminal = false;
   let controller: ReadableStreamDefaultController<string>;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let bodyTimer: ReturnType<typeof setTimeout> | undefined;
 
   const cancelReader = (reason?: unknown) => {
     const active = reader;
@@ -79,6 +83,7 @@ export function createProviderStream(options: ProviderStreamOptions): ReadableSt
     terminal = true;
     abort.abort(error);
     if (timer !== undefined) clearTimeout(timer);
+    if (bodyTimer !== undefined) clearTimeout(bodyTimer);
     try { usage.resolve(options.usage()); }
     catch { usage.resolve(undefined); }
     try { options.onFinish?.(cancelled ? 'cancelled' : error === undefined ? 'success' : 'error', error); }
@@ -97,13 +102,19 @@ export function createProviderStream(options: ProviderStreamOptions): ReadableSt
       controller = value;
       if (options.timeoutMs && options.timeoutMs > 0) {
         timer = setTimeout(() => finish(new TimeoutError(options.provider,
-          `Stream timeout after ${options.timeoutMs}ms`)), options.timeoutMs);
+          `Stream open timeout after ${options.timeoutMs}ms`)), options.timeoutMs);
+      }
+      if (options.bodyTimeoutMs && options.bodyTimeoutMs > 0) {
+        bodyTimer = setTimeout(() => finish(new TimeoutError(options.provider,
+          `Stream timeout after ${options.bodyTimeoutMs}ms`)), options.bodyTimeoutMs);
       }
     },
     async pull() {
       try {
         if (!opening) opening = (async () => {
           const source = await options.open(abort.signal);
+          // The provider timeout covers opening only; long generations may keep streaming.
+          if (timer !== undefined) { clearTimeout(timer); timer = undefined; }
           if (source && typeof source === 'object' && 'getReader' in source && typeof source.getReader === 'function') {
             reader = (source as ReadableStream<unknown>).getReader();
             if (terminal) cancelReader();

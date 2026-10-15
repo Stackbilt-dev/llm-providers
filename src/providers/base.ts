@@ -161,12 +161,18 @@ export abstract class BaseProvider implements LLMProvider {
     const timeout = timeoutMs || this.config.timeout || 30000;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    let timedOut = false;
+    const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
+    // A caller signal composes with, rather than replaces, the header timeout.
+    const callerSignal = options.signal;
+    const forwardAbort = () => controller.abort(callerSignal?.reason);
+    if (callerSignal?.aborted) forwardAbort();
+    else callerSignal?.addEventListener('abort', forwardAbort, { once: true });
 
     try {
       const response = await fetch(url, {
         ...options,
-        signal: options.signal ?? controller.signal,
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': 'ai-platform/llm-providers',
@@ -175,11 +181,13 @@ export abstract class BaseProvider implements LLMProvider {
       });
 
       clearTimeout(timeoutId);
+      callerSignal?.removeEventListener('abort', forwardAbort);
       return response;
     } catch (error) {
       clearTimeout(timeoutId);
+      callerSignal?.removeEventListener('abort', forwardAbort);
 
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (timedOut || (!callerSignal?.aborted && error instanceof Error && error.name === 'AbortError')) {
         throw new TimeoutError(this.name, `Request timeout after ${timeout}ms`);
       }
 
@@ -218,6 +226,7 @@ export abstract class BaseProvider implements LLMProvider {
     const startedAt = Date.now();
     return createProviderStream({
       ...options,
+      bodyTimeoutMs: options.bodyTimeoutMs ?? this.config.streamBodyTimeout,
       open: async signal => {
         if (this.config.enableCircuitBreaker !== false) execution = this.getCircuitBreaker().beginExecution();
         dispatched = true;

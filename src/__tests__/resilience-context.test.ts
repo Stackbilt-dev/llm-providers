@@ -16,6 +16,24 @@ function response() {
 beforeEach(() => { defaultCircuitBreakerManager.resetAll(); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
+describe('circuit breaker configuration defaults', () => {
+  it('leaves the factory breaker unset by default, as in 1.21', async () => {
+    vi.spyOn(OpenAIProvider.prototype, 'healthCheck').mockResolvedValue(true);
+    const llm = new LLMProviderFactory({ openai: { apiKey: 'test' }, stateScope: 'client' });
+    expect((await llm.getProviderHealth()).openai).toMatchObject({ healthy: true, circuitBreaker: null });
+  });
+
+  it('a per-provider enableCircuitBreaker setting wins over the factory setting', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{}', { status: 500 }));
+    vi.stubGlobal('fetch', fetch);
+    const context = new ResilienceContext();
+    const llm = new LLMProviders({ openai: { apiKey: 'test', maxRetries: 0, enableCircuitBreaker: false },
+      enableCircuitBreaker: true, resilienceContext: context });
+    for (let i = 0; i < 8; i++) await llm.generateResponse(request).catch(() => {});
+    expect(fetch).toHaveBeenCalledTimes(8);
+  });
+});
+
 describe('resilience state ownership', () => {
   it('client-local failure and reset cannot alter a second client', async () => {
     const a = new ResilienceContext();

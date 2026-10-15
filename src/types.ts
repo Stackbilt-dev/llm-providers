@@ -324,7 +324,10 @@ export interface ProviderConfig {
   enableCircuitBreaker?: boolean;
   apiKey?: string;
   baseUrl?: string;
+  /** Request timeout in ms. For streams it covers opening the stream (headers), not the body. */
   timeout?: number;
+  /** Opt-in total deadline in ms for a streaming response, including its body. Unset means none. */
+  streamBodyTimeout?: number;
   maxRetries?: number;
   retryDelay?: number;
   rateLimitRpm?: number;

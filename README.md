@@ -104,7 +104,7 @@ Existing `LLMRequest` fields are still supported as compatibility input. `normal
 
 Use `normalizeCanonicalRequest()` when the input is canonical, especially when it contains only `messages` and `metadata`. Use `normalizeLegacyRequest()` when converting `LLMRequest`. The compatibility helper `normalizeLLMRequest()` detects canonical input from canonical-specific fields; ambiguous shapes default to legacy, so nested identity in a metadata-only canonical request requires the explicit canonical boundary. Legacy system messages are joined in order with blank lines; an explicit `systemPrompt` takes precedence. Canonical conversion remains a compatibility helper: it does not enforce every canonical requirement at execution.
 
-`llm.getRoutingInfo(request)` uses the client's dispatch planner and current provider admission state. It resolves shared model IDs against configured hosts and throws `NoRouteError` when no route is available. The exported catalog-level `getRoutingInfo(request, availableProviders)` also respects configured hosts for pinned models. These are preflight snapshots; health, quota and capacity can change before dispatch. Full hard-requirement enforcement across every fallback remains future work.
+`llm.getRoutingInfo(request)` uses the client's dispatch planner and current provider admission state. It resolves shared model IDs against configured hosts and throws `NoRouteError` when no route is available. The exported catalog-level `getRoutingInfo(request, availableProviders)` prefers configured hosts for pinned models and never throws: when no configured provider matches it describes the catalog host, as in 1.21. These are preflight snapshots; health, quota and capacity can change before dispatch. Full hard-requirement enforcement across every fallback remains future work.
 
 ### Image Analysis Observability
 
@@ -288,7 +288,7 @@ console.log(breaker.getHealth());
 
 For independent clients in the same process or Worker isolate, set `stateScope: 'client'`. This isolates breakers, provider exhaustion, cost analytics and latency history. Alternatively, allocate a `ResilienceContext` and pass it as `resilienceContext` to clients or direct providers that intentionally share one account's health. Use application-defined account identifiers to choose contexts; keep credentials out of identifiers and logs. The global default remains for compatibility. Resetting a shared context affects its participating clients.
 
-`enableCircuitBreaker: false` bypasses admission and health recording in adapters as well as factory prechecks. Non-streaming retry precedence remains compatible: an explicit provider `maxRetries` wins; otherwise `enableRetries: false` sets it to zero. To guarantee no retries, set `maxRetries: 0` on each provider. Breaker failures exclude authentication, invalid input, content policy, configuration and quota errors. Concurrent successes and failures settle in completion order; each success reduces accumulated consecutive failures by one. Rejected requests do not reset the recovery clock.
+`enableCircuitBreaker: false` bypasses admission and health recording in adapters as well as factory prechecks. A provider-level `enableCircuitBreaker` takes precedence over the factory setting. Leaving both unset keeps the 1.21 behavior: adapter breakers on, factory prechecks and health reporting off. Non-streaming retry precedence remains compatible: an explicit provider `maxRetries` wins; otherwise `enableRetries: false` sets it to zero. To guarantee no retries, set `maxRetries: 0` on each provider. Breaker failures exclude authentication, invalid input, content policy, configuration and quota errors. Concurrent successes and failures settle in completion order; each success reduces accumulated consecutive failures by one. Rejected requests do not reset the recovery clock.
 
 The default circuit breaker manager, exhaustion registry, and `CreditLedger` keep state in memory. In Cloudflare Workers that state is per isolate and can reset between requests. Persist snapshots to KV, D1, Redis, Durable Objects, or another store when you need circuit state, quota exhaustion, or budget spend to survive across invocations.
 
@@ -568,7 +568,7 @@ const model = getRecommendedModel('COST_EFFECTIVE', ['openai', 'cloudflare']);
 
 Factory streaming can fail over before the first text chunk on eligible provider failures. Authentication and configuration errors stop the request. After output begins, errors propagate to the caller without splicing another provider's answer into the stream.
 
-All adapters decode byte SSE incrementally and read in response to consumer demand. Cancellation cancels the upstream reader and aborts HTTP fetches, including requests still waiting for headers. Workers AI binding calls do not expose an abort signal; if cancelled before the binding returns, the returned reader is cancelled as soon as it becomes available. Provider `timeout` covers the streaming body as well as opening the stream. Provider-level pre-output retries and a Workers runtime concurrency gate remain follow-up work.
+All adapters decode byte SSE incrementally and read in response to consumer demand. Cancellation cancels the upstream reader and aborts HTTP fetches, including requests still waiting for headers. Workers AI binding calls do not expose an abort signal; if cancelled before the binding returns, the returned reader is cancelled as soon as it becomes available. Provider `timeout` covers opening the stream (until headers arrive or the binding returns); once output is flowing, long generations are not cut off. Set `streamBodyTimeout` on a provider for an opt-in total deadline that also covers the body. Provider-level pre-output retries and a Workers runtime concurrency gate remain follow-up work.
 
 Use the managed result when the request lifetime must include final accounting:
 
@@ -579,7 +579,7 @@ await stream.pipeTo(new WritableStream({ write: text => console.log(text) }));
 const result = await completion; // { outcome, emittedChars, usage }
 ```
 
-Do not await `completion` before consuming or cancelling the stream. Reported partial usage survives errors and cancellation; otherwise factory accounting retains the preflight cost estimate and marks it estimated. Quota recording is awaited. Settlement failures reject `completion` and the stream without issuing another provider request. `onRequestEnd` includes the terminal `outcome` for managed streaming; cancellation leaves breaker health unchanged.
+Do not await `completion` before consuming or cancelling the stream. Reported partial usage survives errors and cancellation; otherwise factory accounting retains the preflight cost estimate and marks it estimated. A stream that fails before producing output is charged only for usage the provider actually reported; estimates are not recorded, and the fallback provider that serves the request records its own usage. Quota recording is awaited. A settlement failure rejects `completion` (and is logged) but never errors text that was already delivered, so legacy `generateResponseStream()` callers are unaffected by a ledger outage; a settlement failure before output does not block fallback. `onRequestEnd` includes the terminal `outcome` for managed streaming; cancellation leaves breaker health unchanged.
 
 ```typescript
 const stream = await llm.generateResponseStream({
@@ -847,7 +847,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `GroqProvider` | Groq fast inference (streaming, tools on GPT-OSS/LLaMA 3.3 70B; server-side built-in tools on Compound systems and GPT-OSS) |
 | `NvidiaProvider` | NVIDIA NIM inference (streaming, tools on Llama/Nemotron/Mistral) |
 | `BaseProvider` | Abstract base with shared resiliency, metrics, and cost calculation |
-| `QuotaDeniedError` | Terminal local-policy denial; no fallback or provider exhaustion |
+| `QuotaDeniedError` | Terminal local-policy denial; no fallback or provider exhaustion. Extends `QuotaExceededError` (code `QUOTA_EXCEEDED`) for 1.x compatibility; check `instanceof QuotaDeniedError` or `localPolicy` to tell it apart from vendor exhaustion |
 | `NoRouteError` | No configured route available; a nonretryable configuration error |
 
 ### Utilities

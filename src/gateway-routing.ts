@@ -11,7 +11,6 @@ import {
   type RoutingInfo,
 } from './model-catalog.js';
 import type { BuiltInToolType, CacheHints, LLMRequest, ModelCapabilities } from './types.js';
-import { NoRouteError } from './errors.js';
 
 export interface GatewayRouteRequirements {
   streaming: boolean;
@@ -42,8 +41,11 @@ export interface GatewayRouteCachePlan {
 }
 
 export interface GatewayRoutePlan {
-  /** False when this diagnostic plan reports a required capability failure. */
-  executable: boolean;
+  /**
+   * False when this diagnostic plan reports a required capability failure.
+   * Always set by getGatewayRoutePlan(); optional so hand-built plans stay valid.
+   */
+  executable?: boolean;
   canonicalRequest: CanonicalLLMRequest;
   legacyRequest: LLMRequest;
   routing: RoutingInfo;
@@ -65,14 +67,8 @@ export function getGatewayRoutePlan(
 ): GatewayRoutePlan {
   const canonicalRequest = normalizeLLMRequest(request);
   const legacyRequest = canonicalToLLMRequest(canonicalRequest);
-  let routing: RoutingInfo;
-  try { routing = getRoutingInfo(legacyRequest, availableProviders, context); }
-  catch (error) {
-    if (!(error instanceof NoRouteError) || !legacyRequest.builtInTools?.length) throw error;
-    // Debug endpoints retain a diagnostic capability report for a configured
-    // pinned host, but must never label the resulting failed route executable.
-    routing = getRoutingInfo({ ...legacyRequest, builtInTools: undefined }, availableProviders, context);
-  }
+  // Diagnostic: always returns a plan; failed capabilities set `executable: false`.
+  const routing: RoutingInfo = getRoutingInfo(legacyRequest, availableProviders, context);
   const requirements = routeRequirements(canonicalRequest);
   const capabilities = capabilityReport(routing.catalogEntry?.capabilities);
   const cache = cachePlan(canonicalRequest.metadata?.cache, capabilities);

@@ -5,7 +5,7 @@ import { GroqProvider } from '../providers/groq';
 import { CerebrasProvider } from '../providers/cerebras';
 import { NvidiaProvider } from '../providers/nvidia';
 import { AnthropicProvider } from '../providers/anthropic';
-import { LLMProviders, SchemaDriftError, TimeoutError } from '../index';
+import { AuthenticationError, LLMProviders, QuotaDeniedError, QuotaExceededError, SchemaDriftError, TimeoutError } from '../index';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
 import { getStreamUsage } from '../utils/stream-usage';
@@ -34,9 +34,9 @@ async function drain(stream: ReadableStream<string>) {
     }
   } finally { reader.releaseLock(); }
 }
-function cf(source: ReadableStream<unknown>, timeout = 30000) {
+function cf(source: ReadableStream<unknown>, timeout = 30000, streamBodyTimeout?: number) {
   const run = vi.fn().mockResolvedValue(source);
-  const config = { ai: { run } as unknown as Ai, timeout };
+  const config = { ai: { run } as unknown as Ai, timeout, streamBodyTimeout };
   return { provider: new CloudflareProvider(config), config, run };
 }
 
@@ -231,15 +231,74 @@ describe('managed factory lifecycle', () => {
     expect((await result.completion).outcome).toBe('success');
   });
 
-  it('exposes settlement failure without issuing another provider request', async () => {
+  it('rejects only completion on settlement failure; delivered text still closes cleanly', async () => {
     const { config, run } = cf(bytes(textFrame + 'data:[DONE]\n\n'));
     const llm = new LLMProviders({ cloudflare: config, quotaHook: {
       check: vi.fn().mockResolvedValue({ allowed: true }), record: vi.fn().mockRejectedValue(new Error('record failed')),
     } });
     const result = await llm.generateManagedResponseStream({ ...request, model: cfModel });
-    await expect(drain(result.stream)).rejects.toThrow('record failed');
+    expect(await drain(result.stream)).toBe('hello');
     await expect(result.completion).rejects.toThrow('record failed');
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('legacy generateResponseStream does not error a delivered stream on ledger failure', async () => {
+    const { config } = cf(bytes(textFrame + 'data:[DONE]\n\n'));
+    const llm = new LLMProviders({ cloudflare: config, stateScope: 'client', quotaHook: {
+      check: vi.fn().mockResolvedValue({ allowed: true }), record: vi.fn().mockRejectedValue(new Error('ledger down')),
+    } });
+    expect(await drain(await llm.generateResponseStream({ ...request, model: cfModel }))).toBe('hello');
+  });
+
+  it('a ledger failure on a pre-output error does not mask the provider error', async () => {
+    const { config } = cf(bytes(usageFrame + 'data:{broken}\n\n'));
+    const llm = new LLMProviders({ cloudflare: config, stateScope: 'client', quotaHook: {
+      check: vi.fn().mockResolvedValue({ allowed: true }), record: vi.fn().mockRejectedValue(new Error('ledger down')),
+    } });
+    await expect(llm.generateManagedResponseStream({ ...request, model: cfModel })).rejects.toBeInstanceOf(SchemaDriftError);
+  });
+
+  it('does not charge an estimate for a Workers AI rejection at stream open', async () => {
+    const run = vi.fn().mockRejectedValue(new AuthenticationError('cloudflare'));
+    const record = vi.fn(async () => {});
+    const end = vi.fn();
+    const llm = new LLMProviders({ cloudflare: { ai: { run } as unknown as Ai }, stateScope: 'client',
+      quotaHook: { check: vi.fn().mockResolvedValue({ allowed: true }), record }, hooks: { onRequestEnd: end } });
+    await expect(llm.generateManagedResponseStream({ ...request, model: cfModel })).rejects.toBeInstanceOf(AuthenticationError);
+    expect(record).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it('a pre-output 5xx fails over and charges only the provider that served the stream', async () => {
+    const groqSse = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+      + 'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}\n\ndata: [DONE]\n\n';
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => String(url).includes('openai.com')
+      ? new Response(JSON.stringify({ error: { message: 'unavailable' } }), { status: 503 })
+      : new Response(bytes(groqSse), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })));
+    const record = vi.fn(async () => {});
+    const end = vi.fn();
+    const llm = new LLMProviders({ openai: { apiKey: 'test', maxRetries: 0 }, groq: { apiKey: 'test', maxRetries: 0 },
+      stateScope: 'client', quotaHook: { check: vi.fn().mockResolvedValue({ allowed: true }), record },
+      hooks: { onRequestEnd: end } });
+    const result = await llm.generateManagedResponseStream({ ...request, model: 'gpt-4o-mini' });
+    expect(await drain(result.stream)).toBe('ok');
+    await result.completion;
+    expect(record).toHaveBeenCalledOnce();
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ provider: 'groq' }));
+    expect(end).toHaveBeenCalledOnce();
+  });
+
+  it('local quota denial stays a QuotaExceededError for 1.x callers without exhausting the provider', async () => {
+    const { config, run } = cf(bytes(textFrame));
+    const llm = new LLMProviders({ cloudflare: config, stateScope: 'client', quotaHook: {
+      check: vi.fn().mockResolvedValue({ allowed: false, reason: 'over budget' }), record: vi.fn(),
+    } });
+    const error = await llm.generateResponseStream({ ...request, model: cfModel }).catch(e => e);
+    expect(error).toBeInstanceOf(QuotaDeniedError);
+    expect(error).toBeInstanceOf(QuotaExceededError);
+    expect(error).toMatchObject({ code: 'QUOTA_EXCEEDED', localPolicy: true });
+    expect(llm.getExhaustedProviders()).not.toContain('cloudflare');
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('does not read past the prefetched first chunk for an idle consumer', async () => {
@@ -255,15 +314,42 @@ describe('managed factory lifecycle', () => {
     expect((await result.completion).outcome).toBe('cancelled');
   });
 
-  it('times out a stalled body and settles usage', async () => {
+  it('opt-in streamBodyTimeout times out a stalled body and settles estimated usage', async () => {
     vi.useFakeTimers();
     const cancel = vi.fn();
-    const { provider } = cf(new ReadableStream({ cancel }), 20);
+    const { provider } = cf(new ReadableStream({ cancel }), 30000, 20);
     const stream = await provider.streamResponse({ ...request, model: cfModel });
     const failed = expect(drain(stream)).rejects.toBeInstanceOf(TimeoutError);
     await vi.advanceTimersByTimeAsync(21);
     await failed;
     expect(cancel).toHaveBeenCalledOnce();
-    expect(await getStreamUsage(stream)).toBeDefined();
+    expect(await getStreamUsage(stream)).toMatchObject({ outputTokens: 0, tokenProvenance: 'estimated' });
+  });
+
+  it('the provider timeout covers opening only and does not cut off a flowing stream', async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    const source = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        if (n === 8) { controller.enqueue(encoder.encode('data: [DONE]\n\n')); controller.close(); return; }
+        controller.enqueue(encoder.encode('data:{"response":"t' + (n++) + '"}\n\n'));
+      },
+    }, { highWaterMark: 0 });
+    const { provider } = cf(source, 30);
+    const stream = await provider.streamResponse({ ...request, model: cfModel });
+    const text = drain(stream);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await text).toBe('t0t1t2t3t4t5t6t7');
+  });
+
+  it('the provider timeout still fails a stream that never opens', async () => {
+    vi.useFakeTimers();
+    const run = vi.fn(() => new Promise(() => {}));
+    const provider = new CloudflareProvider({ ai: { run } as unknown as Ai, timeout: 20 });
+    const stream = await provider.streamResponse({ ...request, model: cfModel });
+    const failed = expect(drain(stream)).rejects.toBeInstanceOf(TimeoutError);
+    await vi.advanceTimersByTimeAsync(21);
+    await failed;
   });
 });

@@ -43,10 +43,17 @@ export class QuotaExceededError extends LLMProviderError {
   }
 }
 
-/** Local policy denial; never retry, fail over, or quarantine a provider. */
-export class QuotaDeniedError extends LLMProviderError {
+/**
+ * Local policy denial; never retry, fail over, or quarantine a provider.
+ * Extends QuotaExceededError (same code/status) so existing quota-hook denial
+ * checks keep matching; use `instanceof QuotaDeniedError` or `localPolicy` to
+ * distinguish it from vendor account exhaustion.
+ */
+export class QuotaDeniedError extends QuotaExceededError {
+  readonly localPolicy = true;
+
   constructor(provider: string, message: string = 'Local quota policy denied request') {
-    super(message, 'QUOTA_DENIED', provider, false, 403);
+    super(provider, message);
   }
 }
 

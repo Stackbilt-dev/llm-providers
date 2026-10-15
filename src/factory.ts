@@ -65,7 +65,7 @@ import {
   modelSupportsBuiltInTools,
   inferUseCaseFromRequest,
   rankModels,
-  getRoutingInfo as describeRouting,
+  getExecutableRoutingInfo as describeRouting,
   type RoutingInfo,
   type ProviderName,
   type ModelRecommendationUseCase,
@@ -350,7 +350,7 @@ export class LLMProviderFactory {
   private resilienceContext: ResilienceContext;
 
   constructor(config: ProviderFactoryConfig) {
-    this.config = { ...config, enableCircuitBreaker: config.enableCircuitBreaker ?? true };
+    this.config = config;
     this.logger = config.logger ?? noopLogger;
     this.hooks = config.hooks ?? noopHooks;
     this.resilienceContext = config.resilienceContext
@@ -391,7 +391,8 @@ export class LLMProviderFactory {
           logger: this.logger,
           hooks: this.hooks,
           resilienceContext: this.resilienceContext,
-          enableCircuitBreaker: this.config.enableCircuitBreaker ?? providerConfig.enableCircuitBreaker,
+          // Per-provider setting wins; unset on both keeps the adapter breaker on.
+          enableCircuitBreaker: providerConfig.enableCircuitBreaker ?? this.config.enableCircuitBreaker,
         });
         if (provider.validateConfig()) {
           this.providers.set(name, provider);
@@ -437,6 +438,22 @@ export class LLMProviderFactory {
         fallbackRules: this.fallbackRules,
       }
     ) : undefined;
+
+    if (this.config.responseCache && responseCacheKey === undefined) {
+      // Explicit bypass strategies and non-hashable identities (e.g. a Date in
+      // metadata, or no crypto.subtle) both skip the cache; make that visible.
+      const explicit = request.cache?.strategy === 'off' || request.cache?.strategy === 'provider-prefix';
+      try {
+        this.hooks.onCache?.({
+          requestId: request.requestId,
+          tenantId: request.tenantId,
+          layer: 'factory-response',
+          status: 'bypass',
+          cache: { factory: { status: 'bypass', ...(explicit ? {} : { error: 'Request identity is not cacheable' }) } },
+          timestamp: Date.now(),
+        });
+      } catch { /* Telemetry cannot change request execution. */ }
+    }
 
     if (this.config.responseCache && responseCacheKey !== undefined) {
       try {
@@ -765,7 +782,7 @@ export class LLMProviderFactory {
         }
 
         // Auto-mark quota-exhausted providers
-        if (err instanceof QuotaExceededError) {
+        if (err instanceof QuotaExceededError && !(err instanceof QuotaDeniedError)) {
           this.resilienceContext.exhaustion.markExhausted(providerName);
           this.hooks.onQuotaExhausted?.({
             provider: providerName,
@@ -860,10 +877,7 @@ export class LLMProviderFactory {
 
         const startTime = Date.now();
         const opened = await this.openStreamWithFirstChunk(provider, providerRequest, async usage => {
-          await this.settleStreamUsage(providerName, model, providerRequest, startTime, usage ?? {
-            inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: estimatedCost,
-            costProvenance: 'catalog_estimate', tokenProvenance: 'estimated',
-          }, 'error');
+          if (usage) await this.settleStreamUsage(providerName, model, providerRequest, startTime, usage, 'error');
         });
         return this.buildFactoryStream(
           opened.reader,
@@ -881,7 +895,7 @@ export class LLMProviderFactory {
         lastError = err;
         previousProvider = providerName;
 
-        if (err instanceof QuotaExceededError) {
+        if (err instanceof QuotaExceededError && !(err instanceof QuotaDeniedError)) {
           this.resilienceContext.exhaustion.markExhausted(providerName);
           try {
             this.hooks.onQuotaExhausted?.({
@@ -1636,17 +1650,17 @@ export class LLMProviderFactory {
     } catch (error) {
       await reader.cancel(error).catch(() => {});
       reader.releaseLock();
+      // No output was delivered: charge only usage the provider actually reported.
+      // Estimates (including adapter fallbacks such as Workers AI's) are not charges,
+      // and the next provider in the chain records its own usage.
       const reportedUsage = await usage?.catch(() => undefined);
-      const knownUnbilled = error instanceof LLMProviderError && [
-        'CIRCUIT_BREAKER_OPEN', 'AUTHENTICATION_ERROR', 'CONFIGURATION_ERROR',
-        'QUOTA_EXCEEDED', 'QUOTA_DENIED', 'RATE_LIMIT', 'INVALID_REQUEST',
-        'MODEL_NOT_FOUND', 'CONTENT_FILTER', 'TOKEN_LIMIT',
-      ].includes(error.code);
-      try { if (reportedUsage || !knownUnbilled) await onFailure?.(reportedUsage); }
-      catch (settlementError) {
-        const failure = new LLMProviderError('Streaming usage settlement failed', 'STREAM_SETTLEMENT_FAILED', provider.name, false);
-        failure.cause = settlementError;
-        throw failure;
+      if (reportedUsage && reportedUsage.tokenProvenance !== 'estimated') {
+        try { await onFailure?.(reportedUsage); }
+        catch (settlementError) {
+          // A ledger outage must not block failover for a request that produced nothing.
+          this.logger.warn(`[LLMProviderFactory] Streaming usage settlement failed for ${provider.name}:`,
+            (settlementError as Error).message);
+        }
       }
       throw error;
     }
@@ -1679,6 +1693,8 @@ export class LLMProviderFactory {
       rejectCompletion = reject;
     });
     void completion.catch(() => {});
+    // Settlement failure rejects `completion` only; delivered text is never errored
+    // after the fact, matching the non-streaming path's logged quota writes.
     const finish = (outcome: StreamCompletion['outcome']): Promise<StreamCompletion> => {
       if (terminal) return terminal;
       terminal = (async () => {
@@ -1690,13 +1706,14 @@ export class LLMProviderFactory {
         try {
           await this.settleStreamUsage(providerName, model, request, startTime, usage, outcome);
           resolveCompletion(result);
-          return result;
         } catch (error) {
+          this.logger.warn(`[LLMProviderFactory] Streaming usage settlement failed for ${providerName}:`,
+            (error as Error).message);
           rejectCompletion(error);
-          throw error;
         } finally {
           try { reader.releaseLock(); } catch { /* Cancellation may race a pending read. */ }
         }
+        return result;
       })();
       return terminal;
     };
