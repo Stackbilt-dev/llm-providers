@@ -280,8 +280,10 @@ export class CerebrasProvider extends BaseProvider {
         supportsTools: true,
         supportsBatching: false,
         supportsPromptCache: true,
-        inputTokenCost: 0.00015, // $0.15 per 1M tokens (placeholder — update once Cerebras publishes official pricing)
-        outputTokenCost: 0.0006, // $0.60 per 1M tokens (placeholder — mirrored from Groq)
+        // Unverified estimate: Cerebras publishes no per-token prices (cerebras.ai/pricing, 2026-10-15).
+        // Mirrored from Groq; treat as a placeholder, not a billed rate (#112).
+        inputTokenCost: 0.00015,
+        outputTokenCost: 0.0006,
         description: 'GPT-OSS 120B on Cerebras — tool calling, predicted outputs'
       }
     };

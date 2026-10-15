@@ -536,25 +536,36 @@ export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'cloudflare', 'cerebr
  */
 export const MODELS = {
   // OpenAI models
-  /** @deprecated Retired by OpenAI on 2026-04-03. Use GPT_4O_MINI or a current GPT-4 successor. */
+  /** Not routed by this package. OpenAI's dated gpt-4o snapshots shut down 2026-10-23 and 2027-01-14. */
   GPT_4O: 'gpt-4o',
   GPT_4O_MINI: 'gpt-4o-mini',
+  /** @deprecated OpenAI shuts this model down on 2026-10-23. */
   GPT_4_TURBO: 'gpt-4-turbo',
+  /** @deprecated OpenAI shuts this model down on 2026-10-23. */
   GPT_4: 'gpt-4',
+  /** @deprecated OpenAI shuts this model down on 2026-10-23. */
   GPT_3_5_TURBO: 'gpt-3.5-turbo',
 
   // Anthropic models
-  CLAUDE_OPUS_4_6: 'claude-opus-4-6-20250618',
-  CLAUDE_SONNET_4_6: 'claude-sonnet-4-6-20250618',
-  CLAUDE_OPUS_4: 'claude-opus-4-20250618',
+  // Claude model IDs are dateless from the 4.6 generation on.
+  CLAUDE_OPUS_4_6: 'claude-opus-4-6',
+  CLAUDE_SONNET_4_6: 'claude-sonnet-4-6',
+  /** @deprecated Retired on the Claude API 2026-06-15. */
+  CLAUDE_OPUS_4: 'claude-opus-4-20250514',
+  /** @deprecated Retired on the Claude API 2026-06-15. */
   CLAUDE_SONNET_4: 'claude-sonnet-4-20250514',
   CLAUDE_HAIKU_4_5: 'claude-haiku-4-5-20251001',
+  /** @deprecated Retired on the Claude API 2026-02-19. */
   CLAUDE_3_7_SONNET: 'claude-3-7-sonnet-20250219',
+  /** @deprecated Retired on the Claude API 2025-10-28. */
   CLAUDE_3_5_SONNET: 'claude-3-5-sonnet-20241022',
+  /** @deprecated Retired on the Claude API 2026-02-19. */
   CLAUDE_3_5_HAIKU: 'claude-3-5-haiku-20241022',
+  /** @deprecated Retired on the Claude API 2026-01-05. */
   CLAUDE_3_OPUS: 'claude-3-opus-20240229',
+  /** @deprecated Retired on the Claude API 2025-07-21. */
   CLAUDE_3_SONNET: 'claude-3-sonnet-20240229',
-  /** @deprecated Retires 2026-04-19. Use CLAUDE_HAIKU_4_5 or CLAUDE_3_5_HAIKU. */
+  /** @deprecated Retired on the Claude API 2026-04-20. Use CLAUDE_HAIKU_4_5. */
   CLAUDE_3_HAIKU: 'claude-3-haiku-20240307',
 
   // Cloudflare models

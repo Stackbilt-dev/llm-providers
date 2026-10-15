@@ -551,10 +551,10 @@ try {
 import { MODELS, getRecommendedModel } from '@stackbilt/llm-providers';
 
 // Current-gen models
-MODELS.CLAUDE_OPUS_4_6;         // 'claude-opus-4-6-20250618'
-MODELS.CLAUDE_SONNET_4_6;       // 'claude-sonnet-4-6-20250618'
+MODELS.CLAUDE_OPUS_4_6;         // 'claude-opus-4-6'
+MODELS.CLAUDE_SONNET_4_6;       // 'claude-sonnet-4-6'
 MODELS.CLAUDE_HAIKU_4_5;        // 'claude-haiku-4-5-20251001'
-MODELS.GPT_4O;                  // 'gpt-4o' (deprecated / compatibility only)
+MODELS.GPT_4O;                  // 'gpt-4o' (not routed by this package)
 MODELS.GPT_4O_MINI;             // 'gpt-4o-mini'
 MODELS.CEREBRAS_ZAI_GLM_4_7;    // 'zai-glm-4.7'
 MODELS.GROQ_COMPOUND;           // 'groq/compound' (RESEARCH; built-in tools)

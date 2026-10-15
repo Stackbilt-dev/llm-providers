@@ -146,7 +146,7 @@ describe('model catalog', () => {
     );
 
     // claude-sonnet-4-6 (quality:6) now edges gpt-4o-mini (quality:4) even with cloudflare DEGRADED
-    expect(recommended).toBe('claude-sonnet-4-6-20250618');
+    expect(recommended).toBe('claude-sonnet-4-6');
   });
 });
 

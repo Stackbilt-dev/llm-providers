@@ -122,7 +122,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.005,
     outputTokenCost: 0.015,
-    description: 'Retired GPT-4o compatibility entry'
+    description: 'GPT-4o (not routed by this package; dated snapshots shut down 2026-10-23 and 2027-01-14)'
   }, { speed: 4, quality: 5, cost: 2 }),
   entry('openai', 'gpt-4o-mini', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT', 'HIGH_PERFORMANCE'], {
     maxContextLength: 128000,
@@ -141,7 +141,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.01,
     outputTokenCost: 0.03,
-    description: 'Compatibility OpenAI GPT-4 Turbo'
+    description: 'Compatibility OpenAI GPT-4 Turbo (deprecated 2026-10-23)'
   }, { speed: 3, quality: 4, cost: 2 }),
   entry('openai', 'gpt-4', 'compatibility', ['HIGH_PERFORMANCE'], {
     maxContextLength: 8192,
@@ -150,7 +150,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.03,
     outputTokenCost: 0.06,
-    description: 'Compatibility GPT-4'
+    description: 'Compatibility GPT-4 (deprecated 2026-10-23)'
   }, { speed: 2, quality: 4, cost: 1 }),
   entry('openai', 'gpt-3.5-turbo', 'compatibility', ['COST_EFFECTIVE'], {
     maxContextLength: 16385,
@@ -159,7 +159,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsBatching: false,
     inputTokenCost: 0.0005,
     outputTokenCost: 0.0015,
-    description: 'Compatibility GPT-3.5 Turbo'
+    description: 'Compatibility GPT-3.5 Turbo (deprecated 2026-10-23)'
   }, { speed: 4, quality: 2, cost: 3 }),
   entry('openai', 'gpt-3.5-turbo-16k', 'compatibility', ['LONG_CONTEXT'], {
     maxContextLength: 16385,
@@ -171,17 +171,17 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     description: 'Compatibility GPT-3.5 Turbo 16k'
   }, { speed: 3, quality: 2, cost: 3 }),
 
-  entry('anthropic', 'claude-opus-4-6-20250618', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
+  entry('anthropic', 'claude-opus-4-6', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
     supportsVision: true,
     supportsBatching: false,
-    inputTokenCost: 0.015,
-    outputTokenCost: 0.075,
+    inputTokenCost: 0.005,
+    outputTokenCost: 0.025,
     description: 'Claude Opus 4.6'
   }, { speed: 2, quality: 7, cost: 1 }),
-  entry('anthropic', 'claude-sonnet-4-6-20250618', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING', 'BALANCED'], {
+  entry('anthropic', 'claude-sonnet-4-6', 'active', ['HIGH_PERFORMANCE', 'LONG_CONTEXT', 'VISION', 'TOOL_CALLING', 'BALANCED'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
@@ -191,23 +191,23 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.015,
     description: 'Claude Sonnet 4.6'
   }, { speed: 3, quality: 6, cost: 3 }),
-  entry('anthropic', 'claude-opus-4-20250618', 'compatibility', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
+  entry('anthropic', 'claude-opus-4-20250514', 'retired', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.015,
     outputTokenCost: 0.075,
-    description: 'Claude Opus 4'
+    description: 'Claude Opus 4 (retired on the Claude API 2026-06-15)'
   }, { speed: 2, quality: 7, cost: 1 }),
-  entry('anthropic', 'claude-sonnet-4-20250514', 'active', ['HIGH_PERFORMANCE', 'BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+  entry('anthropic', 'claude-sonnet-4-20250514', 'retired', ['HIGH_PERFORMANCE', 'BALANCED', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.003,
     outputTokenCost: 0.015,
-    description: 'Claude Sonnet 4'
+    description: 'Claude Sonnet 4 (retired on the Claude API 2026-06-15)'
   }, { speed: 3, quality: 4, cost: 3 }),
   entry('anthropic', 'claude-haiku-4-5-20251001', 'active', ['COST_EFFECTIVE', 'BALANCED', 'TOOL_CALLING', 'VISION', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
@@ -219,50 +219,50 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.005,
     description: 'Claude Haiku 4.5'
   }, { speed: 4, quality: 4, cost: 5 }),
-  entry('anthropic', 'claude-3-7-sonnet-20250219', 'compatibility', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
+  entry('anthropic', 'claude-3-7-sonnet-20250219', 'retired', ['HIGH_PERFORMANCE', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.003,
     outputTokenCost: 0.015,
-    description: 'Claude 3.7 Sonnet'
+    description: 'Claude 3.7 Sonnet (retired on the Claude API 2026-02-19)'
   }, { speed: 3, quality: 4, cost: 3 }),
-  entry('anthropic', 'claude-3-5-sonnet-20241022', 'compatibility', ['BALANCED', 'LONG_CONTEXT'], {
+  entry('anthropic', 'claude-3-5-sonnet-20241022', 'retired', ['BALANCED', 'LONG_CONTEXT'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.003,
     outputTokenCost: 0.015,
-    description: 'Claude 3.5 Sonnet'
+    description: 'Claude 3.5 Sonnet (retired on the Claude API 2025-10-28)'
   }, { speed: 3, quality: 4, cost: 3 }),
-  entry('anthropic', 'claude-3-5-haiku-20241022', 'compatibility', ['COST_EFFECTIVE', 'BALANCED'], {
+  entry('anthropic', 'claude-3-5-haiku-20241022', 'retired', ['COST_EFFECTIVE', 'BALANCED'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.00025,
     outputTokenCost: 0.00125,
-    description: 'Claude 3.5 Haiku'
+    description: 'Claude 3.5 Haiku (retired on the Claude API 2026-02-19)'
   }, { speed: 4, quality: 3, cost: 4 }),
-  entry('anthropic', 'claude-3-opus-20240229', 'compatibility', ['HIGH_PERFORMANCE'], {
+  entry('anthropic', 'claude-3-opus-20240229', 'retired', ['HIGH_PERFORMANCE'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.015,
     outputTokenCost: 0.075,
-    description: 'Claude 3 Opus'
+    description: 'Claude 3 Opus (retired on the Claude API 2026-01-05)'
   }, { speed: 2, quality: 4, cost: 1 }),
-  entry('anthropic', 'claude-3-sonnet-20240229', 'compatibility', ['BALANCED'], {
+  entry('anthropic', 'claude-3-sonnet-20240229', 'retired', ['BALANCED'], {
     maxContextLength: 200000,
     supportsStreaming: true,
     supportsTools: true,
     supportsBatching: false,
     inputTokenCost: 0.003,
     outputTokenCost: 0.015,
-    description: 'Claude 3 Sonnet'
+    description: 'Claude 3 Sonnet (retired on the Claude API 2025-07-21)'
   }, { speed: 3, quality: 3, cost: 2 }),
 
   entry('cloudflare', '@cf/meta/llama-3.1-8b-instruct', 'compatibility', ['COST_EFFECTIVE'], {
@@ -270,8 +270,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
-    inputTokenCost: 0.0000001,
-    outputTokenCost: 0.0000001,
+    inputTokenCost: 0.000282,
+    outputTokenCost: 0.000827,
     description: 'Workers AI Llama 3.1 8B'
   }, { speed: 5, quality: 2, cost: 5 }),
   entry('cloudflare', '@cf/meta/llama-3.1-70b-instruct', 'compatibility', ['HIGH_PERFORMANCE'], {
@@ -288,8 +288,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
-    inputTokenCost: 0.0000001,
-    outputTokenCost: 0.0000001,
+    inputTokenCost: 0.000282,
+    outputTokenCost: 0.000827,
     description: 'Workers AI Llama 3 8B'
   }, { speed: 4, quality: 2, cost: 5 }),
   entry('cloudflare', '@cf/meta/llama-2-7b-chat-int8', 'compatibility', ['COST_EFFECTIVE'], {
@@ -315,8 +315,8 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     supportsStreaming: true,
     supportsTools: false,
     supportsBatching: true,
-    inputTokenCost: 0.0000001,
-    outputTokenCost: 0.0000001,
+    inputTokenCost: 0.00011,
+    outputTokenCost: 0.00019,
     description: 'Workers AI Mistral 7B'
   }, { speed: 4, quality: 2, cost: 5 }),
   entry('cloudflare', '@cf/openchat/openchat-3.5-0106', 'compatibility', ['BALANCED'], {
@@ -1085,8 +1085,24 @@ export function getProviderDefaultModel(
   return getRecommendedModel(useCase, [provider], { ...context, request });
 }
 
+/**
+ * Model strings this package previously published that are not valid vendor IDs,
+ * mapped to the real ID (#112). Kept so 1.x callers using them still reach the vendor.
+ */
+export const MODEL_ID_CORRECTIONS: Readonly<Record<string, string>> = {
+  'claude-opus-4-6-20250618': 'claude-opus-4-6',
+  'claude-sonnet-4-6-20250618': 'claude-sonnet-4-6',
+  'claude-opus-4-20250618': 'claude-opus-4-20250514',
+};
+
+/** The vendor wire ID for `model`, correcting known invalid IDs this package used to publish. */
+export function resolveModelId(model: string): string {
+  return MODEL_ID_CORRECTIONS[model] ?? model;
+}
+
 export function getCatalogEntry(model: string): ModelCatalogEntry | undefined {
-  return MODEL_CATALOG.find(entry => entry.model === model);
+  const id = resolveModelId(model);
+  return MODEL_CATALOG.find(entry => entry.model === id);
 }
 
 export function getProviderForCatalogModel(model: string): ProviderName | null {
@@ -1103,8 +1119,9 @@ export function getProviderForCatalogModel(model: string): ProviderName | null {
  * configured / capability-matching provider deterministically.
  */
 export function getProvidersForCatalogModel(model: string): ProviderName[] {
+  const id = resolveModelId(model);
   const providers = MODEL_CATALOG
-    .filter(entry => entry.model === model)
+    .filter(entry => entry.model === id)
     .map(entry => entry.provider);
   const unique = [...new Set(providers)];
   return unique.sort(
@@ -1122,7 +1139,8 @@ export function modelSupportsBuiltInTools(
   provider: ProviderName,
   tool?: string,
 ): boolean {
-  const entry = MODEL_CATALOG.find(e => e.model === model && e.provider === provider);
+  const id = resolveModelId(model);
+  const entry = MODEL_CATALOG.find(e => e.model === id && e.provider === provider);
   const supported = entry?.capabilities.supportsBuiltInTools;
   if (!supported || supported.length === 0) return false;
   // `tool` is an open-ended string (request- or response-side identifier);

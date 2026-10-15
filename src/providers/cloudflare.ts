@@ -322,8 +322,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0.0000001, // Essentially free
-        outputTokenCost: 0.0000001,
+        inputTokenCost: 0.000282, // $0.282/MTok (Cloudflare pricing page, 2026-10-09)
+        outputTokenCost: 0.000827, // $0.827/MTok
         description: 'LLaMA 3.1 8B - Fast and efficient'
       },
       '@cf/meta/llama-3.1-70b-instruct': {
@@ -331,7 +331,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0.0000005, // Slightly higher compute cost
+        // Unverified: not on Cloudflare's pricing page as of 2026-10-09 (#112).
+        inputTokenCost: 0.0000005,
         outputTokenCost: 0.0000005,
         description: 'LLaMA 3.1 70B - High performance'
       },
@@ -340,8 +341,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0.0000001,
-        outputTokenCost: 0.0000001,
+        inputTokenCost: 0.000282, // $0.282/MTok (Cloudflare pricing page, 2026-10-09)
+        outputTokenCost: 0.000827, // $0.827/MTok
         description: 'LLaMA 3 8B - Reliable performance'
       },
       '@cf/meta/llama-2-7b-chat-int8': {
@@ -349,6 +350,7 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
+        // Unverified: not on Cloudflare's pricing page as of 2026-10-09 (#112).
         inputTokenCost: 0.00000005,
         outputTokenCost: 0.00000005,
         description: 'LLaMA 2 7B - Quantized for speed'
@@ -358,6 +360,7 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
+        // Unverified: not on Cloudflare's pricing page as of 2026-10-09 (#112).
         inputTokenCost: 0.00000002,
         outputTokenCost: 0.00000002,
         description: 'Phi-2 - Small but capable'
@@ -367,8 +370,8 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
-        inputTokenCost: 0.0000001,
-        outputTokenCost: 0.0000001,
+        inputTokenCost: 0.00011, // $0.110/MTok (Cloudflare pricing page, 2026-10-09)
+        outputTokenCost: 0.00019, // $0.190/MTok
         description: 'Mistral 7B - Balanced performance'
       },
       '@cf/openchat/openchat-3.5-0106': {
@@ -376,6 +379,7 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: false,
         supportsBatching: true,
+        // Unverified: not on Cloudflare's pricing page as of 2026-10-09 (#112).
         inputTokenCost: 0.0000001,
         outputTokenCost: 0.0000001,
         description: 'OpenChat 3.5 - Conversation optimized'

@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Fixed
+- Vendor model IDs and prices (#112, phase 1), checked against primary vendor docs on 2026-10-15:
+  - Anthropic 4.6 models use their real dateless IDs (`claude-opus-4-6`, `claude-sonnet-4-6`), and Claude Opus 4 uses `claude-opus-4-20250514`. The invalid `-20250618` IDs earlier releases published are still accepted and sent as the real ID. `MODELS.CLAUDE_OPUS_4_6`, `CLAUDE_SONNET_4_6` and `CLAUDE_OPUS_4` now hold the real IDs.
+  - Claude Opus 4.6 is priced at $5/$25 per million tokens (was $15/$75).
+  - Anthropic usage cost now includes prompt-cache reads (0.1x input) and writes (1.25x for 5-minute, 2x for 1-hour).
+  - Claude models retired on the Claude API (Opus 4, Sonnet 4, 3.7 Sonnet, 3.5 Sonnet/Haiku, 3 Opus/Sonnet) are marked retired and no longer chosen by routing. Explicit requests still pass through.
+  - Workers AI prices for Llama 3.1 8B and Llama 3 8B ($0.282/$0.827 per million) and Mistral 7B v0.1 ($0.110/$0.190) replace placeholders that were up to 8,270x too low. Workers AI models not on Cloudflare's pricing page are labelled unverified.
+  - `gpt-4`, `gpt-4-turbo` and `gpt-3.5-turbo` carry OpenAI's 2026-10-23 shutdown date. The unsupported "gpt-4o retired 2026-04-03" claim is removed.
+  - Cerebras prices are labelled unverified placeholders, since Cerebras publishes no per-token prices.
+
 ## [1.22.0] — 2026-10-15
 
 ### Added
