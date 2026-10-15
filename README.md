@@ -896,7 +896,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `ToolLoopAbortSignal` | `{ abort: true; reason?: string }` — return from `onIteration` to stop the loop and throw `ToolLoopAbortedError` |
 | `RoutingInfo` | Pre-flight routing snapshot: useCase, provider, model, estimatedInputTokens, lifecycle, deprecationWarning |
 | `ManagedTextStream` / `StreamCompletion` | Text stream plus awaited terminal accounting; outcome, emitted characters and usage |
-| `GatewayRoutePlan` | Gateway diagnostics and cache/capability reports; `executable: false` marks failed capability checks |
+| `GatewayRoutePlan` | Gateway diagnostics and cache/capability reports; `executable: false` marks failed capability checks or a host outside `availableProviders` |
 | `ModelWorkloadClass` | Gateway-friendly workload class: `summary`, `planning`, `code_draft`, `long_context`, `tool_loop`, `vision`, `research`, `cost_effective`, `balanced`, `high_performance` |
 | `ModelPreferenceMap` | Optional provider+workload override map for workload-aware recommendation APIs |
 | `CircuitBreakerSnapshot` / `CircuitBreakerManagerSnapshot` | Serializable reliability state for external persistence |

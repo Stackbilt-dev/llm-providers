@@ -1,15 +1,14 @@
 # Issue sweep checkpoint
 
-Checkpoint: 2026-10-12. Repository: `Stackbilt-dev/llm-providers`.
+Checkpoint: 2026-10-15. Repository: `Stackbilt-dev/llm-providers`.
 
 ## Resume here
 
-The implementation is **local, uncommitted, unpushed and unreleased** on `main`, based on `8a9eda6c058d63f0ec08332f6a408aaf409232cf` (package version `1.21.0`). GitHub issue comments describe local progress, not merged fixes. Keep the issues open until the corresponding changes are reviewed and integrated. No live or billable vendor requests were made.
+The sweep below is **merged and versioned as 1.22.0** (npm publish is a separate operator step): [#119](https://github.com/Stackbilt-dev/llm-providers/pull/119) (sweep plus review fixes) and [#120](https://github.com/Stackbilt-dev/llm-providers/pull/120) (#116 hook isolation). Each went through adversarial review rounds; review-driven compatibility fixes are recorded in the 1.22.0 CHANGELOG entry. The issues stay open for the remaining scope in the table. No live or billable vendor requests were made.
 
-1. Inspect `git status --short` and this checkpoint. Preserve the pre-existing `src/__tests__/factory.test.ts` modification; its diff is line-ending-only when checked with `--ignore-space-at-eol`. This sweep did not edit that file.
-2. Review the local changes, particularly streaming terminal races, accounting policy and routing compatibility. Do not discard or reimplement the work already present.
-3. Next implementation targets: #112 vendor IDs/pricing, then #109 atomic spend reservations. #116 remains a serious non-streaming telemetry replay defect and is a useful smaller intervening fix.
-4. Run the validation commands below after substantive code changes, then prepare reviewable commits/PRs. The new public APIs require a minor release; `package.json`, the lockfile and `VERSION` have not been bumped.
+1. Inspect `git status --short`. Preserve the pre-existing `src/__tests__/factory.test.ts` modification; its diff is line-ending-only when checked with `--ignore-space-at-eol`.
+2. Next implementation targets: #112 vendor IDs/pricing, then #109 atomic spend reservations (needs a design pass first).
+3. Run the validation commands below after substantive code changes, then open reviewable PRs.
 
 `issue-corpus/Stackbilt-dev__llm-providers/` is a June 2026 historical export. `.agent-memory/status.json` belongs to the archive/upload machinery. Neither is the current task checkpoint; preserve their historical/managed contents.
 
@@ -26,7 +25,7 @@ The implementation is **local, uncommitted, unpushed and unreleased** on `main`,
 | [#85](https://github.com/Stackbilt-dev/llm-providers/issues/85) | Local adapter policy and the three cache layers are documented; #108 hardens factory caching. | Review existing HTTP AI Gateway skip/status surfaces against this issue independently; no claim that factory caching implements Gateway caching or its remote key policy. |
 | [#87](https://github.com/Stackbilt-dev/llm-providers/issues/87) | Public normalization boundaries, client preflight, managed stream completion, diagnostic executability and cache semantics improve router contracts. | Broad canonical execution/capability enforcement and complete gateway integration remain. |
 | [#115](https://github.com/Stackbilt-dev/llm-providers/issues/115) | #94's map fix and a final packed-public-export check are covered. Local Windows build tools now run. | Explicit ESM/CJS builds, subpaths/provider registration, Node minimum-version/NodeNext/workerd matrix, measured bundle budgets/startup. Current Node 24 `require` success is not proof of Node 20.0 compatibility; package still emits the module-type warning. |
-| [#116](https://github.com/Stackbilt-dev/llm-providers/issues/116) | Quota observers and streaming terminal/schema observers are guarded; stream body deadlines, cancellation, fault/race tests and awaited stream settlement were added. | Raw non-streaming lifecycle hooks can still replay a completed request; normalize hook invocation centrally. Non-streaming body deadlines, retry sleep aborts, Retry-After/vendor error fixtures, unproduced hook events, floating non-streaming cache/quota writes, request/tool-loop signals, workerd and coverage baselines remain. |
+| [#116](https://github.com/Stackbilt-dev/llm-providers/issues/116) | Quota observers and streaming terminal/schema observers are guarded; stream body deadlines, cancellation, fault/race tests and awaited stream settlement were added. | Hook replay fixed in #120: every factory/adapter hook is guarded. Remaining: non-streaming body deadlines, retry sleep aborts, Retry-After/vendor error fixtures, unproduced hook events, floating non-streaming cache/quota writes, request/tool-loop signals, workerd and coverage baselines remain. |
 | [#118](https://github.com/Stackbilt-dev/llm-providers/issues/118) | Coordinating roadmap receives this checkpoint and priorities. | Track reviewed/merged implementation phases separately from local progress. |
 
 Other open items are unchanged: #112 (vendor audit, next), #114 (failure demo/README restructuring/repo cleanup), #117 (optional AI SDK adapter), #77 (supply-chain workflow), #78/#79/#80 (new provider proposals). #90/#95 have existing code surfaces but were not re-audited for closure during this sweep.

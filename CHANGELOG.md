@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.22.0] — 2026-10-15
+
 ### Added
 - Managed streaming: `generateManagedResponseStream()` exposes terminal outcome, emitted character count and settled usage. Its completion promise can be passed to `ctx.waitUntil()`.
 - Client-local resilience state (#111, compatible phase): use `stateScope: 'client'` or share an explicit `ResilienceContext` across clients and direct adapters.
