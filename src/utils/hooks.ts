@@ -230,38 +230,120 @@ export interface ObservabilityHooks {
 /** Silent hooks — default. */
 export const noopHooks: ObservabilityHooks = {};
 
+const HOOK_METHODS = [
+  'onRequestStart', 'onRequestEnd', 'onCache', 'onRequestError',
+  'onRetry', 'onFallback', 'onCircuitStateChange',
+  'onQuotaExhausted', 'onBudgetThreshold', 'onQuotaCheck',
+  'onQuotaDenied', 'onProviderBalance', 'onSchemaDrift',
+  'onImageAnalysisAttempt', 'onImageAnalysisComplete',
+] as const;
+
+// Compile-time check: adding a hook to ObservabilityHooks without listing it here fails typecheck.
+type MissingHookMethods = Exclude<keyof ObservabilityHooks, typeof HOOK_METHODS[number]>;
+const hookMethodsAreExhaustive: [MissingHookMethods] extends [never] ? true : MissingHookMethods = true;
+void hookMethodsAreExhaustive;
+
+/** Receives a handler failure that was contained; must not throw itself. */
+export type HookErrorReporter = (method: string, error: unknown) => void;
+
+/** Call one handler with `owner` as `this`; sync throws and async rejections are contained. */
+function invokeHandler(
+  owner: object, method: string, handler: Function, event: unknown, onError?: HookErrorReporter
+): void {
+  const report = (error: unknown) => {
+    try { onError?.(method, error); } catch { /* Reporting is best effort. */ }
+  };
+  try {
+    const result: unknown = handler.call(owner, event);
+    if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
+      (result as PromiseLike<unknown>).then(undefined, report);
+    }
+  } catch (error) {
+    // Observability must not break the request path.
+    report(error);
+  }
+}
+
 /**
  * Merge multiple hook implementations. Each matching handler is called
- * in order. Errors in one handler don't block others.
+ * in order. Errors in one handler (thrown or rejected) don't block others.
+ * Handlers are captured when composing and called with their implementation as `this`.
  */
 export function composeHooks(...implementations: ObservabilityHooks[]): ObservabilityHooks {
-  const methods = [
-    'onRequestStart', 'onRequestEnd', 'onCache', 'onRequestError',
-    'onRetry', 'onFallback', 'onCircuitStateChange',
-    'onQuotaExhausted', 'onBudgetThreshold', 'onQuotaCheck',
-    'onQuotaDenied', 'onProviderBalance', 'onSchemaDrift',
-    'onImageAnalysisAttempt', 'onImageAnalysisComplete',
-  ] as const;
-
   const composed: ObservabilityHooks = {};
 
-  for (const method of methods) {
+  for (const method of HOOK_METHODS) {
     const handlers = implementations
-      .map(impl => impl[method])
-      .filter((fn): fn is NonNullable<typeof fn> => fn != null);
+      .filter(impl => typeof impl[method] === 'function')
+      .map(impl => ({ owner: impl, handler: impl[method] as Function }));
 
     if (handlers.length > 0) {
       (composed as Record<string, Function>)[method] = (event: unknown) => {
-        for (const handler of handlers) {
-          try {
-            handler(event as never);
-          } catch {
-            // Observability must not break the request path.
-          }
-        }
+        for (const { owner, handler } of handlers) invokeHandler(owner, method, handler, event);
       };
     }
   }
 
   return composed;
+}
+
+const guardedHooks = new WeakSet<object>();
+const hookMethodNames: ReadonlySet<string> = new Set(HOOK_METHODS);
+
+/**
+ * Wrap a caller's hooks so no handler can throw or reject into the request path.
+ * Hook reads pass through to `hooks` at call time: only methods the caller
+ * defined are present, later mutation is seen, and handlers keep `hooks` as
+ * `this`. The proxy target is a private empty object, never `hooks` itself,
+ * so frozen or read-only hooks objects cannot trip Proxy invariants.
+ * Internal: the factory and every adapter route lifecycle events through this (#116).
+ */
+export function guardHooks(hooks: ObservabilityHooks, onError?: HookErrorReporter): ObservabilityHooks {
+  if (guardedHooks.has(hooks)) return hooks;
+  // Stable wrapper per (method, handler), so `guarded.onX === guarded.onX` holds and a
+  // function shared by several hooks reports failures under the method that failed.
+  const wrappers = new Map<string, { handler: Function; wrapper: Function }>();
+  // The private target stays extensible; every trap below reads or writes `hooks`.
+  const guarded = new Proxy(Object.create(null) as ObservabilityHooks, {
+    get(_target, property) {
+      const value: unknown = Reflect.get(hooks, property, hooks);
+      if (typeof property !== 'string' || !hookMethodNames.has(property) || typeof value !== 'function') return value;
+      let cached = wrappers.get(property);
+      if (cached?.handler !== value) {
+        cached = { handler: value, wrapper: (event: unknown) => invokeHandler(hooks, property, value, event, onError) };
+        wrappers.set(property, cached);
+      }
+      return cached.wrapper;
+    },
+    set(_target, property, value) { return Reflect.set(hooks, property, value, hooks); },
+    deleteProperty(_target, property) { return Reflect.deleteProperty(hooks, property); },
+    defineProperty(_target, property, descriptor) { return Reflect.defineProperty(hooks, property, descriptor); },
+    has(_target, property) { return property in hooks; },
+    ownKeys() { return Reflect.ownKeys(hooks); },
+    getOwnPropertyDescriptor(_target, property) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(hooks, property);
+      // The private target has no own properties, so every reported one must be configurable.
+      return descriptor ? { ...descriptor, configurable: true } : undefined;
+    },
+    getPrototypeOf() { return Reflect.getPrototypeOf(hooks); },
+    // Freezing the view would contradict the forwarding traps; freeze the caller's object instead.
+    preventExtensions() { return false; },
+  });
+  guardedHooks.add(guarded);
+  return guarded;
+}
+
+/** Report each failing hook method once per reporter, so a broken sink cannot flood logs. */
+export function warnOnceHookErrors(
+  warn: (message: string, error: unknown) => void,
+  source: string | (() => string)
+): HookErrorReporter {
+  const reported = new Set<string>();
+  return (method, error) => {
+    if (reported.has(method)) return;
+    reported.add(method);
+    const name = typeof source === 'function' ? source() : source;
+    warn(`[${name}] Observability hook ${method} failed; further failures are not logged:`,
+      error instanceof Error ? error.message : error);
+  };
 }

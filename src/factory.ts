@@ -43,7 +43,7 @@ import type {
   ImageAnalysisMetadata,
   SanitizedTelemetryError,
 } from './utils/hooks.js';
-import { noopHooks } from './utils/hooks.js';
+import { guardHooks, noopHooks, warnOnceHookErrors } from './utils/hooks.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { CloudflareProvider } from './providers/cloudflare.js';
@@ -352,7 +352,8 @@ export class LLMProviderFactory {
   constructor(config: ProviderFactoryConfig) {
     this.config = config;
     this.logger = config.logger ?? noopLogger;
-    this.hooks = config.hooks ?? noopHooks;
+    this.hooks = guardHooks(config.hooks ?? noopHooks,
+      warnOnceHookErrors((message, error) => this.logger.warn(message, error), 'LLMProviderFactory'));
     this.resilienceContext = config.resilienceContext
       ?? (config.stateScope === 'client' ? new ResilienceContext(this.logger) : defaultResilienceContext);
     this.costTracker = config.ledger

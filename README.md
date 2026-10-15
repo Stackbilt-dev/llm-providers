@@ -133,6 +133,8 @@ await llm.analyzeImage({
 });
 ```
 
+Hooks are observers only. The factory and directly constructed adapters isolate every lifecycle hook: a handler that throws or returns a rejected promise cannot trigger fallback, replay a completed request, change breaker health, skip usage/quota recording or raise an unhandled rejection. Each failing hook is reported once through `logger.warn`. Handlers are called with your hooks object as `this`. `onRetry`, `onCircuitStateChange` and `onBudgetThreshold` are declared but not yet emitted (#116).
+
 Each physical provider call produces an `ImageAnalysisAttemptEvent`; provider retries and cross-provider fallbacks are separate attempts. `ImageAnalysisCompleteEvent` totals tokens, attempt latency, provider-reported cost, catalog-estimated cost, and unknown-cost attempts. Prompts, image content, credentials, raw provider payloads, and error messages are not included. Sensitive metadata keys and non-scalar values are dropped.
 
 `TokenUsage.cost` remains a number for compatibility. Read `costProvenance`: catalog-derived values are `catalog_estimate`, zero-placeholder or unavailable prices are `unknown`, and only an actual charge supplied by a provider is `provider_reported`. Cloudflare image telemetry reports cost as unknown because Workers AI does not expose a complete billable image-unit value; decoded image bytes remain available for COGS evidence.
