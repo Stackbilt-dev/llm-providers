@@ -28,7 +28,7 @@ The sweep below is **merged to `main`** and was released as 1.22.0 by release PR
 | [#116](https://github.com/Stackbilt-dev/llm-providers/issues/116) | Quota observers and streaming terminal/schema observers are guarded; stream body deadlines, cancellation, fault/race tests and awaited stream settlement were added. | Hook replay fixed in #120: every factory/adapter hook is guarded. Remaining: non-streaming body deadlines, retry sleep aborts, Retry-After/vendor error fixtures, unproduced hook events, floating non-streaming cache/quota writes, request/tool-loop signals, workerd and coverage baselines |
 | [#118](https://github.com/Stackbilt-dev/llm-providers/issues/118) | Coordinating roadmap receives this checkpoint and priorities. | Track reviewed/merged implementation phases separately from local progress. |
 
-Other open items are unchanged: #112 (phase 2 shipped in 1.23.0; remaining: Claude 5.x thinking-block round trip and `tool_use_id` in tool loops, tracked in #124 (then lift `explicitOnly` on the 5.x and GPT-5.6 models), Cerebras/Groq/NVIDIA prices and IDs, GPT-6 Luna / 6.1 Sol tool-calling restrictions, OpenAI cached-input pricing, custom-model escape hatch, unknown-cost semantics, provenance canary), #114 (failure demo/README restructuring/repo cleanup), #117 (optional AI SDK adapter), #77 (supply-chain workflow), #78/#79/#80 (new provider proposals). #90/#95 have existing code surfaces but were not re-audited for closure during this sweep.
+Other open items are unchanged: #112 (phase 2 shipped in 1.23.0; remaining: Claude 5.x thinking-block round trip, `tool_use_id` and tool error text in tool loops, tracked in #124 (then lift `explicitOnly` on the Claude 5.x models); deciding when the explicit-only OpenAI models (`gpt-6-astra`, `gpt-5.6-sol`/`-terra`/`-luna`, `gpt-5.5`) become routable, which would change the `gpt-4o-mini` default; Cerebras/Groq/NVIDIA prices and IDs, GPT-6 Luna / 6.1 Sol tool-calling restrictions, OpenAI cached-input pricing, custom-model escape hatch, unknown-cost semantics, provenance canary), #114 (failure demo/README restructuring/repo cleanup), #117 (optional AI SDK adapter), #77 (supply-chain workflow), #78/#79/#80 (new provider proposals). #90/#95 have existing code surfaces but were not re-audited for closure during this sweep.
 
 ## Public behavior to retain
 
@@ -49,15 +49,20 @@ Main changes: [factory](../../src/factory.ts), [public exports](../../src/index.
 
 New utilities: [response cache identity/validation](../../src/utils/response-cache.ts), [provider SSE lifecycle](../../src/utils/provider-stream.ts), [resilience context](../../src/utils/resilience-context.ts).
 
-New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts) (45 tests), [stream lifecycle](../../src/__tests__/stream-lifecycle.test.ts) (35), [context ownership/recovery](../../src/__tests__/resilience-context.test.ts) (12), [canonical identity/routing](../../src/__tests__/canonical-identity-routing.test.ts) (9). Existing schema-drift tests now reset breaker history between cases; gateway diagnostic tests check failed-plan executability. The pre-existing factory test file was preserved. Later releases added [catalog accuracy](../../src/__tests__/catalog-accuracy.test.ts) (1.22.1) and [model refresh](../../src/__tests__/model-refresh.test.ts) (1.23.0, 125 tests).
+New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts), [stream lifecycle](../../src/__tests__/stream-lifecycle.test.ts), [context ownership/recovery](../../src/__tests__/resilience-context.test.ts), [canonical identity/routing](../../src/__tests__/canonical-identity-routing.test.ts). Existing schema-drift tests now reset breaker history between cases; gateway diagnostic tests check failed-plan executability. The pre-existing factory test file was preserved. Later work added [hook isolation](../../src/__tests__/hook-isolation.test.ts) (#120, 1.22.0), [catalog accuracy](../../src/__tests__/catalog-accuracy.test.ts) (1.22.1) and [model refresh](../../src/__tests__/model-refresh.test.ts) (1.23.0). Test counts at 1.23.0: tenant safety 46, stream lifecycle 43, context ownership/recovery 14, canonical identity/routing 10, hook isolation 20, catalog accuracy 27, model refresh 125.
 
 ## Validation evidence
 
-Host: Windows/PowerShell, Node `v24.19.0`, npm `11.17.0`.
+Host: Windows, Node `v24.19.0`, npm `11.17.0`.
 
-- `npm test`: **789 passing tests across 30 files** at 1.23.0 (605 across 27 when the sweep landed).
+Re-run at 1.23.0 (2026-10-15), and again by the publish workflow on Ubuntu with Node 22:
+
+- `npm test`: **789 passing tests across 30 files**.
 - `npm run typecheck`: passed.
-- `npm run test:worker-import`: build and browser/Worker-targeted bundle smoke passed.
+- `npm run build`, `npm run test:package` and `npm run test:worker-import`: passed.
+
+From the original sweep (before 1.22.0), not re-run since:
+
 - Packed artifact: unpacked in a temporary directory, verified 33 JavaScript maps have complete nonempty `sourcesContent`, and required the packed entrypoint to verify all new public exports and client methods. The Linux-oriented `npm run test:package` shell script itself was not run on this Windows host; its artifact checks were exercised manually.
 - Whitespace check passed for the sweep's modified tracked files with CR-at-EOL allowed, excluding the preserved factory-test diff.
 - No live providers, workerd execution, minimum Node version, NodeNext matrix, measured bundle size, coverage baseline or published-release validation was performed.

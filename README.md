@@ -375,7 +375,7 @@ Model selection is driven by a declarative catalog rather than a hardcoded fallb
 - circuit breaker state (`CLOSED`, `DEGRADED`, `RECOVERING`, `OPEN`)
 - CreditLedger utilization and projected burn/depletion pressure
 
-The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets. Entries marked `explicitOnly` (for example the Claude 5.x and GPT-5.6/6 models until #124 lands) are served only when a request names them; recommendations and automatic routing skip them.
+The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets. Entries marked `explicitOnly` are served only when a request names them; recommendations and automatic routing skip them. In 1.23.0 these are the Claude 5.x models (until #124 fixes Anthropic tool loops), `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5` (so the OpenAI default stays `gpt-4o-mini`), and `@cf/aisingapore/gemma-sea-lion-v4-27b-it`.
 
 ```typescript
 import {
