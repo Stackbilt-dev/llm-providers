@@ -6,7 +6,7 @@ Checkpoint: 2026-10-15. Repository: `Stackbilt-dev/llm-providers`.
 
 The sweep below is **merged to `main`** and was released as 1.22.0 by release PR [#121](https://github.com/Stackbilt-dev/llm-providers/pull/121) and published to npm; 1.22.1 (#122) and 1.23.0 (#123) followed. Sweep PRs: [#119](https://github.com/Stackbilt-dev/llm-providers/pull/119) (sweep plus review fixes) and [#120](https://github.com/Stackbilt-dev/llm-providers/pull/120) (#116 hook isolation). Each went through adversarial review rounds; review-driven compatibility fixes are recorded in the 1.22.0 CHANGELOG entry. The issues stay open for the remaining scope in the table. No live or billable vendor requests were made.
 
-1. Inspect `git status --short`. Preserve the pre-existing `src/__tests__/factory.test.ts` modification; its diff is line-ending-only when checked with `--ignore-space-at-eol`.
+1. Inspect `git status --short` and preserve any existing working-tree changes. (The long-standing line-ending-only `src/__tests__/factory.test.ts` diff is gone: its blob was normalized to LF. `src/errors.ts`, `src/index.ts` and `src/types.ts` are still CRLF blobs, kept clean locally by `-text` entries in `.git/info/attributes`.)
 2. #112 phase 1 shipped in 1.22.1; phase 2 (current models, Workers AI deprecations, reasoning-model request parameters, `explicitOnly`) shipped in 1.23.0 via [#123](https://github.com/Stackbilt-dev/llm-providers/pull/123). Next: #124 (Anthropic `tool_use_id`, tool error text and Claude 5.x thinking blocks in tool loops; prerequisite for routing the 5.x models), then #109 atomic spend reservations (needs a design pass first).
 3. Run the validation commands below after substantive code changes, then open reviewable PRs.
 
