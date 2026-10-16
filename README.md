@@ -1,6 +1,6 @@
 # @stackbilt/llm-providers
 
-Development status and resume notes: [issue sweep checkpoint](docs/maintenance/issue-sweep.md). The checkpoint identifies APIs and fixes that are still unreleased.
+Development status and resume notes: [issue sweep checkpoint](docs/maintenance/issue-sweep.md). The checkpoint records what has shipped and the next targets.
 
 A Cloudflare-first LLM router: Workers AI models are the primary route, and OpenAI, Anthropic, Cerebras, Groq and NVIDIA NIM serve as secondary providers behind the same interface, with automatic failover, graduated circuit breakers, cost tracking, and intelligent retry. When Workers AI is configured and healthy, catalog routing ranks a Workers AI model first for every use case; breaker state, ledger pressure and request requirements (for example vision) can still move a request to another provider. Built for Cloudflare Workers but runs anywhere with a standard `fetch` API. Extracted from a production orchestration platform handling 80K+ LOC across multiple services.
 
@@ -375,7 +375,7 @@ Model selection is driven by a declarative catalog rather than a hardcoded fallb
 - circuit breaker state (`CLOSED`, `DEGRADED`, `RECOVERING`, `OPEN`)
 - CreditLedger utilization and projected burn/depletion pressure
 
-The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets.
+The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets. Entries marked `explicitOnly` are served only when a request names them; recommendations and automatic routing skip them. In 1.23.0 these are the Claude 5.x models (until #124 fixes Anthropic tool loops), `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5` (so the OpenAI default stays `gpt-4o-mini`), and `@cf/aisingapore/gemma-sea-lion-v4-27b-it`.
 
 ```typescript
 import {
