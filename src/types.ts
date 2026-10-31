@@ -564,6 +564,8 @@ export interface ModelCapabilities {
   maxContextLength: number;
   supportsStreaming: boolean;
   supportsTools: boolean;
+  /** Native structured-output/JSON Schema enforcement is supported. */
+  supportsStructuredOutput?: boolean;
   supportsVision?: boolean;
   toolCalling?: boolean;
   supportsBatching: boolean;

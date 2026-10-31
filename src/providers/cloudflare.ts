@@ -95,6 +95,9 @@ interface CloudflareRequest {
   reasoning_effort?: string;
   /** Chat-template flags (e.g. Nemotron's enable_thinking / low_effort). */
   chat_template_kwargs?: Record<string, boolean>;
+  response_format?:
+    | { type: 'json_schema'; json_schema: Record<string, unknown> }
+    | { type: 'json_object' };
   /** Anthropic-format models served via the CF binding use a top-level system field. */
   system?: string;
 }
@@ -885,7 +888,18 @@ export class CloudflareProvider extends BaseProvider {
     }
 
     const messages: CloudflareMessage[] = [];
-    const jsonMode = request.response_format?.type === 'json_object';
+    const responseFormat = request.response_format;
+    const jsonMode = responseFormat?.type === 'json_object';
+    const jsonSchema = responseFormat?.type === 'json_schema';
+    const nativeJsonSchema = responseFormat && responseFormat.type === 'json_schema'
+      ? responseFormat.json_schema.schema
+      : undefined;
+    if (jsonSchema && request.stream) {
+      throw new ConfigurationError(
+        this.name,
+        'Cloudflare Workers AI JSON Schema mode does not support streaming'
+      );
+    }
     const jsonInstruction = '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
 
     // Add system prompt if provided
@@ -976,7 +990,10 @@ export class CloudflareProvider extends BaseProvider {
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
-      stream: request.stream
+      stream: request.stream,
+      ...(nativeJsonSchema
+        ? { response_format: { type: 'json_schema', json_schema: nativeJsonSchema } }
+        : {})
     };
 
     if (request.lora !== undefined) {

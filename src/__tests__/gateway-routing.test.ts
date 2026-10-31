@@ -49,6 +49,20 @@ describe('getGatewayRoutePlan', () => {
     expect(plan.legacyRequest.response_format).toEqual({ type: 'json_object' });
   });
 
+  it('reports native structured output capability for supported Cloudflare models', () => {
+    const plan = getGatewayRoutePlan({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    }, ['cloudflare']);
+
+    expect(plan.capabilities.supportsStructuredOutput).toBe(true);
+    expect(plan.degradations).toEqual([]);
+  });
+
   it('does not warn about cache support when the request has no cache hints', () => {
     const plan = getGatewayRoutePlan({
       messages: [{ role: 'user', content: 'Hello.' }],

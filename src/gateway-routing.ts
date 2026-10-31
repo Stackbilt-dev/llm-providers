@@ -24,6 +24,7 @@ export interface GatewayRouteRequirements {
 export interface GatewayRouteCapabilityReport {
   supportsStreaming: boolean;
   supportsTools: boolean;
+  supportsStructuredOutput: boolean;
   supportsVision: boolean;
   supportsPromptCache: boolean;
   supportsBuiltInTools: BuiltInToolType[];
@@ -111,6 +112,7 @@ function capabilityReport(capabilities: ModelCapabilities | undefined): GatewayR
   return {
     supportsStreaming: capabilities?.supportsStreaming ?? false,
     supportsTools: capabilities?.supportsTools ?? false,
+    supportsStructuredOutput: capabilities?.supportsStructuredOutput ?? false,
     supportsVision: capabilities?.supportsVision ?? false,
     supportsPromptCache: capabilities?.supportsPromptCache ?? false,
     supportsBuiltInTools: capabilities?.supportsBuiltInTools ?? [],
@@ -159,7 +161,10 @@ function routeDegradations(
     });
   }
 
-  if (requirements.structuredOutput && !capabilities.supportsTools) {
+  const structuredOutputUnsupported = provider === 'cloudflare'
+    ? !capabilities.supportsStructuredOutput
+    : !capabilities.supportsTools;
+  if (requirements.structuredOutput && structuredOutputUnsupported) {
     degradations.push({
       capability: 'structuredOutput',
       action: 'emulated',
