@@ -21,7 +21,8 @@ import {
   InvalidRequestError,
   ReasoningEffortUnsupportedError,
   ModelNotFoundError,
-  SchemaDriftError
+  SchemaDriftError,
+  TimeoutError
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
@@ -785,13 +786,33 @@ export class CloudflareProvider extends BaseProvider {
     }, request) as Promise<WorkersAIResult>;
   }
 
-  private runModel(model: string, input: unknown, request: LLMRequest): Promise<unknown> {
-    const options = this.buildRunOptions(request);
+  private runModel(
+    model: string,
+    input: unknown,
+    request: LLMRequest,
+    executionOptions: { enforceTimeout?: boolean } = {}
+  ): Promise<unknown> {
+    const runOptions = this.buildRunOptions(request);
     const ai = this.ai as {
       run(model: string, input: unknown, options?: CloudflareRunOptions): Promise<unknown>;
     };
 
-    return options ? ai.run(model, input, options) : ai.run(model, input);
+    const operation = runOptions ? ai.run(model, input, runOptions) : ai.run(model, input);
+    if (executionOptions.enforceTimeout === false || !this.config.timeout || this.config.timeout <= 0) {
+      return operation;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new TimeoutError(
+        this.name,
+        `Request timeout after ${this.config.timeout}ms`
+      )), this.config.timeout);
+    });
+
+    return Promise.race([operation, timeout]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
   }
 
   private buildRunOptions(request: LLMRequest): CloudflareRunOptions | undefined {
@@ -1488,7 +1509,7 @@ export class CloudflareProvider extends BaseProvider {
     return this.createStream({
       provider: this.name,
       timeoutMs: this.config.timeout,
-      open: () => this.runModel(model, cloudflareRequest, request),
+      open: () => this.runModel(model, cloudflareRequest, request, { enforceTimeout: false }),
       event: value => {
         let text: string | undefined;
         if (typeof value === 'string') text = value;

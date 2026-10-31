@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CloudflareProvider } from '../providers/cloudflare';
 import { LLMProviderFactory } from '../factory';
-import { ConfigurationError } from '../errors';
+import { ConfigurationError, TimeoutError } from '../errors';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { getStreamUsage } from '../utils/stream-usage';
 import type { LLMRequest } from '../types';
@@ -160,6 +160,42 @@ describe('CloudflareProvider', () => {
       expect(response.finishReason).toBe('stop');
       expect(response.usage.inputTokens).toBeGreaterThan(0);
       expect(response.usage.outputTokens).toBeGreaterThan(0);
+    });
+
+    it('enforces the configured timeout for non-streaming binding calls', async () => {
+      vi.useFakeTimers();
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        timeout: 20,
+        maxRetries: 0
+      });
+      mockAiRun.mockReturnValueOnce(new Promise(() => {}));
+
+      const responsePromise = provider.generateResponse(testRequest);
+      responsePromise.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(responsePromise).rejects.toBeInstanceOf(TimeoutError);
+      await expect(responsePromise).rejects.toMatchObject({
+        code: 'TIMEOUT',
+        message: 'Request timeout after 20ms'
+      });
+      vi.useRealTimers();
+    });
+
+    it('clears the non-streaming timeout after a binding response', async () => {
+      vi.useFakeTimers();
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        timeout: 20
+      });
+      mockAiRun.mockResolvedValueOnce({ response: 'Fast response' });
+
+      await expect(provider.generateResponse(testRequest)).resolves.toMatchObject({
+        message: 'Fast response'
+      });
+      await vi.advanceTimersByTimeAsync(20);
+      vi.useRealTimers();
     });
 
     it('stringifies numeric response field — CF returns bare numbers for short numeric answers', async () => {
