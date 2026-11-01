@@ -49,8 +49,8 @@ const CLOUDFLARE_RESPONSE_SCHEMA: SchemaField[] = [
       shape: [
         { path: 'message', type: 'object' },
         { path: 'message.content', type: 'string-or-null', optional: true },
-        { path: 'message.reasoning', type: 'string', optional: true },
-        { path: 'message.reasoning_content', type: 'string', optional: true },
+        { path: 'message.reasoning', type: 'string-or-null', optional: true },
+        { path: 'message.reasoning_content', type: 'string-or-null', optional: true },
       ]
     }
   },

@@ -11,6 +11,7 @@ import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { getStreamUsage } from '../utils/stream-usage';
 import type { LLMRequest } from '../types';
 import qwenStructuredResponse from './fixtures/response-shapes/cloudflare-qwen-coder-structured.json';
+import cloudflareReasoningNullResponse from './fixtures/response-shapes/cloudflare-reasoning-null.json';
 
 class TestableCloudflareProvider extends CloudflareProvider {
   exposeModelCapabilities() {
@@ -1034,6 +1035,51 @@ describe('CloudflareProvider', () => {
   });
 
   describe('response envelope schema validation', () => {
+    it('accepts a Workers AI completion with null reasoning', async () => {
+      mockAiRun.mockResolvedValueOnce(cloudflareReasoningNullResponse);
+
+      const result = await provider.generateResponse({
+        model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+        messages: [{ role: 'user', content: 'Reply with the word ready.' }]
+      });
+
+      expect(result.message).toBe('ready');
+      expect(result.reasoning).toBeUndefined();
+    });
+
+    it('accepts null reasoning_content and still rejects non-string reasoning fields', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        choices: [{ message: { content: 'ready', reasoning_content: null } }]
+      });
+
+      const result = await provider.generateResponse({
+        model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+        messages: [{ role: 'user', content: 'Reply with the word ready.' }]
+      });
+
+      expect(result.message).toBe('ready');
+      expect(result.reasoning).toBeUndefined();
+
+      const { SchemaDriftError } = await import('../errors');
+      for (const field of ['reasoning', 'reasoning_content'] as const) {
+        mockAiRun.mockResolvedValueOnce({
+          choices: [{ message: { content: 'ready', [field]: 42 } }]
+        });
+
+        const error = await provider.generateResponse({
+          model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+          messages: [{ role: 'user', content: 'Reply with the word ready.' }]
+        }).then(() => undefined, caught => caught);
+
+        expect(error).toBeInstanceOf(SchemaDriftError);
+        expect(error).toMatchObject({
+          path: `choices[0].message.${field}`,
+          expected: 'string-or-null',
+          actual: 'number'
+        });
+      }
+    });
+
     it('accepts a valid choices-based response', async () => {
       mockAiRun.mockResolvedValueOnce({
         id: 'res-1',
