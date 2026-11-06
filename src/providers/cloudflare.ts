@@ -106,8 +106,8 @@ interface WorkersAIChoice {
   message?: {
     role?: string;
     content?: string | null | Array<{ type?: string; text?: string }>;
-    reasoning?: string;
-    reasoning_content?: string;
+    reasoning?: string | null;
+    reasoning_content?: string | null;
     tool_calls?: WorkersAIToolCall[];
   };
   finish_reason?: string;

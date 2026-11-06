@@ -11,6 +11,7 @@ import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { getStreamUsage } from '../utils/stream-usage';
 import type { LLMRequest } from '../types';
 import qwenStructuredResponse from './fixtures/response-shapes/cloudflare-qwen-coder-structured.json';
+// Synthetic fixture: the original issue did not include a captured raw payload.
 import cloudflareReasoningNullResponse from './fixtures/response-shapes/cloudflare-reasoning-null.json';
 
 class TestableCloudflareProvider extends CloudflareProvider {
@@ -1132,6 +1133,21 @@ describe('CloudflareProvider', () => {
         })
       ).rejects.toThrow(SchemaDriftError);
     });
+
+    it('accepts both reasoning fields as null', async () => {
+      mockAiRun.mockResolvedValueOnce({
+        choices: [{ message: { content: 'ready', reasoning: null, reasoning_content: null } }]
+      });
+
+      const result = await provider.generateResponse({
+        model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+        messages: [{ role: 'user', content: 'Reply with the word ready.' }]
+      });
+
+      expect(result.message).toBe('ready');
+      expect(result.reasoning).toBeUndefined();
+    });
+
   });
 
   describe('anthropic/claude-opus-4.8 via Cloudflare binding', () => {
