@@ -55,8 +55,8 @@ const CLOUDFLARE_RESPONSE_SCHEMA: SchemaField[] = [
       shape: [
         { path: 'message', type: 'object' },
         { path: 'message.content', type: 'string-or-null', optional: true },
-        { path: 'message.reasoning', type: 'string', optional: true },
-        { path: 'message.reasoning_content', type: 'string', optional: true },
+        { path: 'message.reasoning', type: 'string-or-null', optional: true },
+        { path: 'message.reasoning_content', type: 'string-or-null', optional: true },
       ]
     }
   },
@@ -116,8 +116,8 @@ interface WorkersAIChoice {
   message?: {
     role?: string;
     content?: string | null | Array<{ type?: string; text?: string }>;
-    reasoning?: string;
-    reasoning_content?: string;
+    reasoning?: string | null;
+    reasoning_content?: string | null;
     tool_calls?: WorkersAIToolCall[];
   };
   finish_reason?: string;
