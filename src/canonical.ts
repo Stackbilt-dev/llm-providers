@@ -10,6 +10,7 @@ import type {
   Tool,
   ToolCall,
   ToolResult,
+  ProviderContent,
 } from './types.js';
 import type { ModelRecommendationUseCase, ProviderName } from './model-catalog.js';
 
@@ -19,6 +20,8 @@ export interface CanonicalMessage {
   timestamp?: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
+  /** Provider-native assistant content to replay unchanged; see `LLMMessage.providerContent`. */
+  providerContent?: ProviderContent;
 }
 
 export interface CanonicalMediaPart {
@@ -133,6 +136,8 @@ export interface CanonicalLLMResponse {
   provider: ProviderName;
   finishReason?: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'error';
   toolCalls?: ToolCall[];
+  /** See `LLMResponse.providerContent`. */
+  providerContent?: ProviderContent;
   usage: TokenUsage;
   responseTime: number;
   routing?: CanonicalRoutingMetadata;
@@ -254,6 +259,7 @@ export function normalizeLLMResponse(
     provider: response.provider as ProviderName,
     finishReason: response.finishReason,
     toolCalls: response.toolCalls,
+    ...(response.providerContent ? { providerContent: response.providerContent } : {}),
     usage: response.usage,
     responseTime: response.responseTime,
     routing: options.routing ?? {
@@ -406,7 +412,12 @@ function copyMessage(message: LLMMessage | CanonicalMessage): CanonicalMessage {
     timestamp: message.timestamp,
     toolCalls: message.toolCalls?.map(copyToolCall),
     toolResults: message.toolResults?.map(copyToolResult),
+    ...(message.providerContent ? { providerContent: copyProviderContent(message.providerContent) } : {}),
   };
+}
+
+function copyProviderContent(content: ProviderContent): ProviderContent {
+  return { provider: content.provider, blocks: Array.isArray(content.blocks) ? [...content.blocks] : content.blocks };
 }
 
 function copyTool(tool: Tool): Tool {

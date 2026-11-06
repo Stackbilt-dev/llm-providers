@@ -4,6 +4,7 @@
  */
 
 import type {
+  LLMMessage,
   LLMRequest,
   LLMResponse,
   AnthropicConfig,
@@ -48,6 +49,10 @@ const ANTHROPIC_RESPONSE_SCHEMA: SchemaField[] = [
         ],
         thinking: [
           { path: 'thinking', type: 'string' },
+          { path: 'signature', type: 'string', optional: true },
+        ],
+        redacted_thinking: [
+          { path: 'data', type: 'string' },
         ],
         tool_use: [
           { path: 'id', type: 'string' },
@@ -69,6 +74,7 @@ interface AnthropicContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'image';
   text?: string;
   id?: string;
+  tool_use_id?: string;
   name?: string;
   input?: Record<string, unknown>;
   content?: string;
@@ -82,7 +88,8 @@ interface AnthropicContentBlock {
 
 interface AnthropicMessage {
   role: 'user' | 'assistant';
-  content: string | AnthropicContentBlock[];
+  /** Replayed provider content (thinking, redacted_thinking, ...) is sent as received. */
+  content: string | Array<AnthropicContentBlock | Record<string, unknown>>;
 }
 
 interface AnthropicCacheControl {
@@ -119,9 +126,11 @@ interface AnthropicRequest {
 }
 
 interface AnthropicResponseContentBlock {
-  type: 'text' | 'tool_use' | 'thinking';
+  type: 'text' | 'tool_use' | 'thinking' | 'redacted_thinking';
   text?: string;
   thinking?: string;
+  signature?: string;
+  data?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -511,21 +520,29 @@ export class AnthropicProvider extends BaseProvider {
         content: this.formatMessageContent(message.content, message.role === 'user' ? request.images : undefined)
       };
 
-      // Handle tool calls and results
-      if (message.toolCalls && message.toolCalls.length > 0) {
-        anthropicMessage.content = message.toolCalls.map(tc => ({
-          type: 'tool_use' as const,
-          id: tc.id,
-          name: tc.function.name,
-          input: JSON.parse(tc.function.arguments) as Record<string, unknown>
-        }));
+      const replayed = message.role === 'assistant' ? this.replayableContent(message) : undefined;
+      if (replayed) {
+        // Thinking blocks of a tool-use turn must come back complete, unmodified
+        // and in order, so the turn is sent exactly as Anthropic returned it.
+        anthropicMessage.content = replayed;
+      } else if (message.toolCalls && message.toolCalls.length > 0) {
+        anthropicMessage.content = [
+          ...(message.content ? [{ type: 'text' as const, text: message.content }] : []),
+          ...message.toolCalls.map(tc => ({
+            type: 'tool_use' as const,
+            id: tc.id,
+            name: tc.function.name,
+            input: JSON.parse(tc.function.arguments) as Record<string, unknown>
+          }))
+        ];
       }
 
       if (message.toolResults && message.toolResults.length > 0) {
         anthropicMessage.content = message.toolResults.map(tr => ({
           type: 'tool_result' as const,
-          id: tr.id,
-          content: tr.output,
+          tool_use_id: tr.id,
+          // A failed tool's error text goes in content, after any partial output.
+          content: tr.error ? [tr.output, tr.error].filter(Boolean).join('\n\n') : tr.output,
           is_error: !!tr.error
         }));
       }
@@ -613,6 +630,26 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     return anthropicRequest;
+  }
+
+  /**
+   * Provider content this adapter produced, to send back verbatim. Content from
+   * another provider is ignored (the turn is rebuilt from content and toolCalls);
+   * malformed Anthropic content is rejected before the call.
+   */
+  private replayableContent(message: LLMMessage): Array<Record<string, unknown>> | undefined {
+    const providerContent = message.providerContent;
+    if (!providerContent || providerContent.provider !== this.name) return undefined;
+    const blocks = providerContent.blocks;
+    const valid = Array.isArray(blocks) && blocks.length > 0 && blocks.every(block =>
+      !!block && typeof block === 'object' && !Array.isArray(block) && typeof block.type === 'string');
+    if (!valid) {
+      throw new ConfigurationError(
+        this.name,
+        'providerContent.blocks must be a non-empty array of content blocks, passed back unchanged from LLMResponse.providerContent.'
+      );
+    }
+    return blocks;
   }
 
   private formatMessageContent(
@@ -708,6 +745,12 @@ export class AnthropicProvider extends BaseProvider {
     // SchemaDriftError before we got here.
     const toolUses = data.content.filter(block => block.type === 'tool_use');
     if (toolUses.length > 0) {
+      // Keep the whole turn (thinking, redacted_thinking, text, tool_use, in order)
+      // so the tool loop can send it back unmodified, as Anthropic requires.
+      response.providerContent = {
+        provider: this.name,
+        blocks: JSON.parse(JSON.stringify(data.content)) as Array<Record<string, unknown>>
+      };
       const raw: ToolCall[] = toolUses.map(tool => ({
         id: tool.id as string,
         type: 'function' as const,

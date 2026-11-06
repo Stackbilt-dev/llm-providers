@@ -707,6 +707,10 @@ const result = await llm.generateResponseWithTools(
 console.log(result.message); // final assistant response after tool execution
 ```
 
+A failed tool call is sent back to the model as an error result carrying the error message, so the model can recover or explain the failure.
+
+**Anthropic.** Claude 5.x models think by default, and Anthropic requires a tool-use turn's thinking blocks to be sent back complete and unmodified. An Anthropic response that calls tools therefore carries `providerContent`: the turn's content blocks (thinking with signatures, `redacted_thinking`, text, `tool_use`), in the order Claude returned them. `generateResponseWithTools` copies it onto the assistant message, and the Anthropic provider sends it back verbatim. If you run the loop yourself, set `providerContent` on the assistant message from the response, and don't edit it. Other providers ignore the field.
+
 ## Built-in Tools (Server-Side)
 
 Some models run tools **server-side** — the provider executes web search, code interpretation, etc. inside a single completion call, no execute callback required. Set `LLMRequest.builtInTools` with normalized identifiers; the adapter translates to each model family's native wire shape and rejects unsupported combinations at the boundary.
@@ -951,7 +955,8 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | Type | Description |
 |------|-------------|
 | `LLMRequest` | Unified request: messages, model, temperature, tools, toolChoice, builtInTools, response_format, cache, lora |
-| `LLMResponse` | Unified response: message, optional reasoning, usage (with cost and optional reasoning tokens), provider, tool calls, `lengthCause`, `reasoningEffort`, `fallback`, metadata (builtInToolResults) |
+| `LLMResponse` | Unified response: message, optional reasoning, usage (with cost and optional reasoning tokens), provider, tool calls, `providerContent`, `lengthCause`, `reasoningEffort`, `fallback`, metadata (builtInToolResults) |
+| `ProviderContent` | `{ provider, blocks }`: a turn's provider-native content blocks, replayed unchanged on `LLMMessage.providerContent` in tool loops (Anthropic) |
 | `BuiltInTool` / `BuiltInToolType` | Server-side tool request: `{ type }` where type is `web_search` \| `visit_website` \| `browser_automation` \| `code_interpreter` \| `wolfram_alpha` |
 | `BuiltInToolResult` | A surfaced built-in execution: `{ type, name?, arguments?, results: [{ title, url, content, score }] }` on `metadata.builtInToolResults` |
 | `TokenUsage` | Token counts, compatible `cost`, explicit `costProvenance` / `tokenProvenance`, and cached token fields |

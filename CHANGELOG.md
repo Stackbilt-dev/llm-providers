@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Fixed
+- Anthropic tool loops (#124). Multi-turn tool use through the Anthropic provider, including `generateResponseWithTools()`, was rejected by the Messages API on every Claude model:
+  - `tool_result` blocks now send `tool_use_id`; they sent `id`.
+  - A failed tool's error message is now sent as the result's `content` with `is_error: true`, after any partial output; it was sent as empty content.
+  - When an assistant turn with tool calls is rebuilt from `content` and `toolCalls`, its text is kept before the `tool_use` blocks; it was dropped.
+
+### Added
+- `LLMResponse.providerContent` and `LLMMessage.providerContent` (#124), type `ProviderContent` (`{ provider, blocks }`). An Anthropic response that calls tools carries the turn's content blocks (thinking with signatures, `redacted_thinking`, text, `tool_use`) in order, and the Anthropic provider sends them back unchanged when they are set on an assistant message. Anthropic requires this for the thinking blocks of a tool-use turn, and Claude 5.x models think by default. `generateResponseWithTools()` copies the field for you; other providers ignore it. Malformed Anthropic content on a message throws `ConfigurationError` before the call. Canonical normalization and the factory response cache carry and validate the field.
+- The Anthropic response schema recognizes `redacted_thinking` blocks and the thinking `signature`.
+
 ## [1.24.1] — 2026-11-06
 
 ### Fixed

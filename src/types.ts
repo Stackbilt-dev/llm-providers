@@ -13,6 +13,24 @@ export interface LLMMessage {
   timestamp?: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
+  /**
+   * Provider-native content of an assistant turn, copied from
+   * `LLMResponse.providerContent`. The provider that produced it sends it back
+   * unchanged in place of `content` and `toolCalls`; other providers ignore it.
+   */
+  providerContent?: ProviderContent;
+}
+
+/**
+ * Provider-native content blocks of an assistant turn. Anthropic requires the
+ * thinking blocks (with their signatures) of a tool-use turn to be sent back
+ * complete and unmodified, so the tool loop replays this verbatim. Treat
+ * `blocks` as opaque: editing them makes the provider reject the request.
+ */
+export interface ProviderContent {
+  /** Provider that produced the blocks, e.g. 'anthropic'. */
+  provider: string;
+  blocks: Array<Record<string, unknown>>;
 }
 
 export interface LLMImageInput {
@@ -320,6 +338,13 @@ export interface LLMResponse {
   /** Present when a provider other than the first one tried served this response. */
   fallback?: FallbackReport;
   toolCalls?: ToolCall[];
+  /**
+   * Provider-native content of this turn, set by the Anthropic provider when the
+   * response calls tools. Pass it back on the assistant message
+   * (`LLMMessage.providerContent`) when you run the tool loop yourself;
+   * `generateResponseWithTools()` does this for you.
+   */
+  providerContent?: ProviderContent;
   cache?: CacheObservability;
   metadata?: Record<string, unknown>;
 }

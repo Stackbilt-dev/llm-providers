@@ -71,6 +71,12 @@ function isFallbackReport(value: unknown): boolean {
       && isOptionalString(hop.model) && isOptionalString(hop.errorCode));
 }
 
+function isProviderContent(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return typeof value.provider === 'string' && Array.isArray(value.blocks)
+    && value.blocks.every(block => isPlainObject(block) && typeof block.type === 'string');
+}
+
 export function isCachedResponse(value: unknown): value is LLMResponse {
   if (!value || typeof value !== 'object') return false;
   const response = value as Partial<LLMResponse>;
@@ -79,6 +85,7 @@ export function isCachedResponse(value: unknown): value is LLMResponse {
     && (response.lengthCause === undefined || response.lengthCause === 'reasoning' || response.lengthCause === 'answer')
     && (response.reasoningEffort === undefined || isReasoningEffortReport(response.reasoningEffort))
     && (response.fallback === undefined || isFallbackReport(response.fallback))
+    && (response.providerContent === undefined || isProviderContent(response.providerContent))
     && [response.id, response.reasoning, response.content]
       .every(field => field === undefined || typeof field === 'string')
     && [response.metadata, response.cache]

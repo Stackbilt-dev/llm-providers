@@ -1145,7 +1145,8 @@ export class LLMProviderFactory {
         {
           role: 'assistant',
           content: response.message,
-          toolCalls: response.toolCalls
+          toolCalls: response.toolCalls,
+          ...(response.providerContent ? { providerContent: response.providerContent } : {})
         },
         {
           role: 'user',
