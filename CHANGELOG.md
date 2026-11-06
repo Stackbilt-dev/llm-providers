@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.24.0] — 2026-11-06
+
 ### Added
 - Workers AI reasoning control (#135, #136). `reasoning.effort` is now sent to Workers AI reasoning models, mapped per model from each model's Cloudflare docs page (checked 2026-11-06): gpt-oss 20B/120B, GLM-5.3, GLM-5.3 Flash, GLM-5.2, DeepSeek V4 Flash/Pro, Kimi K2.6 and Qwen 3.8 27B through `reasoning_effort`, and Nemotron 3 120B through `chat_template_kwargs`. Values a model doesn't document, and aliases that would mean the model's maximum (GLM-5.3 and GLM-5.3 Flash map `none` and `medium` to `max`), are never forwarded. Nemotron's medium and high send normal reasoning (`enable_thinking: true`) explicitly, since its page does not say which mode is the default.
   - `LLMResponse.reasoningEffort` reports `{ requested, applied, exact }`.
