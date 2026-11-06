@@ -1063,6 +1063,9 @@ describe('CloudflareProvider', () => {
 
       const { SchemaDriftError } = await import('../errors');
       for (const field of ['reasoning', 'reasoning_content'] as const) {
+        // Each drift error degrades the breaker, which then sheds traffic at random;
+        // reset it so every iteration reaches schema validation.
+        defaultCircuitBreakerManager.resetAll();
         mockAiRun.mockResolvedValueOnce({
           choices: [{ message: { content: 'ready', [field]: 42 } }]
         });
