@@ -81,6 +81,10 @@ export function isCachedResponse(value: unknown): value is LLMResponse {
     && (response.reasoningEffort === undefined || isReasoningEffortReport(response.reasoningEffort))
     && (response.fallback === undefined || isFallbackReport(response.fallback))
     && (response.providerContent === undefined || isValidProviderContent(response.providerContent))
+    // An Anthropic tool-call turn needs its providerContent to be replayed with its
+    // thinking; an entry without it (written before 1.25.0) is a miss.
+    && !(response.provider === 'anthropic' && Array.isArray(response.toolCalls) && response.toolCalls.length > 0
+      && response.providerContent === undefined)
     && [response.id, response.reasoning, response.content]
       .every(field => field === undefined || typeof field === 'string')
     && [response.metadata, response.cache]

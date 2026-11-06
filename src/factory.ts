@@ -1135,11 +1135,15 @@ export class LLMProviderFactory {
           // Never report a failure as an empty success: a thrown string, or any
           // object with a non-blank message (including cross-realm Errors), is
           // the error text; anything else gets a generic one.
-          const raw = typeof error === 'string'
-            ? error
-            : error !== null && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string'
-              ? (error as { message: string }).message
-              : '';
+          let raw = '';
+          try {
+            const message = typeof error === 'string'
+              ? error
+              : error !== null && typeof error === 'object' ? (error as { message?: unknown }).message : undefined;
+            if (typeof message === 'string') raw = message;
+          } catch {
+            // A throwing message getter still yields a tool error, not a loop failure.
+          }
           toolResults.push({
             id: toolCall.id,
             output: '',

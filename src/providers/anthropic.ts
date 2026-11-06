@@ -645,18 +645,22 @@ export class AnthropicProvider extends BaseProvider {
    */
   private replayableContent(message: LLMMessage): Array<Record<string, unknown>> | undefined {
     const providerContent = message.providerContent;
+    // Shape was checked in validateRequest, before dispatch.
     if (!providerContent || providerContent.provider !== this.name) return undefined;
-    if (!isValidProviderContent(providerContent)) {
-      throw new ConfigurationError(
-        this.name,
-        'providerContent.blocks must be a non-empty array of content blocks with no user-turn blocks (tool_result, image, document, search_result) and complete tool_use blocks, passed back unchanged from LLMResponse.providerContent.'
-      );
-    }
     if (!toolUseIdsMatch(providerContent, message.toolCalls)) {
       // Each resent tool_use needs a matching result; if the caller changed the
       // tool calls, rebuild the turn from content and toolCalls instead.
       this.logger.warn(`[${this.name}] providerContent tool_use ids differ from toolCalls; rebuilding the assistant turn`);
       return undefined;
+    }
+    const replayedText = providerContent.blocks
+      .filter(block => block.type === 'text' && typeof block.text === 'string')
+      .map(block => block.text as string)
+      .join('');
+    if (message.content.trim() && message.content.trim() !== replayedText.trim()) {
+      // Replay sends providerContent, not content: an edit (such as a redaction)
+      // made only to content is not sent.
+      this.logger.warn(`[${this.name}] assistant content differs from providerContent; sending providerContent unchanged`);
     }
     return providerContent.blocks;
   }
@@ -952,6 +956,17 @@ export class AnthropicProvider extends BaseProvider {
         this.name,
         `${model} does not support forced tool choice; use toolChoice 'auto' and say in the prompt when to call the tool`
       );
+    }
+    // Replayed Anthropic content is checked before dispatch, so a caller mistake
+    // is not recorded as a provider failure.
+    for (const message of request.messages) {
+      if (message.role === 'assistant' && message.providerContent?.provider === this.name
+        && !isValidProviderContent(message.providerContent)) {
+        throw new ConfigurationError(
+          this.name,
+          'providerContent.blocks must be a non-empty array of content blocks, passed back unchanged from LLMResponse.providerContent: no user-turn blocks (tool_result, image, document, search_result), complete tool_use blocks, and thinking blocks with their signatures.'
+        );
+      }
     }
   }
 

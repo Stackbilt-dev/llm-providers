@@ -104,6 +104,8 @@ describe('Anthropic tool loops (#124)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Also drop queued responses, so one failing test can't feed the next.
+    mockFetch.mockReset();
     defaultCircuitBreakerManager.resetAll();
     provider = new AnthropicProvider({ apiKey: 'test-key', maxRetries: 0 });
   });
@@ -183,6 +185,25 @@ describe('Anthropic tool loops (#124)', () => {
       });
 
       expect(response.toolCalls?.map(call => call.id)).toEqual(['toolu_01']);
+      expect(response.providerContent).toBeUndefined();
+    });
+
+    it.each([
+      ['a thinking block without a signature', { type: 'thinking', thinking: 'x' }],
+      ['a thinking block with an empty signature', { type: 'thinking', thinking: '', signature: '' }],
+    ])('is not set when the turn has %s, which Anthropic would reject on replay', async (_label, block) => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse([
+        block,
+        { type: 'tool_use', id: 'toolu_01', name: 'lookup', input: { id: 42 } },
+      ], 'tool_use'));
+
+      const response = await provider.generateResponse({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'Look up 42' }],
+        tools: [lookupTool],
+      });
+
+      expect(response.toolCalls).toHaveLength(1);
       expect(response.providerContent).toBeUndefined();
     });
 
@@ -274,6 +295,61 @@ describe('Anthropic tool loops (#124)', () => {
       ]);
     });
 
+    it('rejects malformed content before dispatch, without counting a provider failure', async () => {
+      const before = provider.getMetrics();
+
+      await expect(provider.generateResponse(followUp({ provider: 'anthropic', blocks: [] })))
+        .rejects.toBeInstanceOf(ConfigurationError);
+      await expect(provider.streamResponse(followUp({ provider: 'anthropic', blocks: [] })))
+        .rejects.toBeInstanceOf(ConfigurationError);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(provider.getMetrics()).toEqual(before);
+    });
+
+    it('warns when content was edited but providerContent was not, and sends providerContent', async () => {
+      const warn = vi.fn();
+      const logged = new AnthropicProvider({
+        apiKey: 'test-key', maxRetries: 0,
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+      });
+      mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'done' }]));
+      const request = followUp({ provider: 'anthropic', blocks: TOOL_TURN });
+      request.messages[1] = { ...request.messages[1], content: 'Let me look that up for [REDACTED].' };
+
+      await logged.generateResponse(request);
+
+      expect(requestBody(0).messages[1].content).toEqual(TOOL_TURN);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('content differs from providerContent'));
+    });
+
+    it('does not warn when content matches the replayed text', async () => {
+      const warn = vi.fn();
+      const logged = new AnthropicProvider({
+        apiKey: 'test-key', maxRetries: 0,
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+      });
+      mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'done' }]));
+
+      await logged.generateResponse(followUp({ provider: 'anthropic', blocks: TOOL_TURN }));
+
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('content differs'));
+    });
+
+    it('leaves replayed blocks untouched when provider-prefix cache hints are set', async () => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'done' }]));
+      const request = followUp({ provider: 'anthropic', blocks: TOOL_TURN });
+      request.systemPrompt = 'You look things up.';
+      request.cache = { strategy: 'provider-prefix' };
+
+      await provider.generateResponse(request);
+
+      const body = requestBody(0) as { messages: Array<{ content: unknown }>; system: unknown; tools: Array<Record<string, unknown>> };
+      expect(body.messages[1].content).toEqual(TOOL_TURN);
+      expect(body.system).toEqual([{ type: 'text', text: 'You look things up.', cache_control: { type: 'ephemeral' } }]);
+      expect(body.tools.at(-1)).toMatchObject({ cache_control: { type: 'ephemeral' } });
+    });
+
     it('drops whitespace-only text when rebuilding a turn', async () => {
       mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'done' }]));
       const request = followUp(undefined);
@@ -312,6 +388,8 @@ describe('Anthropic tool loops (#124)', () => {
       ['an image block', [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }]],
       ['a tool_use block without an id', [{ type: 'tool_use', name: 'lookup', input: {} }]],
       ['a tool_use block without input', [{ type: 'tool_use', id: 'toolu_01', name: 'lookup' }]],
+      ['an unsigned thinking block', [{ type: 'thinking', thinking: '' }, ...TOOL_TURN.slice(4)]],
+      ['a redacted_thinking block without data', [{ type: 'redacted_thinking' }, ...TOOL_TURN.slice(4)]],
     ])('rejects malformed Anthropic content (%s) before the call', async (_label, blocks) => {
       await expect(provider.generateResponse(followUp({ provider: 'anthropic', blocks: blocks as never })))
         .rejects.toBeInstanceOf(ConfigurationError);
@@ -386,6 +464,8 @@ describe('Anthropic tool loops (#124)', () => {
       ['a thrown object', { code: 7 }, "Tool 'lookup' failed without an error message"],
       ['an error-like object', { message: 'Rate limited, retry in 30s' }, 'Rate limited, retry in 30s'],
       ['a whitespace-only message', new Error('   '), "Tool 'lookup' failed without an error message"],
+      ['an object whose message getter throws', Object.defineProperty({}, 'message', { get() { throw new Error('boom'); } }),
+        "Tool 'lookup' failed without an error message"],
     ])('still sends an error result for %s', async (_label, thrown, expected) => {
       mockFetch
         .mockResolvedValueOnce(anthropicResponse(TOOL_TURN, 'tool_use'))
@@ -466,6 +546,24 @@ describe('Anthropic tool loops (#124)', () => {
       });
 
       expect(mockFetch).not.toHaveBeenCalled();
+      expect(response.providerContent).toEqual({ provider: 'anthropic', blocks: TOOL_TURN });
+    });
+
+    it('treats a cached Anthropic tool-call entry without providerContent (written before 1.25.0) as a miss', async () => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse(TOOL_TURN, 'tool_use'));
+      const cache = {
+        get: vi.fn().mockResolvedValue(cachedToolTurn(undefined)),
+        put: vi.fn().mockResolvedValue(undefined),
+      };
+      const llm = new LLMProviders({
+        anthropic: { apiKey: 'test-key', maxRetries: 0 }, stateScope: 'client', responseCache: cache,
+      });
+
+      const response = await llm.generateResponse({
+        model: 'claude-opus-5-5', messages: [{ role: 'user', content: 'Look up 42' }], tools: [lookupTool],
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(response.providerContent).toEqual({ provider: 'anthropic', blocks: TOOL_TURN });
     });
 
@@ -616,6 +714,7 @@ describe('Anthropic tool loops (#124)', () => {
         { provider: 'anthropic', blocks: [] },
         { provider: '', blocks: TOOL_TURN },
         { provider: 'anthropic', blocks: [{ type: 'tool_result', tool_use_id: 'x' }] },
+        { provider: 'anthropic', blocks: [{ type: 'thinking', thinking: '', signature: '' }] },
       ]) {
         expect(isCachedResponse({ ...base, providerContent })).toBe(false);
       }

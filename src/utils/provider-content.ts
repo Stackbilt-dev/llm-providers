@@ -18,19 +18,28 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isValidAnthropicBlock(block: Record<string, unknown>): boolean {
   if (ANTHROPIC_USER_ONLY_BLOCK_TYPES.has(block.type as string)) return false;
-  if (block.type === 'tool_use') {
-    return isNonEmptyString(block.id) && isNonEmptyString(block.name) && isPlainObject(block.input);
+  switch (block.type) {
+    case 'tool_use':
+      return isNonEmptyString(block.id) && isNonEmptyString(block.name) && isPlainObject(block.input);
+    // Anthropic rejects a thinking block sent back without its signature, and a
+    // redacted_thinking block without its data, so such a turn can't be replayed.
+    case 'thinking':
+      return isNonEmptyString(block.signature);
+    case 'redacted_thinking':
+      return isNonEmptyString(block.data);
+    default:
+      return true;
   }
-  return true;
 }
 
 /**
  * Shape check shared by the Anthropic provider (before replaying a turn) and
  * the factory response cache (before serving a hit), so both accept the same
  * values: a provider name and a non-empty array of typed blocks. For Anthropic
- * content it also rejects user-turn block types and `tool_use` blocks without
- * an id, name or input. Other block types pass unchanged, so blocks Anthropic
- * adds later still round-trip.
+ * content it also rejects user-turn block types, `tool_use` blocks without an
+ * id, name or input, `thinking` blocks without a signature and
+ * `redacted_thinking` blocks without data. Other block types pass unchanged, so
+ * blocks Anthropic adds later still round-trip.
  */
 export function isValidProviderContent(value: unknown): value is ProviderContent {
   if (!isPlainObject(value)) return false;
