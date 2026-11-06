@@ -63,6 +63,29 @@ describe('getGatewayRoutePlan', () => {
     expect(plan.degradations).toEqual([]);
   });
 
+  it('fails the route plan for unsupported Cloudflare JSON Schema output', () => {
+    const plan = getGatewayRoutePlan({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.1-8b-instruct',
+      response_format: { type: 'json_schema', json_schema: { name: 'status', schema: { type: 'object' } } }
+    }, ['cloudflare']);
+
+    expect(plan.executable).toBe(false);
+    expect(plan.degradations).toContainEqual(expect.objectContaining({ capability: 'structuredOutput', action: 'failed' }));
+  });
+
+  it('reports Cloudflare JSON Schema streaming as failed', () => {
+    const plan = getGatewayRoutePlan({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      stream: true,
+      response_format: { type: 'json_schema', json_schema: { name: 'status', schema: { type: 'object' } } }
+    }, ['cloudflare']);
+
+    expect(plan.executable).toBe(false);
+    expect(plan.degradations).toContainEqual(expect.objectContaining({ capability: 'structuredOutput', action: 'failed' }));
+  });
+
   it('does not warn about cache support when the request has no cache hints', () => {
     const plan = getGatewayRoutePlan({
       messages: [{ role: 'user', content: 'Hello.' }],

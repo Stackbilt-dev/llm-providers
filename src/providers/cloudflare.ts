@@ -21,7 +21,8 @@ import {
   InvalidRequestError,
   ReasoningEffortUnsupportedError,
   ModelNotFoundError,
-  SchemaDriftError
+  SchemaDriftError,
+  StructuredOutputUnsupportedError
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
@@ -459,6 +460,7 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
+        supportsStructuredOutput: false,
         supportsBatching: true,
         inputTokenCost: 0.0014,
         outputTokenCost: 0.0044,
@@ -469,6 +471,7 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
+        supportsStructuredOutput: true,
         supportsVision: true,
         supportsBatching: true,
         inputTokenCost: 0.00015,
@@ -586,6 +589,7 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
+        supportsStructuredOutput: true,
         supportsBatching: true,
         inputTokenCost: 0.000293,
         outputTokenCost: 0.002253,
@@ -742,6 +746,8 @@ export class CloudflareProvider extends BaseProvider {
   }
 
   private async runLlamaVisionRaw(request: LLMRequest, model: string): Promise<WorkersAIResult> {
+    const responseFormat = request.response_format;
+    const schemaInstruction = this.structuredOutputInstruction(responseFormat, model, false);
     if (request.images!.length > 1) {
       throw new ConfigurationError(
         this.name,
@@ -783,7 +789,7 @@ export class CloudflareProvider extends BaseProvider {
 
     return this.runModel(model, {
       image: imageBytes,
-      prompt: `${systemPrefix}${lastUserText}`,
+      prompt: `${systemPrefix}${lastUserText}${schemaInstruction}`,
       max_tokens: request.maxTokens ?? 512
     }, request) as Promise<WorkersAIResult>;
   }
@@ -855,14 +861,13 @@ export class CloudflareProvider extends BaseProvider {
     return resolved;
   }
 
-  private formatRequest(request: LLMRequest, model: string): CloudflareRequest {
+  private formatRequest(request: LLMRequest, model: string, streaming = request.stream === true): CloudflareRequest {
     const reasoningEffort = this.resolveReasoningEffort(request, model);
-
     // Anthropic-via-CF models use a different wire format: system is a top-level
     // field, messages must not contain a system role, and tool calling is not
     // yet verified. Route these through a dedicated formatter.
     if (ANTHROPIC_VIA_CF_MODELS.has(model)) {
-      return this.formatAnthropicViaCloudflareRequest(request, model);
+      return this.formatAnthropicViaCloudflareRequest(request, model, streaming);
     }
 
     const capabilities = this.getModelCapabilities()[model];
@@ -891,24 +896,34 @@ export class CloudflareProvider extends BaseProvider {
     const responseFormat = request.response_format;
     const jsonMode = responseFormat?.type === 'json_object';
     const jsonSchema = responseFormat?.type === 'json_schema';
-    const nativeJsonSchema = responseFormat && responseFormat.type === 'json_schema'
+    const supportsNativeJsonSchema = capabilities?.supportsStructuredOutput === true;
+    const allowEmulation = request.metadata?.allowStructuredOutputEmulation === true;
+    if (jsonSchema && !supportsNativeJsonSchema && !allowEmulation) {
+      throw new StructuredOutputUnsupportedError(
+        this.name,
+        `Model '${model}' does not support native JSON Schema output; set metadata.allowStructuredOutputEmulation=true to allow prompt emulation.`
+      );
+    }
+    const nativeJsonSchema = responseFormat && responseFormat.type === 'json_schema' && supportsNativeJsonSchema
       ? responseFormat.json_schema.schema
       : undefined;
-    if (jsonSchema && request.stream) {
-      throw new ConfigurationError(
+    if (jsonSchema && streaming) {
+      throw new StructuredOutputUnsupportedError(
         this.name,
         'Cloudflare Workers AI JSON Schema mode does not support streaming'
       );
     }
-    const jsonInstruction = '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
+    const jsonInstruction = jsonMode || (jsonSchema && allowEmulation)
+      ? this.structuredOutputInstruction(responseFormat, model, allowEmulation)
+      : '';
 
     // Add system prompt if provided
     if (request.systemPrompt) {
       messages.push({
         role: 'system',
-        content: jsonMode ? request.systemPrompt + jsonInstruction : request.systemPrompt
+        content: jsonMode || (jsonSchema && allowEmulation) ? request.systemPrompt + jsonInstruction : request.systemPrompt
       });
-    } else if (jsonMode) {
+    } else if (jsonMode || (jsonSchema && allowEmulation)) {
       messages.push({
         role: 'system',
         content: jsonInstruction.trimStart()
@@ -990,7 +1005,7 @@ export class CloudflareProvider extends BaseProvider {
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
-      stream: request.stream,
+      stream: streaming,
       ...(nativeJsonSchema
         ? { response_format: { type: 'json_schema', json_schema: nativeJsonSchema } }
         : {})
@@ -1029,7 +1044,7 @@ export class CloudflareProvider extends BaseProvider {
     return cloudflareRequest;
   }
 
-  private formatAnthropicViaCloudflareRequest(request: LLMRequest, model: string): CloudflareRequest {
+  private formatAnthropicViaCloudflareRequest(request: LLMRequest, model: string, streaming: boolean): CloudflareRequest {
     const capabilities = this.getModelCapabilities()[model];
 
     if ((request.tools?.length ?? 0) > 0) {
@@ -1044,6 +1059,19 @@ export class CloudflareProvider extends BaseProvider {
       throw new ConfigurationError(
         this.name,
         `'${model}' vision support via the Cloudflare binding has not been verified.`
+      );
+    }
+
+    const responseFormat = request.response_format;
+    const allowEmulation = request.metadata?.allowStructuredOutputEmulation === true;
+    const schemaInstruction = this.structuredOutputInstruction(responseFormat, model, allowEmulation);
+    if (responseFormat?.type === 'json_schema' && streaming) {
+      throw new StructuredOutputUnsupportedError(this.name, 'Cloudflare Workers AI JSON Schema mode does not support streaming');
+    }
+    if (responseFormat?.type === 'json_schema' && !allowEmulation) {
+      throw new StructuredOutputUnsupportedError(
+        this.name,
+        `Model '${model}' does not support native JSON Schema output; set metadata.allowStructuredOutputEmulation=true to allow prompt emulation.`
       );
     }
 
@@ -1064,12 +1092,31 @@ export class CloudflareProvider extends BaseProvider {
     const systemMessage = request.messages.find(m => m.role === 'system');
     if (systemMessage) systemParts.push(systemMessage.content as string);
     if (request.systemPrompt) systemParts.push(request.systemPrompt);
-    if (systemParts.length > 0) cfRequest.system = systemParts.join('\n\n');
+    if (systemParts.length > 0 || schemaInstruction) {
+      cfRequest.system = `${systemParts.join('\n\n')}${schemaInstruction}`.trim();
+    }
 
     // Claude 4.7 and later (including Opus 4.8) return a 400 for non-default
     // temperature or top_p, so sampling parameters are not forwarded.
 
     return cfRequest;
+  }
+
+  private structuredOutputInstruction(
+    responseFormat: LLMRequest['response_format'],
+    model: string,
+    allowSchemaEmulation: boolean
+  ): string {
+    if (responseFormat?.type === 'json_object') {
+      return '\n\nYou must respond with valid JSON only. No markdown fences, no commentary, no text outside the JSON.';
+    }
+    if (responseFormat?.type === 'json_schema' && allowSchemaEmulation) {
+      return `\n\nYou must respond with valid JSON only matching this JSON Schema. No markdown fences, no commentary, no text outside the JSON.\n${JSON.stringify(responseFormat.json_schema.schema)}`;
+    }
+    if (responseFormat?.type === 'json_schema' && !allowSchemaEmulation) {
+      throw new StructuredOutputUnsupportedError(this.name, `Model '${model}' does not support native JSON Schema output.`);
+    }
+    return '';
   }
 
   private attachImagesToLastUserMessage(
@@ -1499,7 +1546,7 @@ export class CloudflareProvider extends BaseProvider {
     this.validateRequest(request);
 
     const model = request.model || this.getRecommendedModel(request);
-    const cloudflareRequest = { ...this.formatRequest(request, model), stream: true };
+    const cloudflareRequest = this.formatRequest({ ...request, stream: true }, model, true);
     let finalUsage: TokenUsage | undefined;
     let streamedChars = 0;
     return this.createStream({

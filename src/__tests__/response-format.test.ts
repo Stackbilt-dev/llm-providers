@@ -418,6 +418,47 @@ describe('Cloudflare response_format', () => {
     })).rejects.toThrow('JSON Schema mode does not support streaming');
   });
 
+  it('should reject json_schema on models without native support', async () => {
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.1-8b-instruct',
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    })).rejects.toThrow('does not support native JSON Schema output');
+  });
+
+  it('should emulate json_schema only when explicitly enabled', async () => {
+    mockAiRun.mockResolvedValueOnce({ response: '{"ok":true}' });
+
+    await provider.generateResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.1-8b-instruct',
+      metadata: { allowStructuredOutputEmulation: true },
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    });
+
+    const [, body] = mockAiRun.mock.calls[0];
+    expect(body.response_format).toBeUndefined();
+    expect(body.messages[0].content).toContain('JSON Schema');
+  });
+
+  it('should reject streaming json_schema through streamResponse before dispatch', async () => {
+    await expect(provider.streamResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    })).rejects.toThrow('JSON Schema mode does not support streaming');
+    expect(mockAiRun).not.toHaveBeenCalled();
+  });
+
   it('should not modify messages when response_format is not set', async () => {
     mockAiRun.mockResolvedValueOnce({ response: 'Hello!' });
 

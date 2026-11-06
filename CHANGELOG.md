@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Fixed
+- Cloudflare structured-output routing now matches adapter behavior: native JSON Schema is gated by model capability, unsupported requests fail or explicitly emulate, streaming requests reject consistently, and factory fallback remains available.
+
 ## [1.25.0] — 2026-11-06
 
 Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the factory response cache starts cold after upgrading (see Changed).
