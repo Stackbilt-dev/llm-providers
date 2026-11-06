@@ -6,11 +6,16 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AnthropicProvider } from '../providers/anthropic';
+import { GroqProvider } from '../providers/groq';
+import { CerebrasProvider } from '../providers/cerebras';
+import { NvidiaProvider } from '../providers/nvidia';
+import { OpenAIProvider } from '../providers/openai';
 import { LLMProviderFactory } from '../factory';
 import { ConfigurationError } from '../errors';
 import { isCachedResponse } from '../utils/response-cache';
 import { normalizeLegacyRequest, normalizeLLMResponse } from '../canonical';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
+import { LLMProviders } from '../index';
 import type { LLMRequest, LLMResponse } from '../types';
 
 const mockFetch = vi.fn();
@@ -165,6 +170,40 @@ describe('Anthropic tool loops (#124)', () => {
       expect(response.providerContent?.blocks).not.toBe(TOOL_TURN);
     });
 
+    it('is not set when a tool_use block fails validation, so the turn is rebuilt', async () => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse([
+        ...TOOL_TURN,
+        { type: 'tool_use', id: 'toolu_02', name: '', input: {} },
+      ], 'tool_use'));
+
+      const response = await provider.generateResponse({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'Look up 42' }],
+        tools: [lookupTool],
+      });
+
+      expect(response.toolCalls?.map(call => call.id)).toEqual(['toolu_01']);
+      expect(response.providerContent).toBeUndefined();
+    });
+
+    it('is not set on a JSON-prefill response, whose text starts after the prefilled brace', async () => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse([
+        { type: 'text', text: '"id": 42}' },
+        { type: 'tool_use', id: 'toolu_01', name: 'lookup', input: { id: 42 } },
+      ], 'tool_use'));
+
+      const response = await provider.generateResponse({
+        model: 'claude-haiku-4-5-20251001',
+        messages: [{ role: 'user', content: 'Look up 42' }],
+        tools: [lookupTool],
+        response_format: { type: 'json_object' },
+      });
+
+      expect(response.message).toBe('{"id": 42}');
+      expect(response.toolCalls).toHaveLength(1);
+      expect(response.providerContent).toBeUndefined();
+    });
+
     it('is not set when the response calls no tools', async () => {
       mockFetch.mockResolvedValueOnce(anthropicResponse([
         { type: 'thinking', thinking: '', signature: 'sig' },
@@ -218,6 +257,23 @@ describe('Anthropic tool loops (#124)', () => {
       ]);
     });
 
+    it('rebuilds the turn when its tool_use ids differ from toolCalls', async () => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'done' }]));
+      const request = followUp({ provider: 'anthropic', blocks: TOOL_TURN });
+      request.messages[1] = {
+        ...request.messages[1],
+        toolCalls: [{ id: 'toolu_99', type: 'function', function: { name: 'lookup', arguments: '{"id":1}' } }],
+      };
+      request.messages[2] = { role: 'user', content: '', toolResults: [{ id: 'toolu_99', output: 'found' }] };
+
+      await provider.generateResponse(request);
+
+      expect(requestBody(0).messages[1].content).toEqual([
+        { type: 'text', text: 'Let me look that up.' },
+        { type: 'tool_use', id: 'toolu_99', name: 'lookup', input: { id: 1 } },
+      ]);
+    });
+
     it('drops whitespace-only text when rebuilding a turn', async () => {
       mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'done' }]));
       const request = followUp(undefined);
@@ -254,6 +310,8 @@ describe('Anthropic tool loops (#124)', () => {
       ['a non-array', 'not blocks'],
       ['a user-turn block', [{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'x' }]],
       ['an image block', [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }]],
+      ['a tool_use block without an id', [{ type: 'tool_use', name: 'lookup', input: {} }]],
+      ['a tool_use block without input', [{ type: 'tool_use', id: 'toolu_01', name: 'lookup' }]],
     ])('rejects malformed Anthropic content (%s) before the call', async (_label, blocks) => {
       await expect(provider.generateResponse(followUp({ provider: 'anthropic', blocks: blocks as never })))
         .rejects.toBeInstanceOf(ConfigurationError);
@@ -326,6 +384,8 @@ describe('Anthropic tool loops (#124)', () => {
       ['a non-Error throw', 'disk full', 'disk full'],
       ['an Error with no message', new Error(), "Tool 'lookup' failed without an error message"],
       ['a thrown object', { code: 7 }, "Tool 'lookup' failed without an error message"],
+      ['an error-like object', { message: 'Rate limited, retry in 30s' }, 'Rate limited, retry in 30s'],
+      ['a whitespace-only message', new Error('   '), "Tool 'lookup' failed without an error message"],
     ])('still sends an error result for %s', async (_label, thrown, expected) => {
       mockFetch
         .mockResolvedValueOnce(anthropicResponse(TOOL_TURN, 'tool_use'))
@@ -346,6 +406,85 @@ describe('Anthropic tool loops (#124)', () => {
       expect(requestBody(1).messages[2].content).toEqual([
         { type: 'tool_result', tool_use_id: 'toolu_01', content: expected, is_error: true },
       ]);
+    });
+  });
+
+  describe('longer loops and the response cache', () => {
+    const SECOND_TURN = [
+      { type: 'thinking', thinking: '', signature: 'sig-round-2' },
+      { type: 'tool_use', id: 'toolu_02', name: 'lookup', input: { id: 43 } },
+    ];
+
+    it('sends every earlier turn back unchanged across three rounds', async () => {
+      mockFetch
+        .mockResolvedValueOnce(anthropicResponse(TOOL_TURN, 'tool_use'))
+        .mockResolvedValueOnce(anthropicResponse(SECOND_TURN, 'tool_use'))
+        .mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'Both are ok.' }]));
+
+      const factory = new LLMProviderFactory({
+        anthropic: { apiKey: 'test-key', maxRetries: 0 },
+        defaultProvider: 'anthropic',
+        costOptimization: false,
+      });
+      const response = await factory.generateResponseWithTools({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'Look up 42 and 43' }],
+        tools: [lookupTool],
+      }, { execute: vi.fn().mockResolvedValueOnce('first').mockResolvedValueOnce('second') });
+
+      expect(response.message).toBe('Both are ok.');
+      const third = requestBody(2).messages;
+      expect(third).toHaveLength(5);
+      expect(third[1]).toEqual({ role: 'assistant', content: TOOL_TURN });
+      expect(third[2].content).toEqual([{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'first', is_error: false }]);
+      expect(third[3]).toEqual({ role: 'assistant', content: SECOND_TURN });
+      expect(third[4].content).toEqual([{ type: 'tool_result', tool_use_id: 'toolu_02', content: 'second', is_error: false }]);
+    });
+
+    const cachedToolTurn = (providerContent: unknown) => JSON.stringify({
+      message: 'Let me look that up.',
+      model: 'claude-opus-5-5',
+      provider: 'anthropic',
+      responseTime: 1,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cost: 0 },
+      finishReason: 'tool_calls',
+      toolCalls: [{ id: 'toolu_01', type: 'function', function: { name: 'lookup', arguments: '{"id":42}' } }],
+      providerContent,
+    });
+
+    it('serves providerContent from a cache hit', async () => {
+      const cache = {
+        get: vi.fn().mockResolvedValue(cachedToolTurn({ provider: 'anthropic', blocks: TOOL_TURN })),
+        put: vi.fn().mockResolvedValue(undefined),
+      };
+      const llm = new LLMProviders({
+        anthropic: { apiKey: 'test-key', maxRetries: 0 }, stateScope: 'client', responseCache: cache,
+      });
+
+      const response = await llm.generateResponse({
+        model: 'claude-opus-5-5', messages: [{ role: 'user', content: 'Look up 42' }], tools: [lookupTool],
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(response.providerContent).toEqual({ provider: 'anthropic', blocks: TOOL_TURN });
+    });
+
+    it('treats a cached entry with malformed providerContent as a miss', async () => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'fresh' }]));
+      const cache = {
+        get: vi.fn().mockResolvedValue(cachedToolTurn({ provider: 'anthropic', blocks: [] })),
+        put: vi.fn().mockResolvedValue(undefined),
+      };
+      const llm = new LLMProviders({
+        anthropic: { apiKey: 'test-key', maxRetries: 0 }, stateScope: 'client', responseCache: cache,
+      });
+
+      const response = await llm.generateResponse({
+        model: 'claude-opus-5-5', messages: [{ role: 'user', content: 'Look up 42' }], tools: [lookupTool],
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(response.message).toBe('fresh');
     });
   });
 
@@ -410,6 +549,53 @@ describe('Anthropic tool loops (#124)', () => {
     });
   });
 
+  describe('tool errors on OpenAI-compatible providers', () => {
+    const failedLookup: LLMRequest = {
+      messages: [
+        { role: 'user', content: 'Look up 42' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{"id":42}' } }] },
+        { role: 'user', content: '', toolResults: [{ id: 'call_1', output: '', error: 'Database is read-only' }] },
+      ],
+      tools: [lookupTool],
+    };
+
+    it.each([
+      ['groq', () => new GroqProvider({ apiKey: 'test-key', maxRetries: 0 })],
+      ['cerebras', () => new CerebrasProvider({ apiKey: 'test-key', maxRetries: 0 })],
+      ['nvidia', () => new NvidiaProvider({ apiKey: 'test-key', maxRetries: 0 })],
+      ['openai', () => new OpenAIProvider({ apiKey: 'test-key', maxRetries: 0 })],
+    ])('%s sends the error text in the tool message', async (_name, make) => {
+      mockFetch.mockResolvedValueOnce(openAiResponse({ content: 'The lookup failed.' }));
+
+      await make().generateResponse(failedLookup);
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as {
+        messages: Array<Record<string, unknown>>;
+      };
+      const toolMessage = body.messages.find(message => message.role === 'tool');
+      expect(toolMessage).toEqual({
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: JSON.stringify({ output: '', error: 'Database is read-only' }),
+      });
+    });
+
+    it('a successful result is still sent as its output', async () => {
+      mockFetch.mockResolvedValueOnce(openAiResponse({ content: 'ok' }));
+      const request: LLMRequest = {
+        ...failedLookup,
+        messages: [...failedLookup.messages.slice(0, 2), { role: 'user', content: '', toolResults: [{ id: 'call_1', output: 'found' }] }],
+      };
+
+      await new GroqProvider({ apiKey: 'test-key', maxRetries: 0 }).generateResponse(request);
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as {
+        messages: Array<Record<string, unknown>>;
+      };
+      expect(body.messages.find(message => message.role === 'tool')).toMatchObject({ content: 'found' });
+    });
+  });
+
   describe('boundaries', () => {
     const base: LLMResponse = {
       message: '',
@@ -445,6 +631,17 @@ describe('Anthropic tool loops (#124)', () => {
       });
       expect(canonical.messages[1].providerContent).toEqual(providerContent);
       expect(normalizeLLMResponse({ ...base, providerContent }).providerContent).toEqual(providerContent);
+    });
+
+    it('canonical normalization rejects blocks that are not JSON with a library error', () => {
+      const circular: Record<string, unknown> = { type: 'text', text: 'x' };
+      circular.self = circular;
+      expect(() => normalizeLegacyRequest({
+        messages: [
+          { role: 'user', content: 'Look up 42' },
+          { role: 'assistant', content: '', providerContent: { provider: 'anthropic', blocks: [circular] } },
+        ],
+      })).toThrow(ConfigurationError);
     });
 
     it('canonical copies are deep: editing one leaves the original blocks unchanged', () => {

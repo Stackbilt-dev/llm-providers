@@ -4,6 +4,7 @@
  */
 
 import type { LLMRequest, LLMResponse, OpenAIConfig, ModelCapabilities, ToolCall, Tool, TokenUsage, ProviderExecutionOptions } from '../types.js';
+import { openAIToolResultContent } from '../utils/tool-results.js';
 import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
@@ -442,9 +443,7 @@ export class OpenAIProvider extends BaseProvider {
         for (const toolResult of message.toolResults) {
           messages.push({
             role: 'tool',
-            content: toolResult.error
-              ? JSON.stringify({ output: toolResult.output, error: toolResult.error })
-              : toolResult.output,
+            content: openAIToolResultContent(toolResult),
             tool_call_id: toolResult.id
           });
         }

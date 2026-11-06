@@ -4,6 +4,7 @@
  */
 
 import type { LLMRequest, LLMResponse, NvidiaConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage, ProviderExecutionOptions } from '../types.js';
+import { openAIToolResultContent } from '../utils/tool-results.js';
 import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
@@ -434,7 +435,7 @@ export class NvidiaProvider extends BaseProvider {
       }
       if (message.toolResults) {
         for (const tr of message.toolResults) {
-          messages.push({ role: 'tool', content: tr.output, tool_call_id: tr.id });
+          messages.push({ role: 'tool', content: openAIToolResultContent(tr), tool_call_id: tr.id });
         }
         continue;
       }

@@ -27,7 +27,7 @@ import {
 import { getProviderDefaultModel, resolveModelId } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { joinReasoning } from '../utils/reasoning.js';
-import { isValidProviderContent } from '../utils/provider-content.js';
+import { isValidProviderContent, toolUseIdsMatch } from '../utils/provider-content.js';
 
 /**
  * Minimum envelope fields the Anthropic response parser reads. Changing this
@@ -268,6 +268,10 @@ export class AnthropicProvider extends BaseProvider {
         const data = await httpResponse.json() as unknown;
         validateSchema('anthropic', data, ANTHROPIC_RESPONSE_SCHEMA);
         const formatted = this.formatResponse(data as AnthropicResponse, Date.now() - startTime);
+
+        // A prefilled turn can't be replayed as returned: its text starts after
+        // the '{' this request supplied. Let the tool loop rebuild it instead.
+        if (jsonMode) delete formatted.providerContent;
 
         // Restore the prefilled '{' consumed by the assistant turn,
         // but only if the response doesn't already start with one
@@ -645,8 +649,14 @@ export class AnthropicProvider extends BaseProvider {
     if (!isValidProviderContent(providerContent)) {
       throw new ConfigurationError(
         this.name,
-        'providerContent.blocks must be a non-empty array of assistant content blocks, passed back unchanged from LLMResponse.providerContent.'
+        'providerContent.blocks must be a non-empty array of content blocks with no user-turn blocks (tool_result, image, document, search_result) and complete tool_use blocks, passed back unchanged from LLMResponse.providerContent.'
       );
+    }
+    if (!toolUseIdsMatch(providerContent, message.toolCalls)) {
+      // Each resent tool_use needs a matching result; if the caller changed the
+      // tool calls, rebuild the turn from content and toolCalls instead.
+      this.logger.warn(`[${this.name}] providerContent tool_use ids differ from toolCalls; rebuilding the assistant turn`);
+      return undefined;
     }
     return providerContent.blocks;
   }
@@ -744,12 +754,6 @@ export class AnthropicProvider extends BaseProvider {
     // SchemaDriftError before we got here.
     const toolUses = data.content.filter(block => block.type === 'tool_use');
     if (toolUses.length > 0) {
-      // Keep the whole turn (thinking, redacted_thinking, text, tool_use, in order)
-      // so the tool loop can send it back unmodified, as Anthropic requires.
-      response.providerContent = {
-        provider: this.name,
-        blocks: JSON.parse(JSON.stringify(data.content)) as Array<Record<string, unknown>>
-      };
       const raw: ToolCall[] = toolUses.map(tool => ({
         id: tool.id as string,
         type: 'function' as const,
@@ -759,6 +763,18 @@ export class AnthropicProvider extends BaseProvider {
         }
       }));
       response.toolCalls = this.validateToolCalls(raw);
+
+      // Keep the whole turn (thinking, redacted_thinking, text, tool_use, in order)
+      // so the tool loop can send it back unmodified, as Anthropic requires. Only
+      // when every tool_use survived validation: a resent tool_use with no result
+      // is rejected, so a turn with a dropped call is rebuilt instead.
+      const providerContent = {
+        provider: this.name,
+        blocks: JSON.parse(JSON.stringify(data.content)) as Array<Record<string, unknown>>
+      };
+      if (isValidProviderContent(providerContent) && toolUseIdsMatch(providerContent, response.toolCalls)) {
+        response.providerContent = providerContent;
+      }
     }
 
     return response;
