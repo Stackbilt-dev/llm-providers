@@ -530,6 +530,34 @@ describe('strict reasoning through the factory (#135)', () => {
     expect(errors).toEqual([false]);
   });
 
+  it('reports willRetry: false on the stream path too', async () => {
+    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
+    const errors: Array<boolean | undefined> = [];
+    const { llm, fetchMock } = setup(run, {
+      hooks: { onRequestError: (event: { willRetry?: boolean }) => errors.push(event.willRetry) },
+    });
+    await expect(llm.generateManagedResponseStream({
+      model: flash, messages, maxTokens: 10, reasoning: { effort: 'low', strict: true },
+    })).rejects.toThrow('binding exploded');
+    expect(errors).toEqual([false]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('with allowFallback: false, NoRouteError for an unservable pin wins over the strict check', () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    const { llm } = setup(run);
+    const strict = { effort: 'high' as const, strict: true };
+    // No configured provider serves the pin: the allowFallback check runs first.
+    expect(() => llm.getRoutingInfo({ model: 'gpt-4o-mini', messages, reasoning: strict, allowFallback: false }))
+      .toThrow(NoRouteError);
+    // A pin on another configured provider is a strict failure.
+    const groqPin = () => llm.getRoutingInfo({
+      model: 'llama-3.3-70b-versatile', messages, reasoning: strict, allowFallback: false,
+    });
+    expect(groqPin).toThrow(ReasoningEffortUnsupportedError);
+    expect(groqPin).not.toThrow(NoRouteError);
+  });
+
   it('still falls back when strict is not set', async () => {
     const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
     const { llm } = setup(run);
