@@ -256,10 +256,17 @@ describe('reasoning accounting (#136 need 1)', () => {
     expect(lengthCauseFor('length', '<think>a</think> b <think>more', undefined)).toBe('answer');
     expect(lengthCauseFor('length', "Here's the parser: const OPEN = '<think>';", undefined)).toBe('answer');
     expect(lengthCauseFor('length', "Close it with '</think>' and then", undefined)).toBe('answer');
-    // Template-injected opener: only a closing tag appears in the output.
-    expect(lengthCauseFor('length', 'reasoning text</think>', undefined)).toBe('reasoning');
-    expect(lengthCauseFor('length', 'reasoning text</think> partial answer', undefined)).toBe('answer');
+    // An answer cut off right after a literal closing tag, from a model that doesn't think.
+    expect(lengthCauseFor('length', 'The closing tag is </think>', undefined)).toBe('answer');
+    // Template-injected opener (thinking models only): only a closing tag appears in the output.
+    const thinking = { thinkingModel: true };
+    expect(lengthCauseFor('length', 'reasoning text</think>', undefined, thinking)).toBe('reasoning');
+    expect(lengthCauseFor('length', 'reasoning text</think> partial answer', undefined, thinking)).toBe('answer');
+    // Reasoning that quotes '<think>' before its closing tag is still one template-opened block.
+    expect(lengthCauseFor('length', 'user asks about <think> tags </think> partial answer', undefined, thinking))
+      .toBe('answer');
     expect(lengthCauseFor('length', '<think>x</think>', undefined)).toBe('reasoning');
+    expect(lengthCauseFor('length', '<think>x</think>', undefined, thinking)).toBe('reasoning');
     // No tags at all from a model whose template opens the block: still reasoning.
     expect(lengthCauseFor('length', 'Let me think step by step', undefined, { thinkingModel: true })).toBe('reasoning');
     expect(lengthCauseFor('length', 'Let me think step by step', undefined)).toBe('answer');
@@ -456,6 +463,28 @@ describe('strict reasoning through the factory (#135)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('rejects a strict pin that cannot be served instead of substituting a Cloudflare default', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    const { llm, fetchMock } = setup(run);
+    const strict = { effort: 'high' as const, strict: true };
+    const unservable: LLMRequest[] = [
+      // Provider not configured.
+      { model: 'gpt-4o-mini', messages, maxTokens: 10, reasoning: strict },
+      // Unknown model string.
+      { model: 'my-custom-model', messages, maxTokens: 10, reasoning: strict },
+      // Groq pin dropped because Groq can't take images.
+      { model: 'llama-3.3-70b-versatile', messages, maxTokens: 10, reasoning: strict,
+        images: [{ data: 'QUJD', mimeType: 'image/png' }] },
+    ];
+    for (const request of unservable) {
+      await expect(llm.generateResponse(request)).rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
+      await expect(llm.generateManagedResponseStream(request)).rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
+      expect(() => llm.getRoutingInfo(request)).toThrow(ReasoningEffortUnsupportedError);
+    }
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('rejects a strict request when no Cloudflare provider is configured', async () => {
     const fetchMock = vi.fn().mockImplementation(async () => groqResponse());
     vi.stubGlobal('fetch', fetchMock);
@@ -603,8 +632,10 @@ describe('fallback review fixes', () => {
   it('does not cache a response its own read path would reject', async () => {
     const run = vi.fn().mockResolvedValue(chatResult('fresh'));
     const cache = { get: vi.fn().mockResolvedValue(null), put: vi.fn().mockResolvedValue(undefined) };
+    const events: string[] = [];
     const llm = new LLMProviders({
       cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 }, stateScope: 'client', responseCache: cache,
+      hooks: { onCache: event => events.push(`${event.status}:${event.cache.factory?.error ?? ''}`) },
     });
     // An untyped caller can pass an effort outside the type; the report echoes it.
     const odd = await llm.generateResponse({
@@ -612,6 +643,7 @@ describe('fallback review fixes', () => {
     });
     expect(odd.reasoningEffort).toMatchObject({ requested: 'max', applied: null });
     expect(cache.put).not.toHaveBeenCalled();
+    expect(events).toContain('bypass:Response envelope is not cacheable');
 
     await llm.generateResponse({ model: pinned, messages, maxTokens: 10, reasoning: { effort: 'low' } });
     expect(cache.put).toHaveBeenCalledTimes(1);

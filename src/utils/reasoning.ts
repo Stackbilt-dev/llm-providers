@@ -40,12 +40,14 @@ export function lengthCauseFor(
   // answer text (e.g. code that mentions '<think>').
   let rest = message.trimStart();
   let sawThinkBlock = false;
-  const firstOpen = rest.toLowerCase().indexOf('<think>');
-  const firstClose = rest.toLowerCase().indexOf('</think>');
-  if (firstClose >= 0 && (firstOpen < 0 || firstClose < firstOpen)) {
-    // Template-opened block: the chat template sent '<think>', so the output only closes it.
-    rest = rest.slice(firstClose + '</think>'.length).trimStart();
-    sawThinkBlock = true;
+  if (options.thinkingModel && !/^<think>/i.test(rest)) {
+    // Template-opened block: the chat template sent '<think>', so the output starts
+    // inside it and only closes it. Without a closing tag, the final check below applies.
+    const firstClose = rest.toLowerCase().indexOf('</think>');
+    if (firstClose >= 0) {
+      rest = rest.slice(firstClose + '</think>'.length).trimStart();
+      sawThinkBlock = true;
+    }
   }
   for (let match = /^<think>[\s\S]*?<\/think>/i.exec(rest); match; match = /^<think>[\s\S]*?<\/think>/i.exec(rest)) {
     rest = rest.slice(match[0].length).trimStart();

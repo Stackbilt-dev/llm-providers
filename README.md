@@ -104,7 +104,7 @@ Existing `LLMRequest` fields are still supported as compatibility input. `normal
 
 Use `normalizeCanonicalRequest()` when the input is canonical, especially when it contains only `messages` and `metadata`. Use `normalizeLegacyRequest()` when converting `LLMRequest`. The compatibility helper `normalizeLLMRequest()` detects canonical input from canonical-specific fields; ambiguous shapes default to legacy, so nested identity in a metadata-only canonical request requires the explicit canonical boundary. Legacy system messages are joined in order with blank lines; an explicit `systemPrompt` takes precedence. Canonical conversion remains a compatibility helper: it does not enforce every canonical requirement at execution.
 
-`llm.getRoutingInfo(request)` uses the client's dispatch planner and current provider admission state. It resolves shared model IDs against configured hosts and throws `NoRouteError` when no route is available. The exported catalog-level `getRoutingInfo(request, availableProviders)` prefers configured hosts for pinned models and never throws: when no configured provider matches it describes the catalog host, as in 1.21. These are preflight snapshots; health, quota and capacity can change before dispatch. Full hard-requirement enforcement across every fallback remains future work.
+`llm.getRoutingInfo(request)` uses the client's dispatch planner and current provider admission state. It resolves shared model IDs against configured hosts and throws `NoRouteError` when no route is available (`ReasoningEffortUnsupportedError` for a `reasoning.strict` request no Cloudflare provider can serve). The exported catalog-level `getRoutingInfo(request, availableProviders)` prefers configured hosts for pinned models and never throws: when no configured provider matches it describes the catalog host, as in 1.21. These are preflight snapshots; health, quota and capacity can change before dispatch. Full hard-requirement enforcement across every fallback remains future work.
 
 ### Image Analysis Observability
 
@@ -272,12 +272,12 @@ const response = await llm.generateResponse({
 response.reasoningEffort; // { requested: 'medium', applied: 'high', exact: false }
 ```
 
-Set `reasoning: { effort, strict: true }` to get a `ReasoningEffortUnsupportedError` (a subclass of `InvalidRequestError`) before the call whenever the level can't be sent exactly. Strict mode is enforced by the Cloudflare provider only, so a strict request with an effort is served only by Cloudflare: other providers would drop or reinterpret the level. A strict request pinned to a model on another provider, or made when no Cloudflare provider is configured, throws `ReasoningEffortUnsupportedError` before any call. An unpinned strict request goes to Cloudflare even when another provider is preferred. The factory never falls back on this error, and when the Cloudflare call fails for another reason, the error is thrown rather than the request being served elsewhere, even under the default any-error fallback rule. `getModelCapabilities()` and the model catalog expose the mapping as `capabilities.reasoningEffort` (`{ exact, source, verifiedAt }`).
+Set `reasoning: { effort, strict: true }` to get a `ReasoningEffortUnsupportedError` (a subclass of `InvalidRequestError`) before the call whenever the level can't be sent exactly. Strict mode is enforced by the Cloudflare provider only, so a strict request with an effort is served only by Cloudflare: other providers would drop or reinterpret the level. A strict request pinned to a model on another provider, pinned to a model no configured Cloudflare provider can serve (an unknown model, or a model that can't take the request's images), or made when no Cloudflare provider is configured, throws `ReasoningEffortUnsupportedError` before any call; a strict pin is never replaced by a default model. An unpinned strict request goes to Cloudflare even when another provider is preferred, and uses the default Workers AI model for the request, which may not take the level exactly (GLM-5.3 Flash has no exact `none` or `medium`). Pin a model when using `strict`. The factory never falls back on this error, and when the Cloudflare call fails for another reason, the error is thrown rather than the request being served elsewhere, even under the default any-error fallback rule. `getModelCapabilities()` and the model catalog expose the mapping as `capabilities.reasoningEffort` (`{ exact, source, verifiedAt }`).
 
 Two related fields help with budget planning:
 
 - `usage.reasoningTokens`: reasoning tokens, when the provider reports them separately (Workers AI: `completion_tokens_details.reasoning_tokens`). They are part of `outputTokens`.
-- `lengthCause`: set when `finishReason` is `'length'`. `'reasoning'` means the budget ran out before any answer text: a `<think>` block left open at the start of the message (after any closed ones), nothing after the leading think blocks, or, for models whose chat template opens the think block itself (QwQ, R1-Distill), untagged text with no separate reasoning field. `'answer'` means the answer was cut off.
+- `lengthCause`: set when `finishReason` is `'length'`. `'reasoning'` means the budget ran out before any answer text: a `<think>` block left open at the start of the message (after any closed ones), nothing after the leading think blocks, or, for models whose chat template opens the think block itself (QwQ, R1-Distill), text up to the first `</think>`, or untagged text with no separate reasoning field. `'answer'` means the answer was cut off.
 
 Stream completions report `provider` and `model` but not `reasoningEffort`; the level sent is the same as for `generateResponse()`.
 
@@ -560,7 +560,7 @@ Default provider precedence remains Cloudflare → Cerebras → Groq → NVIDIA 
 
 A pinned `model` is tried first, but by default it is not a guarantee: on an eligible failure, or when the pinned provider is skipped (quota-exhausted, circuit open, ledger-limited), another provider and model can serve the request. `fallbackRules: []` removes the rule-based fallbacks only; server errors, network errors, timeouts and schema drift still fall back.
 
-Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open or ledger-limited; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
+Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open or ledger-limited; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. With `reasoning.strict` and an effort, a pin no Cloudflare provider can serve throws `ReasoningEffortUnsupportedError` instead. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
 
 ```typescript
 const response = await llm.generateResponse({
@@ -918,7 +918,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `BaseProvider` | Abstract base with shared resiliency, metrics, and cost calculation |
 | `QuotaDeniedError` | Terminal local-policy denial; no fallback or provider exhaustion. Extends `QuotaExceededError` (code `QUOTA_EXCEEDED`) for 1.x compatibility; check `instanceof QuotaDeniedError` or `localPolicy` to tell it apart from vendor exhaustion |
 | `NoRouteError` | No configured route available; a nonretryable configuration error |
-| `ReasoningEffortUnsupportedError` | `reasoning.strict` rejected an effort the model can't take exactly. Extends `InvalidRequestError`; never triggers fallback |
+| `ReasoningEffortUnsupportedError` | `reasoning.strict` can't be honoured: the model can't take the effort exactly, or no Cloudflare provider can serve the request. Extends `InvalidRequestError`; never triggers fallback |
 
 ### Utilities
 

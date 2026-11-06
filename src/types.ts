@@ -181,8 +181,10 @@ export interface LLMRequest {
      * sending a nearby level (or nothing) when the provider cannot apply `effort`
      * exactly for this model. Default false. Currently enforced by the Cloudflare
      * provider, so with `effort` set the factory sends the request only to Cloudflare:
-     * a pin on another provider, or no Cloudflare provider configured, throws before
-     * any call, and the factory never falls back on the error.
+     * a pin on another provider, a pin no configured Cloudflare provider can serve, or
+     * no Cloudflare provider at all throws before any call, and the factory never
+     * falls back on the error. Without a pin, the default Workers AI model for the
+     * request is used, which may not take the level exactly; pin a model with strict.
      */
     strict?: boolean;
     /** Cerebras: controls how reasoning tokens appear in the response. */

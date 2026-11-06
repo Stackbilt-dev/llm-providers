@@ -806,15 +806,31 @@ export class LLMProviderFactory {
 
         // Never store an envelope the read path would reject (e.g. a reasoning report
         // echoing an unknown effort from an untyped caller); it would miss forever.
-        if (this.config.responseCache && responseCacheKey !== undefined
-            && isCachedResponse(response)) {
-          this.config.responseCache.put(
-            responseCacheKey!,
-            JSON.stringify(response),
-            this.config.responseCacheDefaultTtl
-          ).catch((err: unknown) => {
-            this.logger.warn('[LLMProviderFactory] Response cache put failed:', (err as Error).message);
-          });
+        if (this.config.responseCache && responseCacheKey !== undefined) {
+          if (isCachedResponse(response as unknown)) {
+            this.config.responseCache.put(
+              responseCacheKey!,
+              JSON.stringify(response),
+              this.config.responseCacheDefaultTtl
+            ).catch((err: unknown) => {
+              this.logger.warn('[LLMProviderFactory] Response cache put failed:', (err as Error).message);
+            });
+          } else {
+            const error = 'Response envelope is not cacheable';
+            this.logger.warn(`[LLMProviderFactory] ${error}; skipping cache write`);
+            try {
+              this.hooks.onCache?.({
+                provider: providerName,
+                model: response.model,
+                requestId: request.requestId,
+                tenantId: request.tenantId,
+                layer: 'factory-response',
+                status: 'bypass',
+                cache: { factory: { status: 'bypass', key: responseCacheKey, error } },
+                timestamp: Date.now(),
+              });
+            } catch { /* Telemetry cannot change request execution. */ }
+          }
         }
 
         return response;
@@ -1399,11 +1415,21 @@ export class LLMProviderFactory {
     if (isStrictReasoning(request)) {
       // Only providers that enforce strict reasoning may serve the request, first
       // hop included; anything else would drop or reinterpret the level.
-      if (pinnedProvider !== undefined && !STRICT_REASONING_PROVIDERS.has(pinnedProvider)) {
-        throw new ReasoningEffortUnsupportedError(
-          'factory',
-          `reasoning.strict is enforced only on Cloudflare; pinned model '${request.model}' is served by ${pinnedProvider}`
-        );
+      if (request.model) {
+        // A pin must itself be servable by an enforcing provider; otherwise the plan
+        // would substitute a default model and the strict guarantee would not hold.
+        if (pinnedProvider === undefined) {
+          throw new ReasoningEffortUnsupportedError(
+            'factory',
+            `reasoning.strict is enforced only on Cloudflare; no configured Cloudflare provider can serve pinned model '${request.model}'`
+          );
+        }
+        if (!STRICT_REASONING_PROVIDERS.has(pinnedProvider)) {
+          throw new ReasoningEffortUnsupportedError(
+            'factory',
+            `reasoning.strict is enforced only on Cloudflare; pinned model '${request.model}' is served by ${pinnedProvider}`
+          );
+        }
       }
       const enforcing = chain.filter(name => STRICT_REASONING_PROVIDERS.has(name));
       if (enforcing.length === 0) {
