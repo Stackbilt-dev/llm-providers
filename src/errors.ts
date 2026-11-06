@@ -69,6 +69,20 @@ export class InvalidRequestError extends LLMProviderError {
   }
 }
 
+/**
+ * `reasoning.strict` could not be honoured: the model can't take the reasoning
+ * effort exactly (thrown by the Cloudflare provider), or no provider that enforces
+ * strict can serve the request (thrown by the factory, provider `'factory'`: a pin
+ * on another provider, a pin that can't be served, or no Cloudflare provider).
+ * The factory never falls back on this error: another provider could not honour
+ * the level either, so failing over would drop the guarantee.
+ */
+export class ReasoningEffortUnsupportedError extends InvalidRequestError {
+  constructor(provider: string, message: string) {
+    super(provider, message);
+  }
+}
+
 export class ModelNotFoundError extends LLMProviderError {
   constructor(provider: string, model: string) {
     super(`Model '${model}' not found`, 'MODEL_NOT_FOUND', provider, false, 404);

@@ -170,8 +170,23 @@ export interface LLMRequest {
   frequencyPenalty?: number;
   /** Provider reasoning/thinking controls. Translated to provider-native params at call time. */
   reasoning?: {
-    /** Token budget / quality hint. 'none' disables reasoning entirely where supported. */
-    effort?: 'low' | 'medium' | 'high' | 'none';
+    /**
+     * Token budget / quality hint. 'none' disables reasoning entirely where supported.
+     * Workers AI maps this per model to the level its docs list, and reports what was
+     * sent in `LLMResponse.reasoningEffort`. See `ModelCapabilities.reasoningEffort`.
+     */
+    effort?: ReasoningEffortLevel;
+    /**
+     * Throw `ReasoningEffortUnsupportedError` (an `InvalidRequestError`) instead of
+     * sending a nearby level (or nothing) when the provider cannot apply `effort`
+     * exactly for this model. Default false. Currently enforced by the Cloudflare
+     * provider, so with `effort` set the factory sends the request only to Cloudflare:
+     * a pin on another provider, a pin no configured Cloudflare provider can serve, or
+     * no Cloudflare provider at all throws before any call, and the factory never
+     * falls back on the error. Without a pin, the default Workers AI model for the
+     * request is used, which may not take the level exactly; pin a model with strict.
+     */
+    strict?: boolean;
     /** Cerebras: controls how reasoning tokens appear in the response. */
     format?: 'parsed' | 'raw' | 'hidden';
     /** Cerebras zai-glm-4.7: set false to preserve reasoning across turns (improves cache hit rate). */
@@ -182,6 +197,56 @@ export interface LLMRequest {
   tenantId?: string;
   requestId?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Set false to forbid failover: the factory tries only the first provider in the
+   * plan (the pinned model's provider when `model` is set) and rethrows its error.
+   * This also overrides `fallbackRules` and the built-in fallback for server errors,
+   * timeouts and schema drift. If the pinned model's provider is not configured or
+   * cannot serve the request, `NoRouteError` is thrown. Default: fallback allowed.
+   */
+  allowFallback?: boolean;
+}
+
+/** Values accepted by `LLMRequest.reasoning.effort`. */
+export type ReasoningEffortLevel = 'low' | 'medium' | 'high' | 'none';
+
+/** How a provider handles `LLMRequest.reasoning.effort` for one model. */
+export interface ReasoningEffortCapability {
+  /**
+   * Effort values sent to the provider as requested. Other values are mapped to the
+   * nearest documented native level or not sent; `LLMResponse.reasoningEffort` says which.
+   */
+  exact: readonly ReasoningEffortLevel[];
+  /** Where the mapping comes from (vendor documentation URL). */
+  source: string;
+  /** Date the source was checked (YYYY-MM-DD). */
+  verifiedAt: string;
+}
+
+/** What happened to a requested `reasoning.effort` on the provider that served the call. */
+export interface ReasoningEffortReport {
+  requested: ReasoningEffortLevel;
+  /** Native level sent to the provider; null when nothing was sent for this model. */
+  applied: string | null;
+  /** True when `requested` was sent as-is. */
+  exact: boolean;
+}
+
+/** A provider attempt that failed before another provider served the request. */
+export interface FallbackHop {
+  provider: string;
+  model?: string;
+  /** Error code of the failure, when available. */
+  errorCode?: string;
+}
+
+/** Present on a response served by a provider other than the first one tried. */
+export interface FallbackReport {
+  /** Provider and model the request was planned for first. */
+  requestedProvider: string;
+  requestedModel?: string;
+  /** Failed attempts, in order, before the serving provider. */
+  failedAttempts: FallbackHop[];
 }
 
 export interface Tool {
@@ -244,6 +309,16 @@ export interface LLMResponse {
   provider: string;
   responseTime: number;
   finishReason?: 'stop' | 'length' | 'tool_calls' | 'content_filter';
+  /**
+   * Set when `finishReason` is 'length'. 'reasoning': the output budget ran out while
+   * the model was still reasoning, so there is no answer text. 'answer': the answer
+   * itself was cut off.
+   */
+  lengthCause?: 'reasoning' | 'answer';
+  /** Present when the request set `reasoning.effort`; reports what the provider was sent. */
+  reasoningEffort?: ReasoningEffortReport;
+  /** Present when a provider other than the first one tried served this response. */
+  fallback?: FallbackReport;
   toolCalls?: ToolCall[];
   cache?: CacheObservability;
   metadata?: Record<string, unknown>;
@@ -269,6 +344,11 @@ export interface TokenUsage {
   cacheCreationInputTokens?: number;
   /** Provider-agnostic alias for cache write/create tokens. */
   cacheWriteInputTokens?: number;
+  /**
+   * Reasoning tokens, when the provider reports them separately. They are included
+   * in `outputTokens` and count against `maxTokens`.
+   */
+  reasoningTokens?: number;
 }
 
 /** Provider execution detail exposed additively for orchestration observability. */
@@ -483,6 +563,8 @@ export interface ModelCapabilities {
    * all non-RESEARCH use-case pools.
    */
   thinkingModel?: boolean;
+  /** How `reasoning.effort` is applied for this model. Absent: not supported or not verified. */
+  reasoningEffort?: ReasoningEffortCapability;
 }
 
 export interface ProviderCapabilities {
@@ -517,6 +599,12 @@ export interface StreamCompletion {
   outcome: 'success' | 'error' | 'cancelled';
   emittedChars: number;
   usage: TokenUsage;
+  /** Provider that served the stream. */
+  provider?: string;
+  /** Model the stream was requested from on the serving provider. */
+  model?: string;
+  /** Present when a provider other than the first one tried served the stream. */
+  fallback?: FallbackReport;
 }
 
 export interface ManagedTextStream {

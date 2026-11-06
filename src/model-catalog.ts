@@ -1,6 +1,7 @@
 import type { CreditLedger } from './utils/credit-ledger.js';
 import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
 import { NoRouteError } from './errors.js';
+import { cloudflareReasoningEffortCapability } from './providers/cloudflare-reasoning.js';
 
 export type ProviderName = 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia';
 export type ModelLifecycle = 'active' | 'compatibility' | 'retired';
@@ -108,12 +109,13 @@ function entry(
   scores: { speed: number; quality: number; cost: number },
   options: { explicitOnly?: boolean } = {},
 ): ModelCatalogEntry {
+  const reasoningEffort = provider === 'cloudflare' ? cloudflareReasoningEffortCapability(model) : undefined;
   return {
     provider,
     model,
     lifecycle,
     useCases,
-    capabilities,
+    capabilities: reasoningEffort ? { ...capabilities, reasoningEffort } : capabilities,
     speedScore: scores.speed,
     qualityScore: scores.quality,
     costScore: scores.cost,

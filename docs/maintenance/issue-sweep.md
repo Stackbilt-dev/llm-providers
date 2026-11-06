@@ -1,13 +1,13 @@
 # Issue sweep checkpoint
 
-Checkpoint: 2026-10-15. Repository: `Stackbilt-dev/llm-providers`.
+Checkpoint: 2026-11-06. Repository: `Stackbilt-dev/llm-providers`.
 
 ## Resume here
 
-The sweep below is **merged to `main`** and was released as 1.22.0 by release PR [#121](https://github.com/Stackbilt-dev/llm-providers/pull/121) and published to npm; 1.22.1 (#122) and 1.23.0 (#123) followed. Sweep PRs: [#119](https://github.com/Stackbilt-dev/llm-providers/pull/119) (sweep plus review fixes) and [#120](https://github.com/Stackbilt-dev/llm-providers/pull/120) (#116 hook isolation). Each went through adversarial review rounds; review-driven compatibility fixes are recorded in the 1.22.0 CHANGELOG entry. The issues stay open for the remaining scope in the table. No live or billable vendor requests were made.
+The sweep below is **merged to `main`** and was released as 1.22.0 by release PR [#121](https://github.com/Stackbilt-dev/llm-providers/pull/121) and published to npm; 1.22.1 (#122), 1.23.0 (#123) and 1.24.0 followed. 1.24.0 ([#139](https://github.com/Stackbilt-dev/llm-providers/pull/139), released by [#140](https://github.com/Stackbilt-dev/llm-providers/pull/140)) added Workers AI reasoning control and pinned-model integrity, closing #128, #133 and #135. Sweep PRs: [#119](https://github.com/Stackbilt-dev/llm-providers/pull/119) (sweep plus review fixes) and [#120](https://github.com/Stackbilt-dev/llm-providers/pull/120) (#116 hook isolation). Each went through adversarial review rounds; review-driven compatibility fixes are recorded in the 1.22.0 CHANGELOG entry. The issues stay open for the remaining scope in the table. No live or billable vendor requests were made.
 
 1. Inspect `git status --short` and preserve any existing working-tree changes. Every tracked file is stored with LF endings, as `.gitattributes` requires, so a fresh checkout should be clean. If a file shows as modified but `git diff --ignore-cr-at-eol` is empty for it, the change is line endings only, not work: restore it with `git checkout -- <file>` instead of preserving it. No local `.git/info/attributes` override is needed.
-2. #112 phase 1 shipped in 1.22.1; phase 2 (current models, Workers AI deprecations, reasoning-model request parameters, `explicitOnly`) shipped in 1.23.0 via [#123](https://github.com/Stackbilt-dev/llm-providers/pull/123). Next: #124 (Anthropic `tool_use_id`, tool error text and Claude 5.x thinking blocks in tool loops; prerequisite for routing the 5.x models), then #109 atomic spend reservations (needs a design pass first).
+2. #112 phase 1 shipped in 1.22.1; phase 2 (current models, Workers AI deprecations, reasoning-model request parameters, `explicitOnly`) shipped in 1.23.0 via [#123](https://github.com/Stackbilt-dev/llm-providers/pull/123). #136 (needs of a Workers-AI-only, governed app) is open; #139 delivered its first part (reasoning control, closing #135, #133 and #128), and the rest of its needs remain. Next: the remaining #136 needs, #124 (Anthropic `tool_use_id`, tool error text and Claude 5.x thinking blocks in tool loops; prerequisite for routing the 5.x models), then #109 atomic spend reservations (needs a design pass first).
 3. Run the validation commands below after substantive code changes, then open reviewable PRs.
 
 `issue-corpus/Stackbilt-dev__llm-providers/` is a June 2026 historical export. `.agent-memory/status.json` belongs to the archive/upload machinery. Neither is the current task checkpoint; preserve their historical/managed contents.
@@ -49,15 +49,15 @@ Main changes: [factory](../../src/factory.ts), [public exports](../../src/index.
 
 New utilities: [response cache identity/validation](../../src/utils/response-cache.ts), [provider SSE lifecycle](../../src/utils/provider-stream.ts), [resilience context](../../src/utils/resilience-context.ts).
 
-New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts), [stream lifecycle](../../src/__tests__/stream-lifecycle.test.ts), [context ownership/recovery](../../src/__tests__/resilience-context.test.ts), [canonical identity/routing](../../src/__tests__/canonical-identity-routing.test.ts). Existing schema-drift tests now reset breaker history between cases; gateway diagnostic tests check failed-plan executability. The sweep left the existing factory tests unchanged. Later work added [hook isolation](../../src/__tests__/hook-isolation.test.ts) (#120, 1.22.0), [catalog accuracy](../../src/__tests__/catalog-accuracy.test.ts) (1.22.1) and [model refresh](../../src/__tests__/model-refresh.test.ts) (1.23.0). Test counts at 1.23.0: tenant safety 46, stream lifecycle 43, context ownership/recovery 14, canonical identity/routing 10, hook isolation 20, catalog accuracy 27, model refresh 125.
+New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts), [stream lifecycle](../../src/__tests__/stream-lifecycle.test.ts), [context ownership/recovery](../../src/__tests__/resilience-context.test.ts), [canonical identity/routing](../../src/__tests__/canonical-identity-routing.test.ts). Existing schema-drift tests now reset breaker history between cases; gateway diagnostic tests check failed-plan executability. The sweep left the existing factory tests unchanged. Later work added [hook isolation](../../src/__tests__/hook-isolation.test.ts) (#120, 1.22.0), [catalog accuracy](../../src/__tests__/catalog-accuracy.test.ts) (1.22.1) [model refresh](../../src/__tests__/model-refresh.test.ts) (1.23.0) and [pinning and reasoning](../../src/__tests__/pin-and-reasoning.test.ts) (#139, 1.24.0). Test counts at 1.23.0: tenant safety 46, stream lifecycle 43, context ownership/recovery 14, canonical identity/routing 10, hook isolation 20, catalog accuracy 27, model refresh 125. At 1.24.0, pinning and reasoning has 45.
 
 ## Validation evidence
 
 Host: Windows, Node `v24.19.0`, npm `11.17.0`.
 
-Re-run at 1.23.0 (2026-10-15), and again by the publish workflow on Ubuntu with Node 22:
+Re-run at 1.24.0 (2026-11-06), and again by the publish workflow on Ubuntu with Node 22:
 
-- `npm test`: **789 passing tests across 30 files**.
+- `npm test`: **834 passing tests across 31 files** (789 across 30 at 1.23.0).
 - `npm run typecheck`: passed.
 - `npm run build`, `npm run test:package` and `npm run test:worker-import`: passed.
 
