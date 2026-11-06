@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- Workers AI reasoning control (#135, #136). `reasoning.effort` is now sent to Workers AI reasoning models, mapped per model from each model's Cloudflare docs page (checked 2026-11-06): gpt-oss 20B/120B, GLM-5.3, GLM-5.3 Flash, GLM-5.2, DeepSeek V4 Flash/Pro, Kimi K2.6 and Qwen 3.8 27B through `reasoning_effort`, and Nemotron 3 120B through `chat_template_kwargs`. Values a model doesn't document, and aliases that would mean the model's maximum (GLM-5.3 and GLM-5.3 Flash map `none` and `medium` to `max`), are never forwarded. Nemotron's medium and high send normal reasoning (`enable_thinking: true`) explicitly, since its page does not say which mode is the default.
+  - `LLMResponse.reasoningEffort` reports `{ requested, applied, exact }`.
+  - `reasoning.strict: true` throws `ReasoningEffortUnsupportedError` (new, extends `InvalidRequestError`) before the call when the level can't be sent exactly. A strict request with an effort is served only by Cloudflare: one pinned to another provider's model, pinned to a model no configured Cloudflare provider can serve, or made with no Cloudflare provider configured, is rejected before any call (a strict pin is never replaced by a default model), and the factory never falls back on the error or fails over to another provider, even under the default any-error fallback rule. An unpinned strict request uses the default Workers AI model, which may not take the level exactly; pin a model with `strict`.
+  - `ModelCapabilities.reasoningEffort` (`{ exact, source, verifiedAt }`) appears in the catalog and in the Cloudflare provider's capabilities.
+- `TokenUsage.reasoningTokens`, from Workers AI `completion_tokens_details.reasoning_tokens` / `output_tokens_details.reasoning_tokens` when reported.
+- `LLMResponse.lengthCause` (`'reasoning' | 'answer'`) on `finishReason: 'length'`, to tell a budget spent on reasoning from a truncated answer. Set by the Cloudflare provider and by the factory for every provider. Handles think blocks whose opening tag comes from the chat template (QwQ, R1-Distill).
+- `LLMRequest.allowFallback: false` (#128): the factory tries only the first planned provider (the pinned model's provider) and rethrows its error, overriding `fallbackRules` and built-in fallback. It throws `NoRouteError` when no configured provider can serve the pinned model, or when the pinned provider is skipped (quota-exhausted, circuit-open, ledger-limited), naming the skip.
+- `LLMResponse.fallback` and `StreamCompletion.fallback` (#128): `{ requestedProvider, requestedModel, failedAttempts }` when a provider other than the first one planned served the request, including when the planned provider was skipped as quota-exhausted, circuit-open or ledger-limited. `requestedModel` is captured before fallback rules run, and cache hits return the stored report. `normalizeLLMResponse()` copies the attempts into `routing.fallbackChain`.
+- `StreamCompletion.provider` and `StreamCompletion.model` (#133): what served a managed stream.
+- Exported error class `ReasoningEffortUnsupportedError`; exported types `ReasoningEffortLevel`, `ReasoningEffortCapability`, `ReasoningEffortReport`, `FallbackHop`, `FallbackReport`.
+
+### Changed
+- Requests that set `reasoning.effort` and are served by one of the mapped Workers AI models now send a reasoning parameter; until now the field was silently dropped on Cloudflare. Output length, latency and cost can change for those calls. Remove `reasoning` to keep the previous behavior.
+- When every planned provider was skipped and none could be called, the `ALL_PROVIDERS_FAILED` error message now lists each skip, for example `All providers failed (cloudflare: QUOTA_EXHAUSTED)`. The error code is unchanged.
+- Factory response-cache entries with malformed `fallback`, `reasoningEffort` or `lengthCause` fields are treated as a miss, and the factory no longer writes entries its own read path would reject; a skipped write emits an `onCache` `bypass` event.
+
+### Documentation
+- `fallbackRules: []` was not a complete opt-out: server errors, network errors, timeouts and schema drift fall back regardless of rules. The README now says so and documents `allowFallback: false`.
+
 ## [1.23.0] — 2026-10-15
 
 ### Added

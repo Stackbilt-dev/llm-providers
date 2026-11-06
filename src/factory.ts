@@ -32,7 +32,8 @@ import type {
   CacheObservability,
   ProviderAttemptResult
 } from './types.js';
-import type { ManagedTextStream, StreamCompletion, TokenUsage } from './types.js';
+import type { FallbackHop, FallbackReport, ManagedTextStream, StreamCompletion, TokenUsage } from './types.js';
+import { lengthCauseFor } from './utils/reasoning.js';
 import type { CostProvenance, TokenProvenance } from './types.js';
 
 import type { Logger } from './utils/logger.js';
@@ -75,6 +76,7 @@ import {
   LLMProviderError,
   ConfigurationError,
   NoRouteError,
+  ReasoningEffortUnsupportedError,
   CircuitBreakerOpenError,
   AuthenticationError,
   RateLimitError,
@@ -351,6 +353,60 @@ function withResolvedModel(request: LLMRequest): LLMRequest {
   return model === request.model ? request : { ...request, model };
 }
 
+/**
+ * `reasoning.strict` with an effort is enforced only by the Cloudflare provider;
+ * any other provider would drop or reinterpret the level, so it can't be a fallback.
+ */
+function isStrictReasoning(request: LLMRequest): boolean {
+  return request.reasoning?.strict === true && request.reasoning.effort !== undefined;
+}
+
+const STRICT_REASONING_PROVIDERS: ReadonlySet<string> = new Set(['cloudflare']);
+
+/**
+ * Error for a chain that ended without any provider being called, naming why each
+ * planned provider was skipped. With `allowFallback: false` this is a NoRouteError,
+ * as `getRoutingInfo` throws when every planned provider is skipped.
+ */
+function noProviderAttemptedError(
+  request: LLMRequest,
+  failedAttempts: FallbackHop[],
+  label: string
+): Error {
+  const reasons = failedAttempts.map(hop => `${hop.provider}: ${hop.errorCode}`).join(', ');
+  if (request.allowFallback === false) {
+    return new NoRouteError(
+      reasons
+        ? `${request.model ? 'Pinned' : 'First planned'} provider was skipped (${reasons}), and allowFallback is false`
+        : 'No configured provider can serve this request, and allowFallback is false'
+    );
+  }
+  return new LLMProviderError(
+    reasons ? `${label} (${reasons})` : label,
+    'ALL_PROVIDERS_FAILED',
+    'factory',
+    false
+  );
+}
+
+/**
+ * Describe a substitution when the serving provider was not the first one planned.
+ * `requestedModel` is captured at plan time, before fallback rules can rewrite the
+ * provider's model.
+ */
+function fallbackReport(
+  requestedProvider: string | undefined,
+  requestedModel: string | undefined,
+  failedAttempts: FallbackHop[]
+): FallbackReport | undefined {
+  if (!requestedProvider || failedAttempts.length === 0) return undefined;
+  return {
+    requestedProvider,
+    ...(requestedModel ? { requestedModel } : {}),
+    failedAttempts: failedAttempts.map(hop => ({ ...hop })),
+  };
+}
+
 export class LLMProviderFactory {
   private providers: Map<string, LLMProvider> = new Map();
   private config: ProviderFactoryConfig;
@@ -517,8 +573,13 @@ export class LLMProviderFactory {
     const selectionPlan = this.buildProviderPlan(request);
     const providerChain = selectionPlan.chain;
     const providerModels = selectionPlan.providerModels;
+    const requestedModel = providerChain[0] ? providerModels.get(providerChain[0]) : undefined;
     let lastError: Error | null = null;
     let previousProvider: string | null = null;
+    const failedAttempts: FallbackHop[] = [];
+    const skip = (providerName: string, errorCode: string) => {
+      failedAttempts.push({ provider: providerName, model: providerModels.get(providerName), errorCode });
+    };
 
     for (let index = 0; index < providerChain.length; index++) {
       const providerName = providerChain[index];
@@ -532,6 +593,7 @@ export class LLMProviderFactory {
         // Check exhaustion registry
         if (this.resilienceContext.exhaustion.isExhausted(providerName)) {
           this.logger.warn(`[LLMProviderFactory] Provider ${providerName} is quota-exhausted, skipping`);
+          skip(providerName, 'QUOTA_EXHAUSTED');
           continue;
         }
 
@@ -540,11 +602,13 @@ export class LLMProviderFactory {
           const breaker = this.resilienceContext.circuitBreakers.getBreaker(providerName);
           if (breaker.isOpen()) {
             this.logger.warn(`[LLMProviderFactory] Circuit breaker open for ${providerName}, skipping`);
+            skip(providerName, 'CIRCUIT_BREAKER_OPEN');
             continue;
           }
         }
 
         if (this.config.ledger && this.isLedgerLimited(providerName)) {
+          skip(providerName, 'LEDGER_LIMITED');
           continue;
         }
 
@@ -619,6 +683,11 @@ export class LLMProviderFactory {
           response.usage.cost,
           response.usage.costProvenance
         );
+        const lengthCause = response.lengthCause
+          ?? lengthCauseFor(response.finishReason, response.message, response.reasoning, {
+            thinkingModel: getCatalogEntry(response.model)?.capabilities.thinkingModel === true,
+          });
+        const fallback = fallbackReport(providerChain[0], requestedModel, failedAttempts);
         response = {
           ...response,
           usage: {
@@ -626,6 +695,8 @@ export class LLMProviderFactory {
             costProvenance: responseCostProvenance,
             tokenProvenance: response.usage.tokenProvenance ?? 'provider_reported',
           },
+          ...(lengthCause ? { lengthCause } : {}),
+          ...(fallback ? { fallback } : {}),
         };
         if (imageContext && providerStartedAt !== undefined && imageContext.totals.attempts === attemptsBeforeProvider) {
           const usage = response.usage;
@@ -733,14 +804,33 @@ export class LLMProviderFactory {
           response = { ...response, metadata: { ...response.metadata, llmProvidersDeprecationWarning: warning } };
         }
 
+        // Never store an envelope the read path would reject (e.g. a reasoning report
+        // echoing an unknown effort from an untyped caller); it would miss forever.
         if (this.config.responseCache && responseCacheKey !== undefined) {
-          this.config.responseCache.put(
-            responseCacheKey!,
-            JSON.stringify(response),
-            this.config.responseCacheDefaultTtl
-          ).catch((err: unknown) => {
-            this.logger.warn('[LLMProviderFactory] Response cache put failed:', (err as Error).message);
-          });
+          if (isCachedResponse(response as unknown)) {
+            this.config.responseCache.put(
+              responseCacheKey!,
+              JSON.stringify(response),
+              this.config.responseCacheDefaultTtl
+            ).catch((err: unknown) => {
+              this.logger.warn('[LLMProviderFactory] Response cache put failed:', (err as Error).message);
+            });
+          } else {
+            const error = 'Response envelope is not cacheable';
+            this.logger.warn(`[LLMProviderFactory] ${error}; skipping cache write`);
+            try {
+              this.hooks.onCache?.({
+                provider: providerName,
+                model: response.model,
+                requestId: request.requestId,
+                tenantId: request.tenantId,
+                layer: 'factory-response',
+                status: 'bypass',
+                cache: { factory: { status: 'bypass', key: responseCacheKey, error } },
+                timestamp: Date.now(),
+              });
+            } catch { /* Telemetry cannot change request execution. */ }
+          }
         }
 
         return response;
@@ -778,6 +868,7 @@ export class LLMProviderFactory {
         }
         lastError = err;
         previousProvider = providerName;
+        skip(providerName, (err as { code?: string }).code ?? 'ERROR');
         this.logger.warn(`[LLMProviderFactory] Provider ${providerName} failed:`, err.message);
 
         if (!imageContext) {
@@ -789,7 +880,8 @@ export class LLMProviderFactory {
             error: err,
             errorCode: (err as { code?: string }).code,
             attempt: 1,
-            willRetry: this.shouldFallback(err),
+            willRetry: request.allowFallback !== false && this.shouldFallback(err)
+            && (!isStrictReasoning(request) || index + 1 < providerChain.length),
             timestamp: Date.now(),
           });
         }
@@ -819,7 +911,7 @@ export class LLMProviderFactory {
         }
 
         const fallbackDecision = this.getFallbackDecision(error as Error);
-        if (!fallbackDecision.shouldFallback) {
+        if (!fallbackDecision.shouldFallback || request.allowFallback === false) {
           throw error;
         }
 
@@ -828,18 +920,14 @@ export class LLMProviderFactory {
           providerName,
           providerChain,
           index,
-          providerModels
+          providerModels,
+          request
         );
       }
     }
 
     // All providers failed
-    throw lastError || new LLMProviderError(
-      'All providers failed',
-      'ALL_PROVIDERS_FAILED',
-      'factory',
-      false
-    );
+    throw lastError || noProviderAttemptedError(request, failedAttempts, 'All providers failed');
   }
 
   async generateResponseStream(request: LLMRequest): Promise<ReadableStream<string>> {
@@ -851,17 +939,26 @@ export class LLMProviderFactory {
     const selectionPlan = this.buildProviderPlan({ ...request, stream: true });
     const providerChain = selectionPlan.chain;
     const providerModels = selectionPlan.providerModels;
+    const requestedModel = providerChain[0] ? providerModels.get(providerChain[0]) : undefined;
     let lastError: Error | null = null;
     let previousProvider: string | null = null;
+    const failedAttempts: FallbackHop[] = [];
+    const skip = (providerName: string, errorCode: string) => {
+      failedAttempts.push({ provider: providerName, model: providerModels.get(providerName), errorCode });
+    };
 
     for (let index = 0; index < providerChain.length; index++) {
       const providerName = providerChain[index];
       try {
         const provider = this.providers.get(providerName);
-        if (!provider || !provider.supportsStreaming || !provider.streamResponse) continue;
-        if (this.resilienceContext.exhaustion.isExhausted(providerName)) continue;
-        if (this.config.enableCircuitBreaker && this.resilienceContext.circuitBreakers.getBreaker(providerName).isOpen()) continue;
-        if (this.config.ledger && this.isLedgerLimited(providerName)) continue;
+        if (!provider) continue;
+        if (!provider.supportsStreaming || !provider.streamResponse) { skip(providerName, 'STREAMING_UNSUPPORTED'); continue; }
+        if (this.resilienceContext.exhaustion.isExhausted(providerName)) { skip(providerName, 'QUOTA_EXHAUSTED'); continue; }
+        if (this.config.enableCircuitBreaker && this.resilienceContext.circuitBreakers.getBreaker(providerName).isOpen()) {
+          skip(providerName, 'CIRCUIT_BREAKER_OPEN');
+          continue;
+        }
+        if (this.config.ledger && this.isLedgerLimited(providerName)) { skip(providerName, 'LEDGER_LIMITED'); continue; }
 
         if (previousProvider && lastError) {
           this.hooks.onFallback?.({
@@ -902,12 +999,14 @@ export class LLMProviderFactory {
           providerRequest,
           startTime,
           estimatedCost,
-          opened.usage
+          opened.usage,
+          fallbackReport(providerChain[0], requestedModel, failedAttempts)
         );
       } catch (error) {
         const err = error as Error;
         lastError = err;
         previousProvider = providerName;
+        skip(providerName, (err as { code?: string }).code ?? 'ERROR');
 
         if (err instanceof QuotaExceededError && !(err instanceof QuotaDeniedError)) {
           this.resilienceContext.exhaustion.markExhausted(providerName);
@@ -927,25 +1026,21 @@ export class LLMProviderFactory {
           error: err,
           errorCode: (err as { code?: string }).code,
           attempt: 1,
-          willRetry: this.shouldFallback(err),
+          willRetry: request.allowFallback !== false && this.shouldFallback(err)
+            && (!isStrictReasoning(request) || index + 1 < providerChain.length),
           timestamp: Date.now(),
         });
 
         const fallbackDecision = this.getFallbackDecision(err);
-        if (!fallbackDecision.shouldFallback) {
+        if (!fallbackDecision.shouldFallback || request.allowFallback === false) {
           throw error;
         }
 
-        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels);
+        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels, request);
       }
     }
 
-    throw lastError || new LLMProviderError(
-      'All streaming providers failed',
-      'ALL_PROVIDERS_FAILED',
-      'factory',
-      false
-    );
+    throw lastError || noProviderAttemptedError(request, failedAttempts, 'All streaming providers failed');
   }
 
   async generateResponseWithTools(
@@ -1258,12 +1353,20 @@ export class LLMProviderFactory {
       return !requiresVision || this.providerSupportsVision(providerName);
     };
 
+    let pinnedProvider: string | undefined;
+
     // If specific provider requested, try it first
     if (request.model) {
       const providerForModel = this.getProviderForModel(request.model, request);
       if (providerForModel && this.providers.has(providerForModel) && canUseProvider(providerForModel)) {
+        pinnedProvider = providerForModel;
         chain.push(providerForModel);
         providerModels.set(providerForModel, request.model);
+      } else if (request.allowFallback === false) {
+        // A pin with fallback forbidden must never be served by something else.
+        throw new NoRouteError(
+          `No configured provider can serve pinned model '${request.model}', and allowFallback is false`
+        );
       }
     }
 
@@ -1307,6 +1410,39 @@ export class LLMProviderFactory {
 
     if (requiresVision && chain.length === 0) {
       throw new ConfigurationError('factory', 'No configured providers support image input');
+    }
+
+    if (isStrictReasoning(request)) {
+      // Only providers that enforce strict reasoning may serve the request, first
+      // hop included; anything else would drop or reinterpret the level.
+      if (request.model) {
+        // A pin must itself be servable by an enforcing provider; otherwise the plan
+        // would substitute a default model and the strict guarantee would not hold.
+        if (pinnedProvider === undefined) {
+          throw new ReasoningEffortUnsupportedError(
+            'factory',
+            `reasoning.strict is enforced only on Cloudflare; no configured Cloudflare provider can serve pinned model '${request.model}'`
+          );
+        }
+        if (!STRICT_REASONING_PROVIDERS.has(pinnedProvider)) {
+          throw new ReasoningEffortUnsupportedError(
+            'factory',
+            `reasoning.strict is enforced only on Cloudflare; pinned model '${request.model}' is served by ${pinnedProvider}`
+          );
+        }
+      }
+      const enforcing = chain.filter(name => STRICT_REASONING_PROVIDERS.has(name));
+      if (enforcing.length === 0) {
+        throw new ReasoningEffortUnsupportedError(
+          'factory',
+          'reasoning.strict is enforced only on Cloudflare, and no Cloudflare provider is configured for this request'
+        );
+      }
+      chain.splice(0, chain.length, ...enforcing);
+    }
+
+    if (request.allowFallback === false) {
+      chain.splice(1);
     }
 
     return { chain, providerModels, useCase };
@@ -1386,6 +1522,8 @@ export class LLMProviderFactory {
   private getFallbackDecision(error: Error): FallbackDecision {
     if (error instanceof LLMProviderError && error.code === 'STREAM_SETTLEMENT_FAILED') return { shouldFallback: false };
     if (error instanceof QuotaDeniedError) return { shouldFallback: false };
+    // A strict reasoning rejection must surface; no other provider can honour it.
+    if (error instanceof ReasoningEffortUnsupportedError) return { shouldFallback: false };
     // Don't fallback for authentication errors
     if (error instanceof AuthenticationError) {
       return { shouldFallback: false };
@@ -1696,7 +1834,8 @@ export class LLMProviderFactory {
     request: LLMRequest,
     startTime: number,
     estimatedCost: number,
-    streamUsage?: Promise<LLMResponse['usage'] | undefined>
+    streamUsage?: Promise<LLMResponse['usage'] | undefined>,
+    fallback?: FallbackReport
   ): ManagedTextStream {
     let emittedChars = 0;
     let firstPending = !firstDone;
@@ -1717,7 +1856,10 @@ export class LLMProviderFactory {
           inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: estimatedCost,
           costProvenance: 'catalog_estimate' as const, tokenProvenance: 'estimated' as const,
         };
-        const result: StreamCompletion = { outcome, emittedChars, usage };
+        const result: StreamCompletion = {
+          outcome, emittedChars, usage, provider: providerName, model,
+          ...(fallback ? { fallback } : {}),
+        };
         try {
           await this.settleStreamUsage(providerName, model, request, startTime, usage, outcome);
           resolveCompletion(result);
@@ -2042,10 +2184,14 @@ export class LLMProviderFactory {
     failedProvider: string,
     providerChain: string[],
     currentIndex: number,
-    providerModels: Map<string, string>
+    providerModels: Map<string, string>,
+    request: LLMRequest
   ): void {
     const targetProvider = decision.fallbackProvider;
     if (!targetProvider || targetProvider === failedProvider || !this.providers.has(targetProvider)) {
+      return;
+    }
+    if (isStrictReasoning(request) && !STRICT_REASONING_PROVIDERS.has(targetProvider)) {
       return;
     }
 
