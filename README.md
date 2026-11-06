@@ -258,9 +258,9 @@ On Workers AI, each model documents its own levels, and some document aliases th
 | `@cf/deepseek-ai/deepseek-v4-flash-0731`, `-pro-0813` | none, low, high | medium → high | |
 | `@cf/moonshotai/kimi-k2.6` | none, high | low, medium → high | |
 | `@cf/qwen/qwen3.8-27b` | low, medium | high → xhigh | none |
-| `@cf/nvidia/nemotron-3-120b-a12b` | none, low (via `chat_template_kwargs`) | | medium, high |
+| `@cf/nvidia/nemotron-3-120b-a12b` | none, low (via `chat_template_kwargs`) | medium, high → normal reasoning (`enable_thinking: true`) | |
 
-Nemotron's page documents an off mode and a low-effort mode but not which mode is the default, so medium and high send nothing and report `applied: null`. Other Workers AI models get nothing sent. The response reports what happened:
+Nemotron's page documents three modes (normal reasoning, low reasoning, reasoning off) and does not say which is the default, so medium and high send normal reasoning explicitly. Other Workers AI models get nothing sent. The response reports what happened:
 
 ```typescript
 const response = await llm.generateResponse({
@@ -272,12 +272,12 @@ const response = await llm.generateResponse({
 response.reasoningEffort; // { requested: 'medium', applied: 'high', exact: false }
 ```
 
-Set `reasoning: { effort, strict: true }` to get a `ReasoningEffortUnsupportedError` (a subclass of `InvalidRequestError`) before the call whenever the level can't be sent exactly. Strict mode is enforced by the Cloudflare provider only, so the factory never falls back on that error, and a strict request never fails over to a provider other than Cloudflare (other providers would drop or reinterpret the level), even under the default any-error fallback rule. When the Cloudflare call fails for another reason, the error is thrown rather than the request being served elsewhere. `getModelCapabilities()` and the model catalog expose the mapping as `capabilities.reasoningEffort` (`{ exact, source, verifiedAt }`).
+Set `reasoning: { effort, strict: true }` to get a `ReasoningEffortUnsupportedError` (a subclass of `InvalidRequestError`) before the call whenever the level can't be sent exactly. Strict mode is enforced by the Cloudflare provider only, so a strict request with an effort is served only by Cloudflare: other providers would drop or reinterpret the level. A strict request pinned to a model on another provider, or made when no Cloudflare provider is configured, throws `ReasoningEffortUnsupportedError` before any call. An unpinned strict request goes to Cloudflare even when another provider is preferred. The factory never falls back on this error, and when the Cloudflare call fails for another reason, the error is thrown rather than the request being served elsewhere, even under the default any-error fallback rule. `getModelCapabilities()` and the model catalog expose the mapping as `capabilities.reasoningEffort` (`{ exact, source, verifiedAt }`).
 
 Two related fields help with budget planning:
 
 - `usage.reasoningTokens`: reasoning tokens, when the provider reports them separately (Workers AI: `completion_tokens_details.reasoning_tokens`). They are part of `outputTokens`.
-- `lengthCause`: set when `finishReason` is `'length'`. `'reasoning'` means the budget ran out before any answer text: an unclosed `<think>` block, nothing after the last `</think>`, or, for models whose chat template opens the think block itself (QwQ, R1-Distill), untagged text with no separate reasoning field. `'answer'` means the answer was cut off.
+- `lengthCause`: set when `finishReason` is `'length'`. `'reasoning'` means the budget ran out before any answer text: a `<think>` block left open at the start of the message (after any closed ones), nothing after the leading think blocks, or, for models whose chat template opens the think block itself (QwQ, R1-Distill), untagged text with no separate reasoning field. `'answer'` means the answer was cut off.
 
 Stream completions report `provider` and `model` but not `reasoningEffort`; the level sent is the same as for `generateResponse()`.
 

@@ -36,15 +36,24 @@ export function lengthCauseFor(
   options: { thinkingModel?: boolean } = {},
 ): 'reasoning' | 'answer' | undefined {
   if (finishReason !== 'length') return undefined;
-  const lower = message.toLowerCase();
-  const lastOpen = lower.lastIndexOf('<think>');
-  const lastClose = lower.lastIndexOf('</think>');
-  // An unclosed <think> block means the model was still reasoning at the cap.
-  if (lastOpen > lastClose) return 'reasoning';
-  if (lastClose >= 0) {
-    // Only text after the last closing tag is answer.
-    return message.slice(lastClose + '</think>'.length).trim().length > 0 ? 'answer' : 'reasoning';
+  // Only think structure at the start of the message counts; tags later on are
+  // answer text (e.g. code that mentions '<think>').
+  let rest = message.trimStart();
+  let sawThinkBlock = false;
+  const firstOpen = rest.toLowerCase().indexOf('<think>');
+  const firstClose = rest.toLowerCase().indexOf('</think>');
+  if (firstClose >= 0 && (firstOpen < 0 || firstClose < firstOpen)) {
+    // Template-opened block: the chat template sent '<think>', so the output only closes it.
+    rest = rest.slice(firstClose + '</think>'.length).trimStart();
+    sawThinkBlock = true;
   }
+  for (let match = /^<think>[\s\S]*?<\/think>/i.exec(rest); match; match = /^<think>[\s\S]*?<\/think>/i.exec(rest)) {
+    rest = rest.slice(match[0].length).trimStart();
+    sawThinkBlock = true;
+  }
+  // An unclosed <think> block before any answer means the model was still reasoning at the cap.
+  if (/^<think>/i.test(rest)) return 'reasoning';
+  if (sawThinkBlock) return rest.length > 0 ? 'answer' : 'reasoning';
   const hasReasoning = !!reasoning && reasoning.trim().length > 0;
   if (message.trim().length > 0) {
     return options.thinkingModel && !hasReasoning ? 'reasoning' : 'answer';

@@ -366,7 +366,7 @@ const STRICT_REASONING_PROVIDERS: ReadonlySet<string> = new Set(['cloudflare']);
 /**
  * Error for a chain that ended without any provider being called, naming why each
  * planned provider was skipped. With `allowFallback: false` this is a NoRouteError,
- * matching what `getRoutingInfo` reports for the same state.
+ * as `getRoutingInfo` throws when every planned provider is skipped.
  */
 function noProviderAttemptedError(
   request: LLMRequest,
@@ -377,7 +377,7 @@ function noProviderAttemptedError(
   if (request.allowFallback === false) {
     return new NoRouteError(
       reasons
-        ? `Pinned provider was skipped (${reasons}), and allowFallback is false`
+        ? `${request.model ? 'Pinned' : 'First planned'} provider was skipped (${reasons}), and allowFallback is false`
         : 'No configured provider can serve this request, and allowFallback is false'
     );
   }
@@ -804,7 +804,10 @@ export class LLMProviderFactory {
           response = { ...response, metadata: { ...response.metadata, llmProvidersDeprecationWarning: warning } };
         }
 
-        if (this.config.responseCache && responseCacheKey !== undefined) {
+        // Never store an envelope the read path would reject (e.g. a reasoning report
+        // echoing an unknown effort from an untyped caller); it would miss forever.
+        if (this.config.responseCache && responseCacheKey !== undefined
+            && isCachedResponse(response)) {
           this.config.responseCache.put(
             responseCacheKey!,
             JSON.stringify(response),
@@ -861,7 +864,8 @@ export class LLMProviderFactory {
             error: err,
             errorCode: (err as { code?: string }).code,
             attempt: 1,
-            willRetry: request.allowFallback !== false && this.shouldFallback(err),
+            willRetry: request.allowFallback !== false && this.shouldFallback(err)
+            && (!isStrictReasoning(request) || index + 1 < providerChain.length),
             timestamp: Date.now(),
           });
         }
@@ -1006,7 +1010,8 @@ export class LLMProviderFactory {
           error: err,
           errorCode: (err as { code?: string }).code,
           attempt: 1,
-          willRetry: request.allowFallback !== false && this.shouldFallback(err),
+          willRetry: request.allowFallback !== false && this.shouldFallback(err)
+            && (!isStrictReasoning(request) || index + 1 < providerChain.length),
           timestamp: Date.now(),
         });
 
@@ -1332,10 +1337,13 @@ export class LLMProviderFactory {
       return !requiresVision || this.providerSupportsVision(providerName);
     };
 
+    let pinnedProvider: string | undefined;
+
     // If specific provider requested, try it first
     if (request.model) {
       const providerForModel = this.getProviderForModel(request.model, request);
       if (providerForModel && this.providers.has(providerForModel) && canUseProvider(providerForModel)) {
+        pinnedProvider = providerForModel;
         chain.push(providerForModel);
         providerModels.set(providerForModel, request.model);
       } else if (request.allowFallback === false) {
@@ -1388,13 +1396,27 @@ export class LLMProviderFactory {
       throw new ConfigurationError('factory', 'No configured providers support image input');
     }
 
+    if (isStrictReasoning(request)) {
+      // Only providers that enforce strict reasoning may serve the request, first
+      // hop included; anything else would drop or reinterpret the level.
+      if (pinnedProvider !== undefined && !STRICT_REASONING_PROVIDERS.has(pinnedProvider)) {
+        throw new ReasoningEffortUnsupportedError(
+          'factory',
+          `reasoning.strict is enforced only on Cloudflare; pinned model '${request.model}' is served by ${pinnedProvider}`
+        );
+      }
+      const enforcing = chain.filter(name => STRICT_REASONING_PROVIDERS.has(name));
+      if (enforcing.length === 0) {
+        throw new ReasoningEffortUnsupportedError(
+          'factory',
+          'reasoning.strict is enforced only on Cloudflare, and no Cloudflare provider is configured for this request'
+        );
+      }
+      chain.splice(0, chain.length, ...enforcing);
+    }
+
     if (request.allowFallback === false) {
       chain.splice(1);
-    } else if (isStrictReasoning(request)) {
-      // Keep the first choice; later hops only where strict reasoning is enforced.
-      const [first, ...rest] = chain;
-      chain.splice(0, chain.length, ...(first === undefined ? [] : [first]),
-        ...rest.filter(name => STRICT_REASONING_PROVIDERS.has(name)));
     }
 
     return { chain, providerModels, useCase };

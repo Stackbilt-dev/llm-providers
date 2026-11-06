@@ -122,8 +122,13 @@ describe('Workers AI reasoning effort (#135)', () => {
     const high = await provider.generateResponse({
       model: '@cf/nvidia/nemotron-3-120b-a12b', messages, reasoning: { effort: 'high' },
     });
-    expect(sent()).not.toHaveProperty('chat_template_kwargs');
-    expect(high.reasoningEffort).toEqual({ requested: 'high', applied: null, exact: false });
+    // Normal reasoning is sent explicitly rather than relying on an undocumented default.
+    expect(sent().chat_template_kwargs).toEqual({ enable_thinking: true });
+    expect(sent()).not.toHaveProperty('reasoning_effort');
+    expect(high.reasoningEffort).toEqual({ requested: 'high', applied: 'enable_thinking=true', exact: false });
+    await expect(provider.generateResponse({
+      model: '@cf/nvidia/nemotron-3-120b-a12b', messages, reasoning: { effort: 'medium', strict: true },
+    })).rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
   });
 
   it('sends nothing and reports not-applied for a model without a mapping', async () => {
@@ -244,9 +249,13 @@ describe('reasoning accounting (#136 need 1)', () => {
     expect(lengthCauseFor('stop', '', 'r')).toBeUndefined();
   });
 
-  it('classifies think tags anywhere in the text, and template-opened think blocks', () => {
-    // Unclosed block after an earlier closed one.
-    expect(lengthCauseFor('length', '<think>a</think> b <think>more', undefined)).toBe('reasoning');
+  it('classifies leading think structure, and template-opened think blocks', () => {
+    // Unclosed block right after earlier closed ones, before any answer.
+    expect(lengthCauseFor('length', '<think>a</think>\n<think>more', undefined)).toBe('reasoning');
+    // Tags after answer text are answer content, not reasoning.
+    expect(lengthCauseFor('length', '<think>a</think> b <think>more', undefined)).toBe('answer');
+    expect(lengthCauseFor('length', "Here's the parser: const OPEN = '<think>';", undefined)).toBe('answer');
+    expect(lengthCauseFor('length', "Close it with '</think>' and then", undefined)).toBe('answer');
     // Template-injected opener: only a closing tag appears in the output.
     expect(lengthCauseFor('length', 'reasoning text</think>', undefined)).toBe('reasoning');
     expect(lengthCauseFor('length', 'reasoning text</think> partial answer', undefined)).toBe('answer');
@@ -436,6 +445,62 @@ describe('strict reasoning through the factory (#135)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('rejects a strict request pinned to a provider that does not enforce it, before any call', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    const { llm, fetchMock } = setup(run);
+    const request = { model: 'llama-3.3-70b-versatile', messages, maxTokens: 10, reasoning: { effort: 'high' as const, strict: true } };
+    await expect(llm.generateResponse(request)).rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
+    await expect(llm.generateManagedResponseStream(request)).rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
+    expect(() => llm.getRoutingInfo(request)).toThrow(ReasoningEffortUnsupportedError);
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a strict request when no Cloudflare provider is configured', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => groqResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const llm = new LLMProviders({ groq: { apiKey: 'test', maxRetries: 0 }, stateScope: 'client' });
+    await expect(llm.generateResponse({ messages, maxTokens: 10, reasoning: { effort: 'low', strict: true } }))
+      .rejects.toThrow('no Cloudflare provider is configured');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('routes an unpinned strict request to Cloudflare even when another provider is preferred', () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    const { llm } = setup(run, { defaultProvider: 'groq' });
+    expect(llm.getRoutingInfo({ messages, reasoning: { effort: 'low', strict: true } }).provider).toBe('cloudflare');
+    expect(llm.getRoutingInfo({ messages }).provider).toBe('groq');
+  });
+
+  it('keeps strict in the tool loop', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    const { llm, fetchMock } = setup(run);
+    await expect(llm.generateResponseWithTools(
+      { model: flash, messages, maxTokens: 10, reasoning: { effort: 'medium', strict: true } },
+      { execute: vi.fn() } as never,
+    )).rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('never falls back on a strict rejection, whatever the request says', async () => {
+    // Isolates the getFallbackDecision guard: the request is not strict, so the chain is not trimmed.
+    const run = vi.fn().mockRejectedValue(new ReasoningEffortUnsupportedError('cloudflare', 'rejected'));
+    const { llm, fetchMock } = setup(run);
+    await expect(llm.generateResponse({ model: flash, messages, maxTokens: 10 }))
+      .rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reports willRetry: false when a strict request has nowhere to go', async () => {
+    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
+    const errors: Array<boolean | undefined> = [];
+    const { llm } = setup(run, { hooks: { onRequestError: (event: { willRetry?: boolean }) => errors.push(event.willRetry) } });
+    await expect(llm.generateResponse({
+      model: flash, messages, maxTokens: 10, reasoning: { effort: 'low', strict: true },
+    })).rejects.toThrow('binding exploded');
+    expect(errors).toEqual([false]);
+  });
+
   it('still falls back when strict is not set', async () => {
     const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
     const { llm } = setup(run);
@@ -533,6 +598,23 @@ describe('fallback review fixes', () => {
     const response = await llm.generateResponse({ model: pinned, messages, maxTokens: 10 });
     expect(response.message).toBe('fresh');
     expect(() => normalizeLLMResponse(response)).not.toThrow();
+  });
+
+  it('does not cache a response its own read path would reject', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('fresh'));
+    const cache = { get: vi.fn().mockResolvedValue(null), put: vi.fn().mockResolvedValue(undefined) };
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 }, stateScope: 'client', responseCache: cache,
+    });
+    // An untyped caller can pass an effort outside the type; the report echoes it.
+    const odd = await llm.generateResponse({
+      model: pinned, messages, maxTokens: 10, reasoning: { effort: 'max' as never },
+    });
+    expect(odd.reasoningEffort).toMatchObject({ requested: 'max', applied: null });
+    expect(cache.put).not.toHaveBeenCalled();
+
+    await llm.generateResponse({ model: pinned, messages, maxTokens: 10, reasoning: { effort: 'low' } });
+    expect(cache.put).toHaveBeenCalledTimes(1);
   });
 
   it('replays the original fallback report on a cache hit', async () => {

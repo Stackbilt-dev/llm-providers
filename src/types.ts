@@ -180,8 +180,9 @@ export interface LLMRequest {
      * Throw `ReasoningEffortUnsupportedError` (an `InvalidRequestError`) instead of
      * sending a nearby level (or nothing) when the provider cannot apply `effort`
      * exactly for this model. Default false. Currently enforced by the Cloudflare
-     * provider; the factory never falls back on that error, and with `effort` set
-     * it never fails over to a provider other than Cloudflare.
+     * provider, so with `effort` set the factory sends the request only to Cloudflare:
+     * a pin on another provider, or no Cloudflare provider configured, throws before
+     * any call, and the factory never falls back on the error.
      */
     strict?: boolean;
     /** Cerebras: controls how reasoning tokens appear in the response. */
