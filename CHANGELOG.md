@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- Workers AI reasoning control (#135, #136). `reasoning.effort` is now sent to Workers AI reasoning models, mapped per model from each model's Cloudflare docs page (checked 2026-11-06): gpt-oss 20B/120B, GLM-5.3, GLM-5.3 Flash, GLM-5.2, DeepSeek V4 Flash/Pro, Kimi K2.6 and Qwen 3.8 27B through `reasoning_effort`, and Nemotron 3 120B through `chat_template_kwargs`. Values a model doesn't document, and aliases that would mean the model's maximum (GLM-5.3 Flash maps `none` and `medium` to `max`), are never forwarded.
+  - `LLMResponse.reasoningEffort` reports `{ requested, applied, exact }`.
+  - `reasoning.strict: true` throws `InvalidRequestError` before the call when the level can't be sent exactly.
+  - `ModelCapabilities.reasoningEffort` (`{ exact, source, verifiedAt }`) appears in the catalog and in the Cloudflare provider's capabilities.
+- `TokenUsage.reasoningTokens`, from Workers AI `completion_tokens_details.reasoning_tokens` / `output_tokens_details.reasoning_tokens` when reported.
+- `LLMResponse.lengthCause` (`'reasoning' | 'answer'`) on `finishReason: 'length'`, to tell a budget spent on reasoning from a truncated answer. Set by the Cloudflare provider and by the factory for every provider.
+- `LLMRequest.allowFallback: false` (#128): the factory tries only the first planned provider (the pinned model's provider) and rethrows its error, overriding `fallbackRules` and built-in fallback. It throws `NoRouteError` when no configured provider can serve the pinned model.
+- `LLMResponse.fallback` and `StreamCompletion.fallback` (#128): `{ requestedProvider, requestedModel, failedAttempts }` when a provider other than the first one planned served the request, including when the planned provider was skipped as quota-exhausted, circuit-open or ledger-limited. `normalizeLLMResponse()` copies the attempts into `routing.fallbackChain`.
+- `StreamCompletion.provider` and `StreamCompletion.model` (#133): what served a managed stream.
+- Exported types `ReasoningEffortLevel`, `ReasoningEffortCapability`, `ReasoningEffortReport`, `FallbackHop`, `FallbackReport`.
+
+### Changed
+- Requests that set `reasoning.effort` and are served by one of the mapped Workers AI models now send a reasoning parameter; until now the field was silently dropped on Cloudflare. Output length, latency and cost can change for those calls. Remove `reasoning` to keep the previous behavior.
+
+### Documentation
+- `fallbackRules: []` was not a complete opt-out: server errors, network errors, timeouts and schema drift fall back regardless of rules. The README now says so and documents `allowFallback: false`.
+
 ## [1.23.0] — 2026-10-15
 
 ### Added

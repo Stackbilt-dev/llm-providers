@@ -244,6 +244,41 @@ Provider notes:
 - Anthropic requires base64 image bytes. URL images throw `ConfigurationError`; convert the URL to bytes before dispatch or route URL-based vision to an OpenAI-compatible provider.
 - Cerebras, Groq, and NVIDIA currently advertise `supportsVision = false`, so the factory skips them for image requests.
 
+## Reasoning Control
+
+`reasoning.effort` (`'low' | 'medium' | 'high' | 'none'`) limits how much a reasoning model thinks before answering. Reasoning tokens count against `maxTokens`, so a high effort can use the whole budget and leave no answer.
+
+On Workers AI, each model documents its own levels, and some document aliases that turn a "lower" value into the model's maximum (GLM-5.3 Flash maps `none` and `medium` to `max`). The Cloudflare provider therefore maps effort per model, from each model's Cloudflare docs page, and never forwards an alias it hasn't checked:
+
+| Model | Sent as requested | Mapped | Not sent |
+|---|---|---|---|
+| `@cf/openai/gpt-oss-20b`, `-120b` | low, medium, high | | none |
+| `@cf/zai-org/glm-5.3`, `-5.3-flash` | low, high | medium → high | none |
+| `@cf/zai-org/glm-5.2` | none, high | low, medium → high | |
+| `@cf/deepseek-ai/deepseek-v4-flash-0731`, `-pro-0813` | none, low, high | medium → high | |
+| `@cf/moonshotai/kimi-k2.6` | none, high | low, medium → high | |
+| `@cf/qwen/qwen3.8-27b` | low, medium | high → xhigh | none |
+| `@cf/nvidia/nemotron-3-120b-a12b` | none, low (via `chat_template_kwargs`) | medium, high → model default | |
+
+Other Workers AI models get nothing sent. The response reports what happened:
+
+```typescript
+const response = await llm.generateResponse({
+  model: '@cf/zai-org/glm-5.3-flash',
+  messages,
+  maxTokens: 4000,
+  reasoning: { effort: 'medium' },
+});
+response.reasoningEffort; // { requested: 'medium', applied: 'high', exact: false }
+```
+
+Set `reasoning: { effort, strict: true }` to get an `InvalidRequestError` before the call whenever the level can't be sent exactly. `getModelCapabilities()` and the model catalog expose the mapping as `capabilities.reasoningEffort` (`{ exact, source, verifiedAt }`).
+
+Two related fields help with budget planning:
+
+- `usage.reasoningTokens`: reasoning tokens, when the provider reports them separately (Workers AI: `completion_tokens_details.reasoning_tokens`). They are part of `outputTokens`.
+- `lengthCause`: set when `finishReason` is `'length'`. `'reasoning'` means the budget ran out before any answer text (including an unclosed `<think>` block); `'answer'` means the answer was cut off.
+
 ## Logging
 
 The library is silent by default. Opt in to logging by passing a `Logger`:
@@ -519,6 +554,30 @@ const llm = new LLMProviders({
 
 Default provider precedence remains Cloudflare → Cerebras → Groq → NVIDIA → Anthropic → OpenAI, but actual dispatch is catalog-driven and can be reordered at runtime by request fit, circuit-breaker state, and ledger burn-rate pressure.
 
+### Pinned models and `allowFallback`
+
+A pinned `model` is tried first, but by default it is not a guarantee: on an eligible failure, or when the pinned provider is skipped (quota-exhausted, circuit open, ledger-limited), another provider and model can serve the request. `fallbackRules: []` removes the rule-based fallbacks only; server errors, network errors, timeouts and schema drift still fall back.
+
+Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider), its error is rethrown, and `NoRouteError` is thrown if no configured provider can serve the pinned model. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
+
+```typescript
+const response = await llm.generateResponse({
+  model: '@cf/zai-org/glm-5.3-flash',
+  messages,
+  allowFallback: false,
+});
+```
+
+When a substitution does happen, the response carries `fallback`, and so does `StreamCompletion`:
+
+```typescript
+response.fallback;
+// { requestedProvider: 'cloudflare', requestedModel: '@cf/zai-org/glm-5.3-flash',
+//   failedAttempts: [{ provider: 'cloudflare', model: '@cf/zai-org/glm-5.3-flash', errorCode: 'TIMEOUT' }] }
+```
+
+`normalizeLLMResponse()` copies the failed attempts into `routing.fallbackChain`.
+
 ## Error Handling
 
 Structured error classes for each failure mode:
@@ -582,8 +641,10 @@ Use the managed result when the request lifetime must include final accounting:
 const { stream, completion } = await llm.generateManagedResponseStream(request);
 ctx.waitUntil(completion);
 await stream.pipeTo(new WritableStream({ write: text => console.log(text) }));
-const result = await completion; // { outcome, emittedChars, usage }
+const result = await completion; // { outcome, emittedChars, usage, provider, model, fallback? }
 ```
+
+`provider` and `model` name what served the stream, so streamed output can be checked against an allowlist the same way as `generateResponse()` results.
 
 Do not await `completion` before consuming or cancelling the stream. Reported partial usage survives errors and cancellation; otherwise factory accounting retains the preflight cost estimate and marks it estimated. A stream that fails before producing output is charged only for usage the provider actually reported; estimates are not recorded, and the fallback provider that serves the request records its own usage. Quota recording is awaited. A settlement failure rejects `completion` (and is logged) but never errors text that was already delivered, so legacy `generateResponseStream()` callers are unaffected by a ledger outage; a settlement failure before output does not block fallback. For factory streams (managed or `generateResponseStream()`), `onRequestEnd` includes `outcome` and fires on success, error and cancellation once output has started; a provider that fails before output emits it only if it reported real usage, otherwise only `onRequestError`. Filter on `outcome === 'success'` to count successes. Streams are demand-driven, so a stream dropped without being read to the end or cancelled is never settled; cancellation leaves breaker health unchanged.
 
@@ -887,7 +948,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | Type | Description |
 |------|-------------|
 | `LLMRequest` | Unified request: messages, model, temperature, tools, toolChoice, builtInTools, response_format, cache, lora |
-| `LLMResponse` | Unified response: message, optional reasoning, usage (with cost), provider, tool calls, metadata (builtInToolResults) |
+| `LLMResponse` | Unified response: message, optional reasoning, usage (with cost and optional reasoning tokens), provider, tool calls, `lengthCause`, `reasoningEffort`, `fallback`, metadata (builtInToolResults) |
 | `BuiltInTool` / `BuiltInToolType` | Server-side tool request: `{ type }` where type is `web_search` \| `visit_website` \| `browser_automation` \| `code_interpreter` \| `wolfram_alpha` |
 | `BuiltInToolResult` | A surfaced built-in execution: `{ type, name?, arguments?, results: [{ title, url, content, score }] }` on `metadata.builtInToolResults` |
 | `TokenUsage` | Token counts, compatible `cost`, explicit `costProvenance` / `tokenProvenance`, and cached token fields |
@@ -899,7 +960,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `ToolLoopOptions` | Loop config: maxIterations, maxCostUSD, onIteration, abortSignal |
 | `ToolLoopAbortSignal` | `{ abort: true; reason?: string }` — return from `onIteration` to stop the loop and throw `ToolLoopAbortedError` |
 | `RoutingInfo` | Pre-flight routing snapshot: useCase, provider, model, estimatedInputTokens, lifecycle, deprecationWarning |
-| `ManagedTextStream` / `StreamCompletion` | Text stream plus awaited terminal accounting; outcome, emitted characters and usage |
+| `ManagedTextStream` / `StreamCompletion` | Text stream plus awaited terminal accounting; outcome, emitted characters, usage, serving provider and model, and `fallback` when substituted |
 | `GatewayRoutePlan` | Gateway diagnostics and cache/capability reports; `executable: false` marks failed capability checks or a host outside `availableProviders` |
 | `ModelWorkloadClass` | Gateway-friendly workload class: `summary`, `planning`, `code_draft`, `long_context`, `tool_loop`, `vision`, `research`, `cost_effective`, `balanced`, `high_performance` |
 | `ModelPreferenceMap` | Optional provider+workload override map for workload-aware recommendation APIs |

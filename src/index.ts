@@ -65,7 +65,12 @@ export type {
   RateLimitBalance,
   BatchRequest,
   BatchResponse,
-  BatchJob
+  BatchJob,
+  ReasoningEffortLevel,
+  ReasoningEffortCapability,
+  ReasoningEffortReport,
+  FallbackHop,
+  FallbackReport
 } from './types.js';
 
 // Canonical provider contract

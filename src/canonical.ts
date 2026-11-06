@@ -259,6 +259,13 @@ export function normalizeLLMResponse(
     routing: options.routing ?? {
       selectedProvider: response.provider as ProviderName,
       selectedModel: response.model,
+      ...(response.fallback ? {
+        fallbackChain: response.fallback.failedAttempts.map(hop => ({
+          provider: hop.provider as ProviderName,
+          ...(hop.model ? { model: hop.model } : {}),
+          ...(hop.errorCode ? { reason: hop.errorCode } : {}),
+        })),
+      } : {}),
     },
     error: options.error,
     metadata: response.metadata,

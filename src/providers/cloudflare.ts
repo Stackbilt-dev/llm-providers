@@ -25,7 +25,12 @@ import {
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { readChatStreamEvent } from '../utils/provider-stream.js';
-import { extractThinkBlocks, joinReasoning } from '../utils/reasoning.js';
+import { extractThinkBlocks, joinReasoning, lengthCauseFor } from '../utils/reasoning.js';
+import {
+  cloudflareReasoningEffortCapability,
+  resolveCloudflareReasoningEffort,
+  type ResolvedCloudflareReasoning,
+} from './cloudflare-reasoning.js';
 
 /**
  * Minimum structural fields the Cloudflare Workers AI parser reads.
@@ -85,6 +90,10 @@ interface CloudflareRequest {
   lora?: string;
   top_p?: number;
   frequency_penalty?: number;
+  /** Native reasoning level; values differ per model (see cloudflare-reasoning.ts). */
+  reasoning_effort?: string;
+  /** Chat-template flags (e.g. Nemotron's enable_thinking / low_effort). */
+  chat_template_kwargs?: Record<string, boolean>;
   /** Anthropic-format models served via the CF binding use a top-level system field. */
   system?: string;
 }
@@ -132,6 +141,8 @@ interface WorkersAIUsage {
   cached_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
   input_tokens_details?: { cached_tokens?: number };
+  completion_tokens_details?: { reasoning_tokens?: unknown };
+  output_tokens_details?: { reasoning_tokens?: unknown };
 }
 
 type WorkersAIJsonValue =
@@ -254,6 +265,7 @@ export class CloudflareProvider extends BaseProvider {
         // llama-3.2-11b vision requires the raw Workers AI binding format.
         // The chat/image_url path returns null content via the binding.
         if (LLAMA_VISION_RAW_MODELS.has(model) && (request.images?.length ?? 0) > 0) {
+          this.resolveReasoningEffort(request, model);
           const result = await this.runLlamaVisionRaw(request, model);
           return this.formatResponse(result as WorkersAIResult, model, request, Date.now() - startTime);
         }
@@ -319,6 +331,15 @@ export class CloudflareProvider extends BaseProvider {
   }
 
   protected getModelCapabilities(): Record<string, ModelCapabilities> {
+    const capabilities = this.getBaseModelCapabilities();
+    for (const [model, entry] of Object.entries(capabilities)) {
+      const reasoningEffort = cloudflareReasoningEffortCapability(model);
+      if (reasoningEffort) capabilities[model] = { ...entry, reasoningEffort };
+    }
+    return capabilities;
+  }
+
+  private getBaseModelCapabilities(): Record<string, ModelCapabilities> {
     return {
       '@cf/meta/llama-3.1-8b-instruct': {
         maxContextLength: 8192,
@@ -812,7 +833,27 @@ export class CloudflareProvider extends BaseProvider {
     };
   }
 
+  /**
+   * Resolve `reasoning.effort` for a model. With `reasoning.strict`, a level that
+   * cannot be sent exactly is rejected instead of being mapped or dropped.
+   */
+  private resolveReasoningEffort(request: LLMRequest, model: string): ResolvedCloudflareReasoning | undefined {
+    const resolved = resolveCloudflareReasoningEffort(model, request.reasoning?.effort);
+    if (resolved && request.reasoning?.strict && !resolved.report.exact) {
+      const { requested, applied } = resolved.report;
+      throw new InvalidRequestError(
+        this.name,
+        applied === null
+          ? `Model '${model}' does not accept reasoning effort '${requested}' on Workers AI`
+          : `Model '${model}' has no exact reasoning effort '${requested}' on Workers AI (nearest: '${applied}')`
+      );
+    }
+    return resolved;
+  }
+
   private formatRequest(request: LLMRequest, model: string): CloudflareRequest {
+    const reasoningEffort = this.resolveReasoningEffort(request, model);
+
     // Anthropic-via-CF models use a different wire format: system is a top-level
     // field, messages must not contain a system role, and tool calling is not
     // yet verified. Route these through a dedicated formatter.
@@ -949,6 +990,13 @@ export class CloudflareProvider extends BaseProvider {
       cloudflareRequest.frequency_penalty = request.frequencyPenalty;
     }
 
+    if (reasoningEffort?.input?.reasoning_effort !== undefined) {
+      cloudflareRequest.reasoning_effort = reasoningEffort.input.reasoning_effort;
+    }
+    if (reasoningEffort?.input?.chat_template_kwargs) {
+      cloudflareRequest.chat_template_kwargs = { ...reasoningEffort.input.chat_template_kwargs };
+    }
+
     if (request.tools && request.tools.length > 0) {
       cloudflareRequest.tools = request.tools.map(tool => ({
         type: tool.type,
@@ -1068,6 +1116,9 @@ export class CloudflareProvider extends BaseProvider {
     const toolCalls = this.extractToolCalls(result);
     const usage = this.extractUsage(result, model, request, content);
     const cache = this.extractCacheObservability(result, request, usage);
+    const finishReason = this.extractFinishReason(result, toolCalls);
+    const lengthCause = lengthCauseFor(finishReason, content, extraction.reasoning);
+    const reasoningEffort = resolveCloudflareReasoningEffort(model, request.reasoning?.effort)?.report;
 
     const response: LLMResponse = {
       id: payload?.id,
@@ -1078,7 +1129,9 @@ export class CloudflareProvider extends BaseProvider {
       model: payload?.model || model,
       provider: this.name,
       responseTime,
-      finishReason: this.extractFinishReason(result, toolCalls),
+      finishReason,
+      ...(lengthCause ? { lengthCause } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       cache,
       metadata: {
         cloudflareAI: true,
@@ -1326,6 +1379,12 @@ export class CloudflareProvider extends BaseProvider {
       const cachedInputTokens = this.extractCachedInputTokens(usage);
       if (typeof cachedInputTokens === 'number') {
         normalizedUsage.cachedInputTokens = cachedInputTokens;
+      }
+
+      const reasoningTokens =
+        usage?.completion_tokens_details?.reasoning_tokens ?? usage?.output_tokens_details?.reasoning_tokens;
+      if (typeof reasoningTokens === 'number' && Number.isFinite(reasoningTokens) && reasoningTokens >= 0) {
+        normalizedUsage.reasoningTokens = reasoningTokens;
       }
 
       return normalizedUsage;
