@@ -185,6 +185,12 @@ const llm = LLMProviders.fromEnv(env, {
 { apiKey: 'nvapi-...' }
 ```
 
+### Cloudflare Workers AI timeouts
+
+`BaseProvider` defaults `timeout` to 30,000 ms, so non-streaming Workers AI binding calls without an explicit deadline are now limited to 30 seconds. The deadline applies per attempt, not to the whole operation: `TimeoutError` is retryable, and the default of three retries means one logical request can take four attempts plus backoff. The factory may also fall back to another provider after a `TIMEOUT`.
+
+Workers AI bindings do not accept an abort signal. A timed-out call stops being awaited but may continue running alongside retries and may still incur charges. For long generations, raise `timeout`, lower `maxRetries`, or use streaming.
+
 ## Cloudflare AI Gateway Passthrough
 
 Each HTTP provider (OpenAI, Anthropic, Cerebras, Groq, NVIDIA) accepts a `cfGateway`

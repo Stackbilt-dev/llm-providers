@@ -810,6 +810,8 @@ export class CloudflareProvider extends BaseProvider {
       )), this.config.timeout);
     });
 
+    // Workers AI bindings do not accept an abort signal: a timeout abandons the
+    // wait but cannot cancel the underlying call, which may continue running.
     return Promise.race([operation, timeout]).finally(() => {
       if (timer !== undefined) clearTimeout(timer);
     });

@@ -85,6 +85,7 @@ describe('CloudflareProvider', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   describe('Constructor', () => {
@@ -189,13 +190,28 @@ describe('CloudflareProvider', () => {
         ai: { run: mockAiRun } as unknown as Ai,
         timeout: 20
       });
+      const baselineTimerCount = vi.getTimerCount();
       mockAiRun.mockResolvedValueOnce({ response: 'Fast response' });
 
       await expect(provider.generateResponse(testRequest)).resolves.toMatchObject({
         message: 'Fast response'
       });
-      await vi.advanceTimersByTimeAsync(20);
-      vi.useRealTimers();
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    });
+
+    it('clears the non-streaming timeout when a binding call rejects', async () => {
+      vi.useFakeTimers();
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        timeout: 20,
+        maxRetries: 0
+      });
+      const baselineTimerCount = vi.getTimerCount();
+      const originalError = new Error('binding failed');
+      mockAiRun.mockRejectedValueOnce(originalError);
+
+      await expect(provider.generateResponse(testRequest)).rejects.toBe(originalError);
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
     });
 
     it('stringifies numeric response field — CF returns bare numbers for short numeric answers', async () => {
