@@ -104,6 +104,9 @@ const MAPPINGS: Record<string, ModelReasoningMapping> = {
     levels: { low: effort('low', true), medium: effort('medium', true), high: effort('xhigh', false) },
   },
   // Nemotron 3: ignores top-level reasoning_effort; modes are chat-template flags.
+  // The page documents an off mode and a low-effort mode but not which mode is the
+  // default, so medium and high are not mapped: nothing is sent and the report says
+  // applied: null rather than claiming the default matches.
   '@cf/nvidia/nemotron-3-120b-a12b': {
     source: page('nemotron-3-120b-a12b'),
     verifiedAt: VERIFIED_AT,
@@ -114,8 +117,6 @@ const MAPPINGS: Record<string, ModelReasoningMapping> = {
         input: { chat_template_kwargs: { enable_thinking: true, low_effort: true } },
         exact: true,
       },
-      medium: { native: 'default', exact: false },
-      high: { native: 'default', exact: false },
     },
   },
 };

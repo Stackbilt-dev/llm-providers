@@ -76,6 +76,7 @@ import {
   LLMProviderError,
   ConfigurationError,
   NoRouteError,
+  ReasoningEffortUnsupportedError,
   CircuitBreakerOpenError,
   AuthenticationError,
   RateLimitError,
@@ -352,14 +353,53 @@ function withResolvedModel(request: LLMRequest): LLMRequest {
   return model === request.model ? request : { ...request, model };
 }
 
-/** Describe a substitution when the serving provider was not the first one planned. */
+/**
+ * `reasoning.strict` with an effort is enforced only by the Cloudflare provider;
+ * any other provider would drop or reinterpret the level, so it can't be a fallback.
+ */
+function isStrictReasoning(request: LLMRequest): boolean {
+  return request.reasoning?.strict === true && request.reasoning.effort !== undefined;
+}
+
+const STRICT_REASONING_PROVIDERS: ReadonlySet<string> = new Set(['cloudflare']);
+
+/**
+ * Error for a chain that ended without any provider being called, naming why each
+ * planned provider was skipped. With `allowFallback: false` this is a NoRouteError,
+ * matching what `getRoutingInfo` reports for the same state.
+ */
+function noProviderAttemptedError(
+  request: LLMRequest,
+  failedAttempts: FallbackHop[],
+  label: string
+): Error {
+  const reasons = failedAttempts.map(hop => `${hop.provider}: ${hop.errorCode}`).join(', ');
+  if (request.allowFallback === false) {
+    return new NoRouteError(
+      reasons
+        ? `Pinned provider was skipped (${reasons}), and allowFallback is false`
+        : 'No configured provider can serve this request, and allowFallback is false'
+    );
+  }
+  return new LLMProviderError(
+    reasons ? `${label} (${reasons})` : label,
+    'ALL_PROVIDERS_FAILED',
+    'factory',
+    false
+  );
+}
+
+/**
+ * Describe a substitution when the serving provider was not the first one planned.
+ * `requestedModel` is captured at plan time, before fallback rules can rewrite the
+ * provider's model.
+ */
 function fallbackReport(
   requestedProvider: string | undefined,
-  providerModels: Map<string, string>,
+  requestedModel: string | undefined,
   failedAttempts: FallbackHop[]
 ): FallbackReport | undefined {
   if (!requestedProvider || failedAttempts.length === 0) return undefined;
-  const requestedModel = providerModels.get(requestedProvider);
   return {
     requestedProvider,
     ...(requestedModel ? { requestedModel } : {}),
@@ -533,6 +573,7 @@ export class LLMProviderFactory {
     const selectionPlan = this.buildProviderPlan(request);
     const providerChain = selectionPlan.chain;
     const providerModels = selectionPlan.providerModels;
+    const requestedModel = providerChain[0] ? providerModels.get(providerChain[0]) : undefined;
     let lastError: Error | null = null;
     let previousProvider: string | null = null;
     const failedAttempts: FallbackHop[] = [];
@@ -643,8 +684,10 @@ export class LLMProviderFactory {
           response.usage.costProvenance
         );
         const lengthCause = response.lengthCause
-          ?? lengthCauseFor(response.finishReason, response.message, response.reasoning);
-        const fallback = fallbackReport(providerChain[0], providerModels, failedAttempts);
+          ?? lengthCauseFor(response.finishReason, response.message, response.reasoning, {
+            thinkingModel: getCatalogEntry(response.model)?.capabilities.thinkingModel === true,
+          });
+        const fallback = fallbackReport(providerChain[0], requestedModel, failedAttempts);
         response = {
           ...response,
           usage: {
@@ -857,18 +900,14 @@ export class LLMProviderFactory {
           providerName,
           providerChain,
           index,
-          providerModels
+          providerModels,
+          request
         );
       }
     }
 
     // All providers failed
-    throw lastError || new LLMProviderError(
-      'All providers failed',
-      'ALL_PROVIDERS_FAILED',
-      'factory',
-      false
-    );
+    throw lastError || noProviderAttemptedError(request, failedAttempts, 'All providers failed');
   }
 
   async generateResponseStream(request: LLMRequest): Promise<ReadableStream<string>> {
@@ -880,6 +919,7 @@ export class LLMProviderFactory {
     const selectionPlan = this.buildProviderPlan({ ...request, stream: true });
     const providerChain = selectionPlan.chain;
     const providerModels = selectionPlan.providerModels;
+    const requestedModel = providerChain[0] ? providerModels.get(providerChain[0]) : undefined;
     let lastError: Error | null = null;
     let previousProvider: string | null = null;
     const failedAttempts: FallbackHop[] = [];
@@ -940,7 +980,7 @@ export class LLMProviderFactory {
           startTime,
           estimatedCost,
           opened.usage,
-          fallbackReport(providerChain[0], providerModels, failedAttempts)
+          fallbackReport(providerChain[0], requestedModel, failedAttempts)
         );
       } catch (error) {
         const err = error as Error;
@@ -975,16 +1015,11 @@ export class LLMProviderFactory {
           throw error;
         }
 
-        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels);
+        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels, request);
       }
     }
 
-    throw lastError || new LLMProviderError(
-      'All streaming providers failed',
-      'ALL_PROVIDERS_FAILED',
-      'factory',
-      false
-    );
+    throw lastError || noProviderAttemptedError(request, failedAttempts, 'All streaming providers failed');
   }
 
   async generateResponseWithTools(
@@ -1355,6 +1390,11 @@ export class LLMProviderFactory {
 
     if (request.allowFallback === false) {
       chain.splice(1);
+    } else if (isStrictReasoning(request)) {
+      // Keep the first choice; later hops only where strict reasoning is enforced.
+      const [first, ...rest] = chain;
+      chain.splice(0, chain.length, ...(first === undefined ? [] : [first]),
+        ...rest.filter(name => STRICT_REASONING_PROVIDERS.has(name)));
     }
 
     return { chain, providerModels, useCase };
@@ -1434,6 +1474,8 @@ export class LLMProviderFactory {
   private getFallbackDecision(error: Error): FallbackDecision {
     if (error instanceof LLMProviderError && error.code === 'STREAM_SETTLEMENT_FAILED') return { shouldFallback: false };
     if (error instanceof QuotaDeniedError) return { shouldFallback: false };
+    // A strict reasoning rejection must surface; no other provider can honour it.
+    if (error instanceof ReasoningEffortUnsupportedError) return { shouldFallback: false };
     // Don't fallback for authentication errors
     if (error instanceof AuthenticationError) {
       return { shouldFallback: false };
@@ -2094,10 +2136,14 @@ export class LLMProviderFactory {
     failedProvider: string,
     providerChain: string[],
     currentIndex: number,
-    providerModels: Map<string, string>
+    providerModels: Map<string, string>,
+    request: LLMRequest
   ): void {
     const targetProvider = decision.fallbackProvider;
     if (!targetProvider || targetProvider === failedProvider || !this.providers.has(targetProvider)) {
+      return;
+    }
+    if (isStrictReasoning(request) && !STRICT_REASONING_PROVIDERS.has(targetProvider)) {
       return;
     }
 

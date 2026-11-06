@@ -46,11 +46,39 @@ export async function deriveResponseCacheKey(
   }
 }
 
+const EFFORT_LEVELS = ['none', 'low', 'medium', 'high'];
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function isReasoningEffortReport(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return typeof value.requested === 'string' && EFFORT_LEVELS.includes(value.requested)
+    && (value.applied === null || typeof value.applied === 'string')
+    && typeof value.exact === 'boolean';
+}
+
+function isFallbackReport(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return typeof value.requestedProvider === 'string' && isOptionalString(value.requestedModel)
+    && Array.isArray(value.failedAttempts)
+    && value.failedAttempts.every(hop => isPlainObject(hop) && typeof hop.provider === 'string'
+      && isOptionalString(hop.model) && isOptionalString(hop.errorCode));
+}
+
 export function isCachedResponse(value: unknown): value is LLMResponse {
   if (!value || typeof value !== 'object') return false;
   const response = value as Partial<LLMResponse>;
   const usage = response.usage;
   return typeof response.message === 'string' && typeof response.model === 'string'
+    && (response.lengthCause === undefined || response.lengthCause === 'reasoning' || response.lengthCause === 'answer')
+    && (response.reasoningEffort === undefined || isReasoningEffortReport(response.reasoningEffort))
+    && (response.fallback === undefined || isFallbackReport(response.fallback))
     && [response.id, response.reasoning, response.content]
       .every(field => field === undefined || typeof field === 'string')
     && [response.metadata, response.cache]

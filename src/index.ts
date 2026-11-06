@@ -177,6 +177,7 @@ export {
   QuotaDeniedError,
   AuthenticationError,
   InvalidRequestError,
+  ReasoningEffortUnsupportedError,
   ModelNotFoundError,
   TimeoutError,
   NetworkError,

@@ -10,8 +10,10 @@ import {
 } from '../providers/cloudflare-reasoning';
 import { getCatalogEntry } from '../model-catalog';
 import {
-  InvalidRequestError, LLMProviders, NoRouteError, ResilienceContext, TimeoutError, normalizeLLMResponse,
+  InvalidRequestError, LLMProviders, NoRouteError, ReasoningEffortUnsupportedError, ResilienceContext, TimeoutError,
+  normalizeLLMResponse,
 } from '../index';
+import { isCachedResponse } from '../utils/response-cache';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
 import { lengthCauseFor } from '../utils/reasoning';
@@ -121,7 +123,7 @@ describe('Workers AI reasoning effort (#135)', () => {
       model: '@cf/nvidia/nemotron-3-120b-a12b', messages, reasoning: { effort: 'high' },
     });
     expect(sent()).not.toHaveProperty('chat_template_kwargs');
-    expect(high.reasoningEffort).toEqual({ requested: 'high', applied: 'default', exact: false });
+    expect(high.reasoningEffort).toEqual({ requested: 'high', applied: null, exact: false });
   });
 
   it('sends nothing and reports not-applied for a model without a mapping', async () => {
@@ -241,6 +243,27 @@ describe('reasoning accounting (#136 need 1)', () => {
     expect(lengthCauseFor('length', '', undefined)).toBeUndefined();
     expect(lengthCauseFor('stop', '', 'r')).toBeUndefined();
   });
+
+  it('classifies think tags anywhere in the text, and template-opened think blocks', () => {
+    // Unclosed block after an earlier closed one.
+    expect(lengthCauseFor('length', '<think>a</think> b <think>more', undefined)).toBe('reasoning');
+    // Template-injected opener: only a closing tag appears in the output.
+    expect(lengthCauseFor('length', 'reasoning text</think>', undefined)).toBe('reasoning');
+    expect(lengthCauseFor('length', 'reasoning text</think> partial answer', undefined)).toBe('answer');
+    expect(lengthCauseFor('length', '<think>x</think>', undefined)).toBe('reasoning');
+    // No tags at all from a model whose template opens the block: still reasoning.
+    expect(lengthCauseFor('length', 'Let me think step by step', undefined, { thinkingModel: true })).toBe('reasoning');
+    expect(lengthCauseFor('length', 'Let me think step by step', undefined)).toBe('answer');
+    // A separate reasoning field means the message text is the answer.
+    expect(lengthCauseFor('length', 'partial answer', 'thoughts', { thinkingModel: true })).toBe('answer');
+  });
+
+  it('marks an untagged truncated QwQ output as a reasoning cut-off', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('Okay, first consider the', {}, 'length'));
+    const provider = new CloudflareProvider({ ai: { run } as unknown as Ai, maxRetries: 0 });
+    const response = await provider.generateResponse({ model: '@cf/qwen/qwq-32b', messages });
+    expect(response.lengthCause).toBe('reasoning');
+  });
 });
 
 describe('pinned models and fallback (#128, #133)', () => {
@@ -359,6 +382,9 @@ describe('pinned models and fallback (#128, #133)', () => {
     expect(completion.fallback).toMatchObject({ requestedProvider: 'cloudflare', requestedModel: pinned });
 
     fetchMock.mockClear();
+    // After one failure the breaker's degradation curve sheds a random share of
+    // traffic; pin the draw so the second call reaches the binding.
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     await expect(llm.generateManagedResponseStream({ model: pinned, messages, maxTokens: 10, allowFallback: false }))
       .rejects.toThrow('binding exploded');
     expect(fetchMock).not.toHaveBeenCalled();
@@ -367,5 +393,169 @@ describe('pinned models and fallback (#128, #133)', () => {
   it('getRoutingInfo honors allowFallback: false for an unservable pin', () => {
     const { llm } = setup(null);
     expect(() => llm.getRoutingInfo({ model: 'gpt-4o-mini', messages, allowFallback: false })).toThrow(NoRouteError);
+  });
+});
+
+describe('strict reasoning through the factory (#135)', () => {
+  const flash = '@cf/zai-org/glm-5.3-flash';
+
+  function setup(run: ReturnType<typeof vi.fn>, extra: Record<string, unknown> = {}) {
+    const fetchMock = vi.fn().mockImplementation(async () => groqResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      groq: { apiKey: 'test', maxRetries: 0 },
+      stateScope: 'client',
+      ...extra,
+    });
+    return { llm, fetchMock };
+  }
+
+  it('does not fall back on a strict rejection under the default any-error rule', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    const { llm, fetchMock } = setup(run);
+    const request = { model: flash, messages, maxTokens: 10, reasoning: { effort: 'medium' as const, strict: true } };
+
+    const rejection = llm.generateResponse(request);
+    await expect(rejection).rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
+    await expect(rejection).rejects.toBeInstanceOf(InvalidRequestError);
+    await expect(llm.generateManagedResponseStream(request)).rejects.toBeInstanceOf(ReasoningEffortUnsupportedError);
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not fail over to a provider that ignores the level when the strict call errors', async () => {
+    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
+    const { llm, fetchMock } = setup(run, {
+      fallbackRules: [{ condition: 'error', fallbackProvider: 'groq' }],
+    });
+    await expect(llm.generateResponse({
+      model: flash, messages, maxTokens: 10, reasoning: { effort: 'low', strict: true },
+    })).rejects.toThrow('binding exploded');
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('still falls back when strict is not set', async () => {
+    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
+    const { llm } = setup(run);
+    const response = await llm.generateResponse({ model: flash, messages, maxTokens: 10, reasoning: { effort: 'medium' } });
+    expect(response.provider).toBe('groq');
+  });
+});
+
+describe('fallback review fixes', () => {
+  const pinned = '@cf/zai-org/glm-5.3-flash';
+
+  it('allowFallback: false with a skipped pin throws NoRouteError naming the skip', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    const fetchMock = vi.fn().mockImplementation(async () => groqResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const resilienceContext = new ResilienceContext();
+    resilienceContext.exhaustion.markExhausted('cloudflare');
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      groq: { apiKey: 'test', maxRetries: 0 },
+      resilienceContext,
+    });
+    const request = { model: pinned, messages, maxTokens: 10, allowFallback: false };
+    const rejection = llm.generateResponse(request);
+    await expect(rejection).rejects.toBeInstanceOf(NoRouteError);
+    await expect(rejection).rejects.toThrow('cloudflare: QUOTA_EXHAUSTED');
+    await expect(llm.generateManagedResponseStream(request)).rejects.toBeInstanceOf(NoRouteError);
+    expect(() => llm.getRoutingInfo(request)).toThrow(NoRouteError);
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('names skipped providers when nothing could be attempted', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    const resilienceContext = new ResilienceContext();
+    resilienceContext.exhaustion.markExhausted('cloudflare');
+    const llm = new LLMProviders({ cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 }, resilienceContext });
+    await expect(llm.generateResponse({ model: pinned, messages, maxTokens: 10 }))
+      .rejects.toThrow('All providers failed (cloudflare: QUOTA_EXHAUSTED)');
+  });
+
+  it('reports the model requested at plan time even if a fallback rule rewrites it', async () => {
+    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
+    const groqFailure = new Response(JSON.stringify({ error: { message: 'down' } }), {
+      status: 500, headers: { 'Content-Type': 'application/json' },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(groqFailure)
+      .mockImplementation(async () => groqResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      groq: { apiKey: 'test', maxRetries: 0 },
+      cerebras: { apiKey: 'test', maxRetries: 0 },
+      stateScope: 'client',
+      fallbackRules: [{ condition: 'error', fallbackProvider: 'cloudflare', fallbackModel: '@cf/meta/llama-3.1-8b-instruct' }],
+    });
+    const response = await llm.generateResponse({ model: pinned, messages, maxTokens: 10 });
+    expect(response.provider).not.toBe('cloudflare');
+    expect(response.fallback?.requestedModel).toBe(pinned);
+    expect(response.fallback?.failedAttempts[0]).toEqual({ provider: 'cloudflare', model: pinned, errorCode: 'ERROR' });
+  });
+
+  it('rejects cached envelopes with malformed reasoning or fallback fields', () => {
+    const base = {
+      message: 'cached', model: pinned, provider: 'cloudflare', responseTime: 1,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cost: 0 },
+    };
+    expect(isCachedResponse(base)).toBe(true);
+    expect(isCachedResponse({
+      ...base,
+      lengthCause: 'answer',
+      reasoningEffort: { requested: 'high', applied: 'high', exact: true },
+      fallback: { requestedProvider: 'cloudflare', failedAttempts: [{ provider: 'cloudflare', errorCode: 'ERROR' }] },
+    })).toBe(true);
+    expect(isCachedResponse({ ...base, fallback: { requestedProvider: 'cloudflare', failedAttempts: 'x' } })).toBe(false);
+    expect(isCachedResponse({ ...base, fallback: { requestedProvider: 'cloudflare', failedAttempts: [null] } })).toBe(false);
+    expect(isCachedResponse({ ...base, fallback: null })).toBe(false);
+    expect(isCachedResponse({ ...base, reasoningEffort: { requested: 'extreme', applied: null, exact: false } })).toBe(false);
+    expect(isCachedResponse({ ...base, reasoningEffort: { requested: 'high', applied: 1, exact: true } })).toBe(false);
+    expect(isCachedResponse({ ...base, lengthCause: 'other' })).toBe(false);
+  });
+
+  it('treats a corrupt cached fallback report as a miss instead of failing normalization', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('fresh'));
+    const corrupt = {
+      message: 'cached', model: pinned, provider: 'cloudflare', responseTime: 1,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cost: 0 },
+      fallback: { requestedProvider: 'cloudflare', failedAttempts: 'x' },
+    };
+    const cache = { get: vi.fn().mockResolvedValue(JSON.stringify(corrupt)), put: vi.fn().mockResolvedValue(undefined) };
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 }, stateScope: 'client', responseCache: cache,
+    });
+    const response = await llm.generateResponse({ model: pinned, messages, maxTokens: 10 });
+    expect(response.message).toBe('fresh');
+    expect(() => normalizeLLMResponse(response)).not.toThrow();
+  });
+
+  it('replays the original fallback report on a cache hit', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('unused'));
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => groqResponse()));
+    const fallback = {
+      requestedProvider: 'cloudflare', requestedModel: pinned,
+      failedAttempts: [{ provider: 'cloudflare', model: pinned, errorCode: 'ERROR' }],
+    };
+    const cached = {
+      message: 'from groq', model: 'llama-3.3-70b-versatile', provider: 'groq', responseTime: 1,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cost: 0 }, fallback,
+    };
+    const cache = { get: vi.fn().mockResolvedValue(JSON.stringify(cached)), put: vi.fn().mockResolvedValue(undefined) };
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      groq: { apiKey: 'test', maxRetries: 0 },
+      stateScope: 'client',
+      responseCache: cache,
+    });
+    const response = await llm.generateResponse({ model: pinned, messages, maxTokens: 10 });
+    expect(response.cache?.factory?.status).toBe('hit');
+    expect(response.fallback).toEqual(fallback);
+    expect(run).not.toHaveBeenCalled();
   });
 });

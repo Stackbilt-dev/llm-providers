@@ -19,6 +19,7 @@ import { BaseProvider } from './base.js';
 import {
   ConfigurationError,
   InvalidRequestError,
+  ReasoningEffortUnsupportedError,
   ModelNotFoundError,
   SchemaDriftError
 } from '../errors.js';
@@ -841,7 +842,7 @@ export class CloudflareProvider extends BaseProvider {
     const resolved = resolveCloudflareReasoningEffort(model, request.reasoning?.effort);
     if (resolved && request.reasoning?.strict && !resolved.report.exact) {
       const { requested, applied } = resolved.report;
-      throw new InvalidRequestError(
+      throw new ReasoningEffortUnsupportedError(
         this.name,
         applied === null
           ? `Model '${model}' does not accept reasoning effort '${requested}' on Workers AI`
@@ -1117,7 +1118,9 @@ export class CloudflareProvider extends BaseProvider {
     const usage = this.extractUsage(result, model, request, content);
     const cache = this.extractCacheObservability(result, request, usage);
     const finishReason = this.extractFinishReason(result, toolCalls);
-    const lengthCause = lengthCauseFor(finishReason, content, extraction.reasoning);
+    const lengthCause = lengthCauseFor(finishReason, content, extraction.reasoning, {
+      thinkingModel: this.getModelCapabilities()[model]?.thinkingModel === true,
+    });
     const reasoningEffort = resolveCloudflareReasoningEffort(model, request.reasoning?.effort)?.report;
 
     const response: LLMResponse = {

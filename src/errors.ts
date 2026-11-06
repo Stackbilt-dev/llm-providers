@@ -69,6 +69,17 @@ export class InvalidRequestError extends LLMProviderError {
   }
 }
 
+/**
+ * `reasoning.strict` rejected a reasoning effort the model can't take exactly.
+ * The factory never falls back on this error: another provider could not honour
+ * the level either, so failing over would drop the guarantee.
+ */
+export class ReasoningEffortUnsupportedError extends InvalidRequestError {
+  constructor(provider: string, message: string) {
+    super(provider, message);
+  }
+}
+
 export class ModelNotFoundError extends LLMProviderError {
   constructor(provider: string, model: string) {
     super(`Model '${model}' not found`, 'MODEL_NOT_FOUND', provider, false, 404);

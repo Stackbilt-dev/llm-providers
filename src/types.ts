@@ -177,9 +177,11 @@ export interface LLMRequest {
      */
     effort?: ReasoningEffortLevel;
     /**
-     * Throw `InvalidRequestError` instead of sending a nearby level (or nothing) when
-     * the provider cannot apply `effort` exactly for this model. Default false.
-     * Currently enforced by the Cloudflare provider.
+     * Throw `ReasoningEffortUnsupportedError` (an `InvalidRequestError`) instead of
+     * sending a nearby level (or nothing) when the provider cannot apply `effort`
+     * exactly for this model. Default false. Currently enforced by the Cloudflare
+     * provider; the factory never falls back on that error, and with `effort` set
+     * it never fails over to a provider other than Cloudflare.
      */
     strict?: boolean;
     /** Cerebras: controls how reasoning tokens appear in the response. */
@@ -221,7 +223,7 @@ export interface ReasoningEffortCapability {
 /** What happened to a requested `reasoning.effort` on the provider that served the call. */
 export interface ReasoningEffortReport {
   requested: ReasoningEffortLevel;
-  /** Native level sent to the provider; `'default'` when nothing was sent because the provider default matches; null when not applied. */
+  /** Native level sent to the provider; null when nothing was sent for this model. */
   applied: string | null;
   /** True when `requested` was sent as-is. */
   exact: boolean;

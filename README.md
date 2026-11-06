@@ -248,7 +248,7 @@ Provider notes:
 
 `reasoning.effort` (`'low' | 'medium' | 'high' | 'none'`) limits how much a reasoning model thinks before answering. Reasoning tokens count against `maxTokens`, so a high effort can use the whole budget and leave no answer.
 
-On Workers AI, each model documents its own levels, and some document aliases that turn a "lower" value into the model's maximum (GLM-5.3 Flash maps `none` and `medium` to `max`). The Cloudflare provider therefore maps effort per model, from each model's Cloudflare docs page, and never forwards an alias it hasn't checked:
+On Workers AI, each model documents its own levels, and some document aliases that turn a "lower" value into the model's maximum (GLM-5.3 and GLM-5.3 Flash map `none` and `medium` to `max`). The Cloudflare provider therefore maps effort per model, from each model's Cloudflare docs page, and never forwards an alias it hasn't checked:
 
 | Model | Sent as requested | Mapped | Not sent |
 |---|---|---|---|
@@ -258,9 +258,9 @@ On Workers AI, each model documents its own levels, and some document aliases th
 | `@cf/deepseek-ai/deepseek-v4-flash-0731`, `-pro-0813` | none, low, high | medium → high | |
 | `@cf/moonshotai/kimi-k2.6` | none, high | low, medium → high | |
 | `@cf/qwen/qwen3.8-27b` | low, medium | high → xhigh | none |
-| `@cf/nvidia/nemotron-3-120b-a12b` | none, low (via `chat_template_kwargs`) | medium, high → model default | |
+| `@cf/nvidia/nemotron-3-120b-a12b` | none, low (via `chat_template_kwargs`) | | medium, high |
 
-Other Workers AI models get nothing sent. The response reports what happened:
+Nemotron's page documents an off mode and a low-effort mode but not which mode is the default, so medium and high send nothing and report `applied: null`. Other Workers AI models get nothing sent. The response reports what happened:
 
 ```typescript
 const response = await llm.generateResponse({
@@ -272,12 +272,14 @@ const response = await llm.generateResponse({
 response.reasoningEffort; // { requested: 'medium', applied: 'high', exact: false }
 ```
 
-Set `reasoning: { effort, strict: true }` to get an `InvalidRequestError` before the call whenever the level can't be sent exactly. `getModelCapabilities()` and the model catalog expose the mapping as `capabilities.reasoningEffort` (`{ exact, source, verifiedAt }`).
+Set `reasoning: { effort, strict: true }` to get a `ReasoningEffortUnsupportedError` (a subclass of `InvalidRequestError`) before the call whenever the level can't be sent exactly. Strict mode is enforced by the Cloudflare provider only, so the factory never falls back on that error, and a strict request never fails over to a provider other than Cloudflare (other providers would drop or reinterpret the level), even under the default any-error fallback rule. When the Cloudflare call fails for another reason, the error is thrown rather than the request being served elsewhere. `getModelCapabilities()` and the model catalog expose the mapping as `capabilities.reasoningEffort` (`{ exact, source, verifiedAt }`).
 
 Two related fields help with budget planning:
 
 - `usage.reasoningTokens`: reasoning tokens, when the provider reports them separately (Workers AI: `completion_tokens_details.reasoning_tokens`). They are part of `outputTokens`.
-- `lengthCause`: set when `finishReason` is `'length'`. `'reasoning'` means the budget ran out before any answer text (including an unclosed `<think>` block); `'answer'` means the answer was cut off.
+- `lengthCause`: set when `finishReason` is `'length'`. `'reasoning'` means the budget ran out before any answer text: an unclosed `<think>` block, nothing after the last `</think>`, or, for models whose chat template opens the think block itself (QwQ, R1-Distill), untagged text with no separate reasoning field. `'answer'` means the answer was cut off.
+
+Stream completions report `provider` and `model` but not `reasoningEffort`; the level sent is the same as for `generateResponse()`.
 
 ## Logging
 
@@ -558,7 +560,7 @@ Default provider precedence remains Cloudflare → Cerebras → Groq → NVIDIA 
 
 A pinned `model` is tried first, but by default it is not a guarantee: on an eligible failure, or when the pinned provider is skipped (quota-exhausted, circuit open, ledger-limited), another provider and model can serve the request. `fallbackRules: []` removes the rule-based fallbacks only; server errors, network errors, timeouts and schema drift still fall back.
 
-Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider), its error is rethrown, and `NoRouteError` is thrown if no configured provider can serve the pinned model. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
+Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open or ledger-limited; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
 
 ```typescript
 const response = await llm.generateResponse({
@@ -576,7 +578,7 @@ response.fallback;
 //   failedAttempts: [{ provider: 'cloudflare', model: '@cf/zai-org/glm-5.3-flash', errorCode: 'TIMEOUT' }] }
 ```
 
-`normalizeLLMResponse()` copies the failed attempts into `routing.fallbackChain`.
+`normalizeLLMResponse()` copies the failed attempts into `routing.fallbackChain`. `requestedModel` is the model planned before any fallback rule ran. A factory response-cache hit returns the stored response unchanged, including the `fallback` of the call that produced it, since the cached text is still the substitute's output.
 
 ## Error Handling
 
@@ -916,6 +918,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `BaseProvider` | Abstract base with shared resiliency, metrics, and cost calculation |
 | `QuotaDeniedError` | Terminal local-policy denial; no fallback or provider exhaustion. Extends `QuotaExceededError` (code `QUOTA_EXCEEDED`) for 1.x compatibility; check `instanceof QuotaDeniedError` or `localPolicy` to tell it apart from vendor exhaustion |
 | `NoRouteError` | No configured route available; a nonretryable configuration error |
+| `ReasoningEffortUnsupportedError` | `reasoning.strict` rejected an effort the model can't take exactly. Extends `InvalidRequestError`; never triggers fallback |
 
 ### Utilities
 
