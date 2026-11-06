@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.24.1] — 2026-11-06
+
+### Fixed
+- Workers AI responses with `null` in `message.reasoning` or `message.reasoning_content` no longer fail schema validation with `SchemaDriftError` (#130, #134). Both fields now accept a string or `null`; other types are still rejected, and `null` reasoning is reported as no reasoning.
+
 ## [1.24.0] — 2026-11-06
 
 ### Added
