@@ -1132,10 +1132,13 @@ export class LLMProviderFactory {
             output: typeof output === 'string' ? output : JSON.stringify(output)
           });
         } catch (error) {
+          // Never report a failure as an empty success: a non-Error throw or an
+          // empty message still yields error text for the model.
+          const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
           toolResults.push({
             id: toolCall.id,
             output: '',
-            error: (error as Error).message
+            error: message || `Tool '${toolCall.function.name}' failed without an error message`
           });
         }
       }

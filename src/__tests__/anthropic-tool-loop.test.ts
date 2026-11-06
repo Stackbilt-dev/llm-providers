@@ -44,6 +44,42 @@ const TOOL_TURN = [
   { type: 'tool_use', id: 'toolu_01', name: 'lookup', input: { id: 42, tags: ['a', 'b'] } },
 ];
 
+function serverError() {
+  return {
+    ok: false,
+    status: 500,
+    headers: JSON_HEADERS,
+    json: async () => ({ error: { type: 'api_error', message: 'Internal server error' } }),
+    text: async () => '{"error":{"type":"api_error","message":"Internal server error"}}',
+  };
+}
+
+function openAiResponse(message: Record<string, unknown>, finishReason = 'stop') {
+  return {
+    ok: true,
+    headers: JSON_HEADERS,
+    json: async () => ({
+      id: 'chatcmpl_1',
+      object: 'chat.completion',
+      created: 1700000000,
+      model: 'gpt-4o-mini',
+      choices: [{ index: 0, message: { role: 'assistant', ...message }, finish_reason: finishReason }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }),
+  };
+}
+
+function sseBody(events: unknown[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const text = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(text));
+      controller.close();
+    },
+  });
+}
+
 function requestBody(callIndex: number): { messages: Array<{ role: string; content: unknown }> } {
   const init = mockFetch.mock.calls[callIndex][1] as RequestInit;
   return JSON.parse(init.body as string);
@@ -182,10 +218,42 @@ describe('Anthropic tool loops (#124)', () => {
       ]);
     });
 
+    it('drops whitespace-only text when rebuilding a turn', async () => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'done' }]));
+      const request = followUp(undefined);
+      request.messages[1] = { ...request.messages[1], content: '\n\n ' };
+
+      await provider.generateResponse(request);
+
+      expect(requestBody(0).messages[1].content).toEqual([
+        { type: 'tool_use', id: 'toolu_01', name: 'lookup', input: { id: 42, tags: ['a', 'b'] } },
+      ]);
+    });
+
+    it('replays the turn unchanged on the streaming path too', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'text/event-stream' }),
+        body: sseBody([
+          { type: 'message_start', message: { id: 'msg_2', usage: { input_tokens: 5, output_tokens: 0 } } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'done' } },
+          { type: 'message_stop' },
+        ]),
+      });
+
+      const stream = await provider.streamResponse(followUp({ provider: 'anthropic', blocks: TOOL_TURN }));
+      const reader = stream.getReader();
+      while (!(await reader.read()).done) { /* drain */ }
+
+      expect(requestBody(0).messages[1].content).toEqual(TOOL_TURN);
+    });
+
     it.each([
       ['an empty array', []],
       ['a block without a type', [{ text: 'x' }]],
       ['a non-array', 'not blocks'],
+      ['a user-turn block', [{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'x' }]],
+      ['an image block', [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }]],
     ])('rejects malformed Anthropic content (%s) before the call', async (_label, blocks) => {
       await expect(provider.generateResponse(followUp({ provider: 'anthropic', blocks: blocks as never })))
         .rejects.toBeInstanceOf(ConfigurationError);
@@ -253,6 +321,95 @@ describe('Anthropic tool loops (#124)', () => {
     });
   });
 
+  describe('tool failures without a message', () => {
+    it.each([
+      ['a non-Error throw', 'disk full', 'disk full'],
+      ['an Error with no message', new Error(), "Tool 'lookup' failed without an error message"],
+      ['a thrown object', { code: 7 }, "Tool 'lookup' failed without an error message"],
+    ])('still sends an error result for %s', async (_label, thrown, expected) => {
+      mockFetch
+        .mockResolvedValueOnce(anthropicResponse(TOOL_TURN, 'tool_use'))
+        .mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'The lookup failed.' }]));
+
+      const factory = new LLMProviderFactory({
+        anthropic: { apiKey: 'test-key', maxRetries: 0 },
+        defaultProvider: 'anthropic',
+        costOptimization: false,
+      });
+
+      await factory.generateResponseWithTools({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'Look up 42' }],
+        tools: [lookupTool],
+      }, { execute: vi.fn().mockRejectedValueOnce(thrown) });
+
+      expect(requestBody(1).messages[2].content).toEqual([
+        { type: 'tool_result', tool_use_id: 'toolu_01', content: expected, is_error: true },
+      ]);
+    });
+  });
+
+  describe('fallback partway through a tool loop', () => {
+    const bothProviders = (defaultProvider: 'anthropic' | 'openai') => new LLMProviderFactory({
+      anthropic: { apiKey: 'test-key', maxRetries: 0 },
+      openai: { apiKey: 'test-openai-key', maxRetries: 0 },
+      defaultProvider,
+      costOptimization: false,
+    });
+
+    it('does not send Anthropic content to another provider', async () => {
+      mockFetch
+        .mockResolvedValueOnce(anthropicResponse(TOOL_TURN, 'tool_use'))
+        .mockResolvedValueOnce(serverError())
+        .mockResolvedValueOnce(openAiResponse({ content: 'Record 42 is ok.' }));
+
+      const response = await bothProviders('anthropic').generateResponseWithTools({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'Look up 42' }],
+        tools: [lookupTool],
+      }, { execute: vi.fn().mockResolvedValueOnce('found') });
+
+      expect(response.provider).toBe('openai');
+      const [url, init] = mockFetch.mock.calls[2] as [string, RequestInit];
+      expect(url).toContain('openai');
+      const body = init.body as string;
+      expect(body).not.toContain('sig-reasoning-1');
+      expect(body).not.toContain('redacted_thinking');
+      expect(body).not.toContain('providerContent');
+      const assistant = (JSON.parse(body).messages as Array<Record<string, unknown>>)
+        .find(message => message.role === 'assistant');
+      expect(assistant).toMatchObject({ tool_calls: [{ id: 'toolu_01', function: { name: 'lookup' } }] });
+    });
+
+    it('rebuilds another provider’s turn for Anthropic, without whitespace-only text', async () => {
+      mockFetch
+        .mockResolvedValueOnce(openAiResponse({
+          content: '\n\n',
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{"id":42}' } }],
+        }, 'tool_calls'))
+        .mockResolvedValueOnce(serverError())
+        .mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'Record 42 is ok.' }]));
+
+      const response = await bothProviders('openai').generateResponseWithTools({
+        messages: [{ role: 'user', content: 'Look up 42' }],
+        tools: [lookupTool],
+      }, { execute: vi.fn().mockResolvedValueOnce('found') });
+
+      expect(response.provider).toBe('anthropic');
+      const [url] = mockFetch.mock.calls[2] as [string, RequestInit];
+      expect(url).toContain('anthropic');
+      const messages = requestBody(2).messages;
+      expect(messages[1]).toEqual({
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call_1', name: 'lookup', input: { id: 42 } }],
+      });
+      expect(messages[2]).toEqual({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'found', is_error: false }],
+      });
+    });
+  });
+
   describe('boundaries', () => {
     const base: LLMResponse = {
       message: '',
@@ -270,6 +427,9 @@ describe('Anthropic tool loops (#124)', () => {
         { provider: 7, blocks: [] },
         { provider: 'anthropic', blocks: [{ text: 'no type' }] },
         { provider: 'anthropic', blocks: 'nope' },
+        { provider: 'anthropic', blocks: [] },
+        { provider: '', blocks: TOOL_TURN },
+        { provider: 'anthropic', blocks: [{ type: 'tool_result', tool_use_id: 'x' }] },
       ]) {
         expect(isCachedResponse({ ...base, providerContent })).toBe(false);
       }
@@ -285,6 +445,21 @@ describe('Anthropic tool loops (#124)', () => {
       });
       expect(canonical.messages[1].providerContent).toEqual(providerContent);
       expect(normalizeLLMResponse({ ...base, providerContent }).providerContent).toEqual(providerContent);
+    });
+
+    it('canonical copies are deep: editing one leaves the original blocks unchanged', () => {
+      const blocks = JSON.parse(JSON.stringify(TOOL_TURN)) as Array<Record<string, unknown>>;
+      const canonical = normalizeLegacyRequest({
+        messages: [
+          { role: 'user', content: 'Look up 42' },
+          { role: 'assistant', content: '', providerContent: { provider: 'anthropic', blocks } },
+        ],
+      });
+      const copied = canonical.messages[1].providerContent!.blocks;
+      (copied[0] as { signature: string }).signature = 'edited';
+      copied.push({ type: 'text', text: 'extra' });
+
+      expect(blocks).toEqual(TOOL_TURN);
     });
   });
 });

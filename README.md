@@ -707,9 +707,9 @@ const result = await llm.generateResponseWithTools(
 console.log(result.message); // final assistant response after tool execution
 ```
 
-A failed tool call is sent back to the model as an error result carrying the error message, so the model can recover or explain the failure.
+A failed tool call is sent back to the model as an error result carrying the error message, so the model can recover or explain the failure. A throw without a usable message (a non-`Error` value, or an `Error` with an empty message) is reported as `Tool '<name>' failed without an error message`, never as an empty success.
 
-**Anthropic.** Claude 5.x models think by default, and Anthropic requires a tool-use turn's thinking blocks to be sent back complete and unmodified. An Anthropic response that calls tools therefore carries `providerContent`: the turn's content blocks (thinking with signatures, `redacted_thinking`, text, `tool_use`), in the order Claude returned them. `generateResponseWithTools` copies it onto the assistant message, and the Anthropic provider sends it back verbatim. If you run the loop yourself, set `providerContent` on the assistant message from the response, and don't edit it. Other providers ignore the field.
+**Anthropic.** Claude 5.x models think by default, and Anthropic requires a tool-use turn's thinking blocks to be sent back complete and unmodified. An Anthropic response that calls tools therefore carries `providerContent`: the turn's content blocks (thinking with signatures, `redacted_thinking`, text, `tool_use`), in the order Claude returned them. `generateResponseWithTools` copies it onto the assistant message, and the Anthropic provider sends it back verbatim. If you run the loop yourself, set `providerContent` on the assistant message from the response, and don't edit it. Other providers ignore the field. It is set only on responses that call tools, the turns whose thinking Anthropic requires back; thinking from a final answer is not carried into later turns. Content that isn't a non-empty array of assistant blocks (for example one containing a `tool_result` or `image` block) throws `ConfigurationError` before the call.
 
 ## Built-in Tools (Server-Side)
 

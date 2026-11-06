@@ -12,6 +12,7 @@ import type {
   ToolResult,
   ProviderContent,
 } from './types.js';
+import { copyProviderContent } from './utils/provider-content.js';
 import type { ModelRecommendationUseCase, ProviderName } from './model-catalog.js';
 
 export interface CanonicalMessage {
@@ -259,7 +260,7 @@ export function normalizeLLMResponse(
     provider: response.provider as ProviderName,
     finishReason: response.finishReason,
     toolCalls: response.toolCalls,
-    ...(response.providerContent ? { providerContent: response.providerContent } : {}),
+    ...(response.providerContent ? { providerContent: copyProviderContent(response.providerContent) } : {}),
     usage: response.usage,
     responseTime: response.responseTime,
     routing: options.routing ?? {
@@ -414,10 +415,6 @@ function copyMessage(message: LLMMessage | CanonicalMessage): CanonicalMessage {
     toolResults: message.toolResults?.map(copyToolResult),
     ...(message.providerContent ? { providerContent: copyProviderContent(message.providerContent) } : {}),
   };
-}
-
-function copyProviderContent(content: ProviderContent): ProviderContent {
-  return { provider: content.provider, blocks: Array.isArray(content.blocks) ? [...content.blocks] : content.blocks };
 }
 
 function copyTool(tool: Tool): Tool {

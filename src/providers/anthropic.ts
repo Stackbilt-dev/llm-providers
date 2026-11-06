@@ -27,6 +27,7 @@ import {
 import { getProviderDefaultModel, resolveModelId } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { joinReasoning } from '../utils/reasoning.js';
+import { isValidProviderContent } from '../utils/provider-content.js';
 
 /**
  * Minimum envelope fields the Anthropic response parser reads. Changing this
@@ -527,7 +528,8 @@ export class AnthropicProvider extends BaseProvider {
         anthropicMessage.content = replayed;
       } else if (message.toolCalls && message.toolCalls.length > 0) {
         anthropicMessage.content = [
-          ...(message.content ? [{ type: 'text' as const, text: message.content }] : []),
+          // Whitespace-only text (common beside tool calls) is not a valid text block.
+          ...(message.content?.trim() ? [{ type: 'text' as const, text: message.content }] : []),
           ...message.toolCalls.map(tc => ({
             type: 'tool_use' as const,
             id: tc.id,
@@ -640,16 +642,13 @@ export class AnthropicProvider extends BaseProvider {
   private replayableContent(message: LLMMessage): Array<Record<string, unknown>> | undefined {
     const providerContent = message.providerContent;
     if (!providerContent || providerContent.provider !== this.name) return undefined;
-    const blocks = providerContent.blocks;
-    const valid = Array.isArray(blocks) && blocks.length > 0 && blocks.every(block =>
-      !!block && typeof block === 'object' && !Array.isArray(block) && typeof block.type === 'string');
-    if (!valid) {
+    if (!isValidProviderContent(providerContent)) {
       throw new ConfigurationError(
         this.name,
-        'providerContent.blocks must be a non-empty array of content blocks, passed back unchanged from LLMResponse.providerContent.'
+        'providerContent.blocks must be a non-empty array of assistant content blocks, passed back unchanged from LLMResponse.providerContent.'
       );
     }
-    return blocks;
+    return providerContent.blocks;
   }
 
   private formatMessageContent(
