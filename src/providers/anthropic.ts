@@ -965,7 +965,7 @@ export class AnthropicProvider extends BaseProvider {
         && !isValidProviderContent(message.providerContent)) {
         throw new ConfigurationError(
           this.name,
-          'providerContent.blocks must be a non-empty array of content blocks, passed back unchanged from LLMResponse.providerContent: no user-turn blocks (tool_result, image, document, search_result), complete tool_use blocks, and thinking blocks with their signatures.'
+          'providerContent.blocks must be a non-empty array of content blocks, passed back unchanged from LLMResponse.providerContent: no user-turn blocks (tool_result, image, document, search_result), complete tool_use blocks, thinking blocks with their text and signatures, and text blocks with text.'
         );
       }
     }

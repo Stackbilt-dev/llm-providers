@@ -410,6 +410,10 @@ describe('Anthropic tool loops (#124)', () => {
       ['a tool_use block without input', [{ type: 'tool_use', id: 'toolu_01', name: 'lookup' }]],
       ['an unsigned thinking block', [{ type: 'thinking', thinking: '' }, ...TOOL_TURN.slice(4)]],
       ['a redacted_thinking block without data', [{ type: 'redacted_thinking' }, ...TOOL_TURN.slice(4)]],
+      ['a thinking block without thinking text', [{ type: 'thinking', signature: 'sig' }, ...TOOL_TURN.slice(4)]],
+      ['a thinking block with non-string thinking', [{ type: 'thinking', thinking: 7, signature: 'sig' }, ...TOOL_TURN.slice(4)]],
+      ['a text block without text', [{ type: 'text' }, ...TOOL_TURN.slice(4)]],
+      ['a text block with non-string text', [{ type: 'text', text: { value: 'x' } }, ...TOOL_TURN.slice(4)]],
     ])('rejects malformed Anthropic content (%s) before the call', async (_label, blocks) => {
       await expect(provider.generateResponse(followUp({ provider: 'anthropic', blocks: blocks as never })))
         .rejects.toBeInstanceOf(ConfigurationError);
@@ -567,6 +571,30 @@ describe('Anthropic tool loops (#124)', () => {
 
       expect(mockFetch).not.toHaveBeenCalled();
       expect(response.providerContent).toEqual({ provider: 'anthropic', blocks: TOOL_TURN });
+    });
+
+    it('writes an Anthropic tool-call response with providerContent to the cache and serves it', async () => {
+      mockFetch.mockResolvedValueOnce(anthropicResponse(TOOL_TURN, 'tool_use'));
+      const store = new Map<string, string>();
+      const cache = {
+        get: vi.fn(async (key: string) => store.get(key) ?? null),
+        put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+      };
+      const llm = new LLMProviders({
+        anthropic: { apiKey: 'test-key', maxRetries: 0 }, stateScope: 'client', responseCache: cache,
+      });
+      const request = {
+        model: 'claude-opus-5-5', messages: [{ role: 'user' as const, content: 'Look up 42' }], tools: [lookupTool],
+      };
+
+      const first = await llm.generateResponse(request);
+      await vi.waitFor(() => expect(cache.put).toHaveBeenCalledTimes(1));
+      const second = await llm.generateResponse(request);
+
+      expect(first.providerContent).toEqual({ provider: 'anthropic', blocks: TOOL_TURN });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(second.cache).toMatchObject({ factory: { status: 'hit' } });
+      expect(second.providerContent).toEqual({ provider: 'anthropic', blocks: TOOL_TURN });
     });
 
     it('caches and serves an Anthropic tool-call response that has no providerContent', async () => {
@@ -762,6 +790,8 @@ describe('Anthropic tool loops (#124)', () => {
         { provider: '', blocks: TOOL_TURN },
         { provider: 'anthropic', blocks: [{ type: 'tool_result', tool_use_id: 'x' }] },
         { provider: 'anthropic', blocks: [{ type: 'thinking', thinking: '', signature: '' }] },
+        { provider: 'anthropic', blocks: [{ type: 'thinking', signature: 'sig' }] },
+        { provider: 'anthropic', blocks: [{ type: 'text' }] },
       ]) {
         expect(isCachedResponse({ ...base, providerContent })).toBe(false);
       }
