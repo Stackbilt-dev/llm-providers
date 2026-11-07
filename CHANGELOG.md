@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Fixed
+- Cloudflare Workers AI non-streaming binding calls now honor the provider timeout. In 1.25.0, calls with no timeout set are cut off at 30 seconds per attempt and retried; a timed-out call is abandoned rather than cancelled, so it may keep running and be billed, and repeated timeouts count toward the circuit breaker. A timeout remains retryable and can trigger provider fallback.
+
 ## [1.25.0] — 2026-11-06
 
 Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the factory response cache starts cold after upgrading (see Changed).
@@ -27,7 +30,6 @@ Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the f
 
 ### Changed
 - Response cache keys now start with `llmp:v3:` (were `llmp:v2:`) (#142), so entries written by 1.24.x or earlier, which lack `providerContent`, are not reused; the factory response cache starts cold after upgrading.
-
 ## [1.24.1] — 2026-11-06
 
 ### Fixed

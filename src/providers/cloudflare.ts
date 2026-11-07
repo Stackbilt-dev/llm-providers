@@ -21,7 +21,8 @@ import {
   InvalidRequestError,
   ReasoningEffortUnsupportedError,
   ModelNotFoundError,
-  SchemaDriftError
+  SchemaDriftError,
+  TimeoutError
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
@@ -785,13 +786,43 @@ export class CloudflareProvider extends BaseProvider {
     }, request) as Promise<WorkersAIResult>;
   }
 
-  private runModel(model: string, input: unknown, request: LLMRequest): Promise<unknown> {
-    const options = this.buildRunOptions(request);
+  private runModel(
+    model: string,
+    input: unknown,
+    request: LLMRequest,
+    executionOptions: { enforceTimeout?: boolean } = {}
+  ): Promise<unknown> {
+    const runOptions = this.buildRunOptions(request);
     const ai = this.ai as {
       run(model: string, input: unknown, options?: CloudflareRunOptions): Promise<unknown>;
     };
 
-    return options ? ai.run(model, input, options) : ai.run(model, input);
+    const operation = runOptions ? ai.run(model, input, runOptions) : ai.run(model, input);
+    const timeoutMs = this.config.timeout;
+    const maxTimeout = 2_147_483_647;
+    if (
+      executionOptions.enforceTimeout === false ||
+      timeoutMs === undefined ||
+      !Number.isFinite(timeoutMs) ||
+      timeoutMs <= 0 ||
+      timeoutMs > maxTimeout
+    ) {
+      return operation;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new TimeoutError(
+        this.name,
+        `Request timeout after ${timeoutMs}ms`
+      )), timeoutMs);
+    });
+
+    // The binding API documents no abort signal, so a timeout abandons the wait
+    // but cannot cancel the underlying call, which may continue running.
+    return Promise.race([operation, timeoutPromise]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
   }
 
   private buildRunOptions(request: LLMRequest): CloudflareRunOptions | undefined {
@@ -1488,7 +1519,7 @@ export class CloudflareProvider extends BaseProvider {
     return this.createStream({
       provider: this.name,
       timeoutMs: this.config.timeout,
-      open: () => this.runModel(model, cloudflareRequest, request),
+      open: () => this.runModel(model, cloudflareRequest, request, { enforceTimeout: false }),
       event: value => {
         let text: string | undefined;
         if (typeof value === 'string') text = value;
