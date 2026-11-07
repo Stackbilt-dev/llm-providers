@@ -187,9 +187,9 @@ const llm = LLMProviders.fromEnv(env, {
 
 ### Cloudflare Workers AI timeouts
 
-`BaseProvider` defaults `timeout` to 30,000 ms, so non-streaming Workers AI binding calls without an explicit deadline are now limited to 30 seconds. The deadline applies per attempt, not to the whole operation: `TimeoutError` is retryable, and the default of three retries means one logical request can take four attempts plus backoff. The factory may also fall back to another provider after a `TIMEOUT`.
+In 1.25.0, `BaseProvider` defaults `timeout` to 30,000 ms, so non-streaming Workers AI binding calls without an explicit deadline are limited to 30 seconds per attempt. The deadline applies per attempt, not to the whole operation: `TimeoutError` is retryable, and the default of three retries means one logical request can take four attempts plus backoff. Timeouts count as circuit-breaker failures; after three failures, a pinned slow model with `allowFallback: false` raises `CircuitBreakerOpenError`. The factory may also fall back to another provider after a `TIMEOUT`.
 
-Workers AI bindings do not accept an abort signal. A timed-out call stops being awaited but may continue running alongside retries and may still incur charges. For long generations, raise `timeout`, lower `maxRetries`, or use streaming.
+For Workers AI, `timeout: 0` or a negative value disables the deadline. HTTP providers treat `timeout: 0` as their 30-second default. The binding API documents no abort signal, so a timed-out call stops being awaited but may continue running alongside retries and may still incur charges. For long generations, raise `timeout`, lower `maxRetries`, or use streaming.
 
 ## Cloudflare AI Gateway Passthrough
 
@@ -255,6 +255,8 @@ Provider notes:
 `reasoning.effort` (`'low' | 'medium' | 'high' | 'none'`) limits how much a reasoning model thinks before answering. Reasoning tokens count against `maxTokens`, so a high effort can use the whole budget and leave no answer.
 
 On Workers AI, each model documents its own levels, and some document aliases that turn a "lower" value into the model's maximum (GLM-5.3 and GLM-5.3 Flash map `none` and `medium` to `max`). The Cloudflare provider therefore maps effort per model, from each model's Cloudflare docs page, and never forwards an alias it hasn't checked:
+
+High reasoning effort on Workers AI can run past the 30-second default timeout; raise `timeout` or stream long reasoning requests.
 
 | Model | Sent as requested | Mapped | Not sent |
 |---|---|---|---|

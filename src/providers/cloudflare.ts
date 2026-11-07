@@ -798,21 +798,29 @@ export class CloudflareProvider extends BaseProvider {
     };
 
     const operation = runOptions ? ai.run(model, input, runOptions) : ai.run(model, input);
-    if (executionOptions.enforceTimeout === false || !this.config.timeout || this.config.timeout <= 0) {
+    const timeoutMs = this.config.timeout;
+    const maxTimeout = 2_147_483_647;
+    if (
+      executionOptions.enforceTimeout === false ||
+      timeoutMs === undefined ||
+      !Number.isFinite(timeoutMs) ||
+      timeoutMs <= 0 ||
+      timeoutMs > maxTimeout
+    ) {
       return operation;
     }
 
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
+    const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new TimeoutError(
         this.name,
-        `Request timeout after ${this.config.timeout}ms`
-      )), this.config.timeout);
+        `Request timeout after ${timeoutMs}ms`
+      )), timeoutMs);
     });
 
-    // Workers AI bindings do not accept an abort signal: a timeout abandons the
-    // wait but cannot cancel the underlying call, which may continue running.
-    return Promise.race([operation, timeout]).finally(() => {
+    // The binding API documents no abort signal, so a timeout abandons the wait
+    // but cannot cancel the underlying call, which may continue running.
+    return Promise.race([operation, timeoutPromise]).finally(() => {
       if (timer !== undefined) clearTimeout(timer);
     });
   }

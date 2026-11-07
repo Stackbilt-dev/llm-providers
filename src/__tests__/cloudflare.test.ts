@@ -184,6 +184,21 @@ describe('CloudflareProvider', () => {
       vi.useRealTimers();
     });
 
+    it.each([Infinity, 2 ** 31])('does not schedule a deadline for non-finite or oversized timeout %s', async timeout => {
+      vi.useFakeTimers();
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        timeout
+      });
+      const baselineTimerCount = vi.getTimerCount();
+      mockAiRun.mockResolvedValueOnce({ response: 'No deadline' });
+
+      await expect(provider.generateResponse(testRequest)).resolves.toMatchObject({
+        message: 'No deadline'
+      });
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    });
+
     it('clears the non-streaming timeout after a binding response', async () => {
       vi.useFakeTimers();
       provider = new TestableCloudflareProvider({

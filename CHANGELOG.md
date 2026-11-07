@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ## [Unreleased]
 
 ### Fixed
-- Cloudflare Workers AI non-streaming binding calls now honor the provider timeout. When no timeout is configured, the 30-second per-attempt default applies; timed-out calls are abandoned rather than cancelled, may continue running and incur charges, and count toward the circuit breaker. A timeout remains retryable and can trigger provider fallback.
+- Cloudflare Workers AI non-streaming binding calls now honor the provider timeout. In 1.25.0, calls with no timeout set are cut off at 30 seconds per attempt and retried; a timed-out call is abandoned rather than cancelled, so it may keep running and be billed, and repeated timeouts count toward the circuit breaker. A timeout remains retryable and can trigger provider fallback.
 
 ## [1.25.0] — 2026-11-06
 
