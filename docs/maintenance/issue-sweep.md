@@ -28,7 +28,7 @@ The sweep below is **merged to `main`** and was released as 1.22.0 by release PR
 | [#116](https://github.com/Stackbilt-dev/llm-providers/issues/116) | Quota observers and streaming terminal/schema observers are guarded; stream body deadlines, cancellation, fault/race tests and awaited stream settlement were added. | Hook replay fixed in #120: every factory/adapter hook is guarded. Remaining: non-streaming body deadlines, retry sleep aborts, Retry-After/vendor error fixtures, unproduced hook events, floating non-streaming cache/quota writes, request/tool-loop signals, workerd and coverage baselines |
 | [#118](https://github.com/Stackbilt-dev/llm-providers/issues/118) | Coordinating roadmap receives this checkpoint and priorities. | Track reviewed/merged implementation phases separately from local progress. |
 
-Other open items are unchanged: #112 (phase 2 shipped in 1.23.0; remaining: the Claude 5.x routing steps (the tool-loop round trip shipped in 1.25.0 via #142, closing #124; remaining: `toolChoice: 'none'`, mid-loop fallback onto a thinking model, and lifting `explicitOnly`); deciding when the explicit-only OpenAI models (`gpt-6-astra`, `gpt-5.6-sol`/`-terra`/`-luna`, `gpt-5.5`) become routable, which would change the `gpt-4o-mini` default; Cerebras/Groq/NVIDIA prices and IDs, GPT-6 Luna / 6.1 Sol tool-calling restrictions, OpenAI cached-input pricing, custom-model escape hatch, unknown-cost semantics, provenance canary), #114 (failure demo/README restructuring/repo cleanup), #117 (optional AI SDK adapter), #77 (supply-chain workflow), #78/#79/#80 (new provider proposals). #90/#95 have existing code surfaces but were not re-audited for closure during this sweep.
+Other open items are unchanged: #112 (phase 2 shipped in 1.23.0; remaining: the Claude 5.x routing steps, now tracked on #112 since the tool-loop round trip shipped in 1.25.0 via #142 and closed #124: `toolChoice: 'none'`, mid-loop fallback onto a thinking model, and lifting `explicitOnly`; deciding when the explicit-only OpenAI models (`gpt-6-astra`, `gpt-5.6-sol`/`-terra`/`-luna`, `gpt-5.5`) become routable, which would change the `gpt-4o-mini` default; Cerebras/Groq/NVIDIA prices and IDs, GPT-6 Luna / 6.1 Sol tool-calling restrictions, OpenAI cached-input pricing, custom-model escape hatch, unknown-cost semantics, provenance canary), #114 (failure demo/README restructuring/repo cleanup), #117 (optional AI SDK adapter), #77 (supply-chain workflow), #78/#79/#80 (new provider proposals). #90/#95 have existing code surfaces but were not re-audited for closure during this sweep.
 
 ## Public behavior to retain
 
@@ -56,7 +56,7 @@ New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts
 
 Host: Windows, Node `v24.19.0`, npm `11.17.0`.
 
-Re-run at 1.25.0 (2026-11-06), and again by the publish workflow on Ubuntu with Node 22:
+Re-run at 1.25.0 (2026-11-06); the publish workflow re-runs them on Ubuntu with Node 22 when the release is created:
 
 - `npm test`: **894 passing tests across 32 files** (837 across 31 at 1.24.1; 834 at 1.24.0; 789 across 30 at 1.23.0).
 - `npm run typecheck`: passed.

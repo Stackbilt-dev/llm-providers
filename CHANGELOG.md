@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [1.25.0] — 2026-11-06
 
-Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the factory response cache starts cold after upgrading (see Added).
+Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the factory response cache starts cold after upgrading (see Changed).
 
 ### Fixed
 - Anthropic tool loops (#124, #142). Multi-turn tool use through the Anthropic provider, including `generateResponseWithTools()`, was rejected by the Messages API on every Claude model:
@@ -18,13 +18,15 @@ Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the f
 - `generateResponseWithTools()` no longer reports a failed tool as an empty success when the tool throws something other than an `Error` with a message: a thrown string, or any object with a non-blank `message` (including an `Error` from another realm), is sent as the error text, and anything else as `Tool '<name>' failed without an error message`.
 
 ### Added
-- `LLMResponse.providerContent` and `LLMMessage.providerContent` (#124), type `ProviderContent` (`{ provider, blocks }`). An Anthropic response that calls tools carries the turn's content blocks (thinking with signatures, `redacted_thinking`, text, `tool_use`) in order, and the Anthropic provider sends them back unchanged when they are set on an assistant message. Anthropic requires this for the thinking blocks of a tool-use turn, and Claude 5.x models think by default. `generateResponseWithTools()` copies the field for you; other providers ignore it. It is set only on responses that call tools, and not when a `tool_use` block fails validation, when a `thinking` block has no signature, or on JSON-prefill responses; those turns are rebuilt from `content` and `toolCalls`.
+- `LLMResponse.providerContent` and `LLMMessage.providerContent` (#124, #142), type `ProviderContent` (`{ provider, blocks }`). An Anthropic response that calls tools carries the turn's content blocks (thinking with signatures, `redacted_thinking`, text, `tool_use`) in order, and the Anthropic provider sends them back unchanged when they are set on an assistant message. Anthropic requires this for the thinking blocks of a tool-use turn, and Claude 5.x models think by default. `generateResponseWithTools()` copies the field for you; other providers ignore it. It is set only on responses that call tools, and not when a `tool_use` block fails validation, when a `thinking` block has no signature, or on JSON-prefill responses; those turns are rebuilt from `content` and `toolCalls`.
   - When set on a message, it is sent instead of `content` and `toolCalls`; an edit made only to `content` is not sent, and the provider logs a warning when `content` differs from the replayed text, including when it is blank.
   - Before the call, content with no blocks, a user-turn block type (`tool_result`, `image`, `document`, `search_result`), a `tool_use` block without an id, name or input, a `thinking` block without a signature or string `thinking` text, a `redacted_thinking` block without data, or a `text` block without string `text` throws `ConfigurationError`, which isn't recorded in the provider's metrics or circuit breaker (the factory still logs it, fires `onRequestError` and reports the failed attempt). A turn whose `tool_use` ids differ from the message's `toolCalls` is rebuilt; the shape is checked first, so malformed content throws even then.
   - The factory response cache applies the same checks and treats a failing entry as a miss.
-  - Response cache keys now start with `llmp:v3:` (were `llmp:v2:`), so entries written by 1.24.x or earlier, which lack `providerContent`, are not reused; the cache starts cold after upgrading.
   - Canonical normalization deep-copies the field as JSON and throws `ConfigurationError` for blocks with a BigInt or a circular reference.
 - The Anthropic response schema recognizes `redacted_thinking` blocks and the thinking `signature`.
+
+### Changed
+- Response cache keys now start with `llmp:v3:` (were `llmp:v2:`) (#142), so entries written by 1.24.x or earlier, which lack `providerContent`, are not reused; the factory response cache starts cold after upgrading.
 
 ## [1.24.1] — 2026-11-06
 
