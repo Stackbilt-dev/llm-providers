@@ -35,12 +35,14 @@ export async function deriveResponseCacheKey(
     const { requestId, gatewayMetadata, cache, ...semanticRequest } = request;
     // Custom gateway metadata may influence routing; exclude only tracing/cache controls.
     const identity = stableJson({
-      version: 2, namespace, routing, request: semanticRequest,
+      // v3 (1.25.0): entries from earlier versions lack providerContent, so they
+      // are not reused.
+      version: 3, namespace, routing, request: semanticRequest,
       callerKey: cache?.key ?? null,
       gatewayCustomMetadata: gatewayMetadata?.customMetadata ?? null,
     });
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
-    return 'llmp:v2:' + Array.from(new Uint8Array(digest))
+    return 'llmp:v3:' + Array.from(new Uint8Array(digest))
       .map(byte => byte.toString(16).padStart(2, '0')).join('');
   } catch {
     return undefined;
@@ -81,10 +83,6 @@ export function isCachedResponse(value: unknown): value is LLMResponse {
     && (response.reasoningEffort === undefined || isReasoningEffortReport(response.reasoningEffort))
     && (response.fallback === undefined || isFallbackReport(response.fallback))
     && (response.providerContent === undefined || isValidProviderContent(response.providerContent))
-    // An Anthropic tool-call turn needs its providerContent to be replayed with its
-    // thinking; an entry without it (written before 1.25.0) is a miss.
-    && !(response.provider === 'anthropic' && Array.isArray(response.toolCalls) && response.toolCalls.length > 0
-      && response.providerContent === undefined)
     && [response.id, response.reasoning, response.content]
       .every(field => field === undefined || typeof field === 'string')
     && [response.metadata, response.cache]

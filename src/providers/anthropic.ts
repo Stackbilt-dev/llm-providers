@@ -657,7 +657,8 @@ export class AnthropicProvider extends BaseProvider {
       .filter(block => block.type === 'text' && typeof block.text === 'string')
       .map(block => block.text as string)
       .join('');
-    if (message.content.trim() && message.content.trim() !== replayedText.trim()) {
+    const content = typeof message.content === 'string' ? message.content : '';
+    if (content.trim() !== replayedText.trim()) {
       // Replay sends providerContent, not content: an edit (such as a redaction)
       // made only to content is not sent.
       this.logger.warn(`[${this.name}] assistant content differs from providerContent; sending providerContent unchanged`);

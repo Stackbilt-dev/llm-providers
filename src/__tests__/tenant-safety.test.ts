@@ -58,7 +58,7 @@ describe('response cache isolation', () => {
       metadata: { b: 2, a: 1 },
     }, 'app', {});
     expect(first).toBe(second);
-    expect(first).toMatch(/^llmp:v2:[a-f0-9]{64}$/);
+    expect(first).toMatch(/^llmp:v3:[a-f0-9]{64}$/);
     expect(first).not.toContain('Private prompt');
   });
 

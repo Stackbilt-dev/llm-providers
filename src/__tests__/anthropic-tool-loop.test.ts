@@ -323,6 +323,26 @@ describe('Anthropic tool loops (#124)', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('content differs from providerContent'));
     });
 
+    it.each([
+      ['blank', ''],
+      ['null', null],
+    ])('warns when content is %s but providerContent has text, and sends providerContent', async (_label, content) => {
+      const warn = vi.fn();
+      const logged = new AnthropicProvider({
+        apiKey: 'test-key', maxRetries: 0,
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+      });
+      mockFetch.mockResolvedValueOnce(anthropicResponse([{ type: 'text', text: 'done' }]));
+      const request = followUp({ provider: 'anthropic', blocks: TOOL_TURN });
+      request.messages[1] = { ...request.messages[1], content: content as string };
+
+      const response = await logged.generateResponse(request);
+
+      expect(response.message).toBe('done');
+      expect(requestBody(0).messages[1].content).toEqual(TOOL_TURN);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('content differs from providerContent'));
+    });
+
     it('does not warn when content matches the replayed text', async () => {
       const warn = vi.fn();
       const logged = new AnthropicProvider({
@@ -549,22 +569,49 @@ describe('Anthropic tool loops (#124)', () => {
       expect(response.providerContent).toEqual({ provider: 'anthropic', blocks: TOOL_TURN });
     });
 
-    it('treats a cached Anthropic tool-call entry without providerContent (written before 1.25.0) as a miss', async () => {
+    it('caches and serves an Anthropic tool-call response that has no providerContent', async () => {
+      // A dropped tool_use leaves providerContent unset; the response is still cacheable.
+      mockFetch.mockResolvedValueOnce(anthropicResponse([
+        ...TOOL_TURN,
+        { type: 'tool_use', id: 'toolu_02', name: '', input: {} },
+      ], 'tool_use'));
+      const store = new Map<string, string>();
+      const cache = {
+        get: vi.fn(async (key: string) => store.get(key) ?? null),
+        put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+      };
+      const llm = new LLMProviders({
+        anthropic: { apiKey: 'test-key', maxRetries: 0 }, stateScope: 'client', responseCache: cache,
+      });
+      const request = {
+        model: 'claude-opus-5-5', messages: [{ role: 'user' as const, content: 'Look up 42' }], tools: [lookupTool],
+      };
+
+      const first = await llm.generateResponse(request);
+      await vi.waitFor(() => expect(cache.put).toHaveBeenCalledTimes(1));
+      const second = await llm.generateResponse(request);
+
+      expect(first.providerContent).toBeUndefined();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(second.toolCalls?.map(call => call.id)).toEqual(['toolu_01']);
+      expect(second.providerContent).toBeUndefined();
+    });
+
+    it('uses a v3 cache key, so entries written before 1.25.0 (v2 keys) are not reused', async () => {
       mockFetch.mockResolvedValueOnce(anthropicResponse(TOOL_TURN, 'tool_use'));
       const cache = {
-        get: vi.fn().mockResolvedValue(cachedToolTurn(undefined)),
+        get: vi.fn().mockResolvedValue(null),
         put: vi.fn().mockResolvedValue(undefined),
       };
       const llm = new LLMProviders({
         anthropic: { apiKey: 'test-key', maxRetries: 0 }, stateScope: 'client', responseCache: cache,
       });
 
-      const response = await llm.generateResponse({
+      await llm.generateResponse({
         model: 'claude-opus-5-5', messages: [{ role: 'user', content: 'Look up 42' }], tools: [lookupTool],
       });
 
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(response.providerContent).toEqual({ provider: 'anthropic', blocks: TOOL_TURN });
+      expect(cache.get).toHaveBeenCalledWith(expect.stringMatching(/^llmp:v3:/));
     });
 
     it('treats a cached entry with malformed providerContent as a miss', async () => {
