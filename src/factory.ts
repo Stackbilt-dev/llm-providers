@@ -1132,10 +1132,22 @@ export class LLMProviderFactory {
             output: typeof output === 'string' ? output : JSON.stringify(output)
           });
         } catch (error) {
+          // Never report a failure as an empty success: a thrown string, or any
+          // object with a non-blank message (including cross-realm Errors), is
+          // the error text; anything else gets a generic one.
+          let raw = '';
+          try {
+            const message = typeof error === 'string'
+              ? error
+              : error !== null && typeof error === 'object' ? (error as { message?: unknown }).message : undefined;
+            if (typeof message === 'string') raw = message;
+          } catch {
+            // A throwing message getter still yields a tool error, not a loop failure.
+          }
           toolResults.push({
             id: toolCall.id,
             output: '',
-            error: (error as Error).message
+            error: raw.trim() ? raw : `Tool '${toolCall.function.name}' failed without an error message`
           });
         }
       }
@@ -1145,7 +1157,8 @@ export class LLMProviderFactory {
         {
           role: 'assistant',
           content: response.message,
-          toolCalls: response.toolCalls
+          toolCalls: response.toolCalls,
+          ...(response.providerContent ? { providerContent: response.providerContent } : {})
         },
         {
           role: 'user',

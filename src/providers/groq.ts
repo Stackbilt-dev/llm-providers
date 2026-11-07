@@ -4,6 +4,7 @@
  */
 
 import type { LLMRequest, LLMResponse, GroqConfig, ModelCapabilities, ProviderBalance, ToolCall, TokenUsage, BuiltInTool, BuiltInToolType, BuiltInToolResult, ProviderExecutionOptions } from '../types.js';
+import { openAIToolResultContent } from '../utils/tool-results.js';
 import { BaseProvider, resolveCfGateway } from './base.js';
 import {
   LLMErrorFactory,
@@ -461,7 +462,7 @@ export class GroqProvider extends BaseProvider {
       if (message.toolResults) {
         // Tool results come as separate messages in OpenAI format
         for (const tr of message.toolResults) {
-          messages.push({ role: 'tool', content: tr.output, tool_call_id: tr.id });
+          messages.push({ role: 'tool', content: openAIToolResultContent(tr), tool_call_id: tr.id });
         }
         continue; // Don't push the original message — tool results replace it
       }

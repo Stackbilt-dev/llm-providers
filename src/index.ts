@@ -70,7 +70,8 @@ export type {
   ReasoningEffortCapability,
   ReasoningEffortReport,
   FallbackHop,
-  FallbackReport
+  FallbackReport,
+  ProviderContent
 } from './types.js';
 
 // Canonical provider contract

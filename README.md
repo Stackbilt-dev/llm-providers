@@ -707,6 +707,16 @@ const result = await llm.generateResponseWithTools(
 console.log(result.message); // final assistant response after tool execution
 ```
 
+A failed tool call is sent back to the model as an error result carrying the error message, so the model can recover or explain the failure. Every provider carries the error. Anthropic puts it in the `tool_result` content with `is_error: true`; OpenAI, Groq, Cerebras and NVIDIA send `{ "output", "error" }` JSON in the tool message; Workers AI includes it in its JSON tool-results message. A thrown string, or any thrown object with a non-blank `message`, is the error text; anything else is reported as `Tool '<name>' failed without an error message`, never as an empty success.
+
+**Anthropic.** Claude 5.x models think by default, and Anthropic requires a tool-use turn's thinking blocks to be sent back complete and unmodified. An Anthropic response that calls tools therefore carries `providerContent`: the turn's content blocks (thinking with signatures, `redacted_thinking`, text, `tool_use`), in the order Claude returned them. `generateResponseWithTools` copies it onto the assistant message, and the Anthropic provider sends it back verbatim. Other providers ignore the field.
+
+If you run the loop yourself, set `providerContent` on the assistant message from the response and don't edit it. When it is set, the provider sends it **instead of** the message's `content` and `toolCalls`: an edit made only to `content`, such as redacting or clearing text, is not sent (the provider logs a warning when `content` differs from the replayed text, including when `content` is blank). To change the turn, drop `providerContent` so the turn is rebuilt from `content` and `toolCalls`, at the cost of its thinking.
+
+- **When it is set:** only on responses that call tools, the turns whose thinking Anthropic requires back, so thinking from a final answer is not carried into later turns. It is left unset, and the turn is rebuilt instead, when a `tool_use` block fails validation (the call is dropped from `toolCalls`), when a `thinking` block has no signature, and on JSON-prefill responses, whose text starts after the prefilled `{`.
+- **When replaying:** content with no blocks, a user-turn block type (`tool_result`, `image`, `document`, `search_result`), a `tool_use` block without an id, name or input, a `thinking` block without a signature or string `thinking` text, a `redacted_thinking` block without data, or a `text` block without string `text` throws `ConfigurationError` before the call, so it isn't recorded in the provider's metrics or circuit breaker (the factory still logs it, fires `onRequestError` and reports the failed attempt); other block types pass through unchanged. If the `tool_use` ids no longer match the message's `toolCalls`, the turn is rebuilt. The shape is checked first, so malformed content throws even when the ids no longer match.
+- **Cache:** the factory response cache applies the same checks and treats a failing entry as a miss. Cache keys now start with `llmp:v3:`, so entries written by 1.24.x or earlier, which lack `providerContent`, are not reused.
+
 ## Built-in Tools (Server-Side)
 
 Some models run tools **server-side** — the provider executes web search, code interpretation, etc. inside a single completion call, no execute callback required. Set `LLMRequest.builtInTools` with normalized identifiers; the adapter translates to each model family's native wire shape and rejects unsupported combinations at the boundary.
@@ -951,7 +961,8 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | Type | Description |
 |------|-------------|
 | `LLMRequest` | Unified request: messages, model, temperature, tools, toolChoice, builtInTools, response_format, cache, lora |
-| `LLMResponse` | Unified response: message, optional reasoning, usage (with cost and optional reasoning tokens), provider, tool calls, `lengthCause`, `reasoningEffort`, `fallback`, metadata (builtInToolResults) |
+| `LLMResponse` | Unified response: message, optional reasoning, usage (with cost and optional reasoning tokens), provider, tool calls, `providerContent`, `lengthCause`, `reasoningEffort`, `fallback`, metadata (builtInToolResults) |
+| `ProviderContent` | `{ provider, blocks }`: a turn's provider-native content blocks, replayed unchanged on `LLMMessage.providerContent` in tool loops (Anthropic) |
 | `BuiltInTool` / `BuiltInToolType` | Server-side tool request: `{ type }` where type is `web_search` \| `visit_website` \| `browser_automation` \| `code_interpreter` \| `wolfram_alpha` |
 | `BuiltInToolResult` | A surfaced built-in execution: `{ type, name?, arguments?, results: [{ title, url, content, score }] }` on `metadata.builtInToolResults` |
 | `TokenUsage` | Token counts, compatible `cost`, explicit `costProvenance` / `tokenProvenance`, and cached token fields |

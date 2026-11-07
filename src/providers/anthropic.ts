@@ -4,6 +4,7 @@
  */
 
 import type {
+  LLMMessage,
   LLMRequest,
   LLMResponse,
   AnthropicConfig,
@@ -26,6 +27,7 @@ import {
 import { getProviderDefaultModel, resolveModelId } from '../model-catalog.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { joinReasoning } from '../utils/reasoning.js';
+import { isValidProviderContent, toolUseIdsMatch } from '../utils/provider-content.js';
 
 /**
  * Minimum envelope fields the Anthropic response parser reads. Changing this
@@ -48,6 +50,10 @@ const ANTHROPIC_RESPONSE_SCHEMA: SchemaField[] = [
         ],
         thinking: [
           { path: 'thinking', type: 'string' },
+          { path: 'signature', type: 'string', optional: true },
+        ],
+        redacted_thinking: [
+          { path: 'data', type: 'string' },
         ],
         tool_use: [
           { path: 'id', type: 'string' },
@@ -69,6 +75,7 @@ interface AnthropicContentBlock {
   type: 'text' | 'tool_use' | 'tool_result' | 'image';
   text?: string;
   id?: string;
+  tool_use_id?: string;
   name?: string;
   input?: Record<string, unknown>;
   content?: string;
@@ -82,7 +89,8 @@ interface AnthropicContentBlock {
 
 interface AnthropicMessage {
   role: 'user' | 'assistant';
-  content: string | AnthropicContentBlock[];
+  /** Replayed provider content (thinking, redacted_thinking, ...) is sent as received. */
+  content: string | Array<AnthropicContentBlock | Record<string, unknown>>;
 }
 
 interface AnthropicCacheControl {
@@ -119,9 +127,11 @@ interface AnthropicRequest {
 }
 
 interface AnthropicResponseContentBlock {
-  type: 'text' | 'tool_use' | 'thinking';
+  type: 'text' | 'tool_use' | 'thinking' | 'redacted_thinking';
   text?: string;
   thinking?: string;
+  signature?: string;
+  data?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -258,6 +268,10 @@ export class AnthropicProvider extends BaseProvider {
         const data = await httpResponse.json() as unknown;
         validateSchema('anthropic', data, ANTHROPIC_RESPONSE_SCHEMA);
         const formatted = this.formatResponse(data as AnthropicResponse, Date.now() - startTime);
+
+        // A prefilled turn can't be replayed as returned: its text starts after
+        // the '{' this request supplied. Let the tool loop rebuild it instead.
+        if (jsonMode) delete formatted.providerContent;
 
         // Restore the prefilled '{' consumed by the assistant turn,
         // but only if the response doesn't already start with one
@@ -511,21 +525,32 @@ export class AnthropicProvider extends BaseProvider {
         content: this.formatMessageContent(message.content, message.role === 'user' ? request.images : undefined)
       };
 
-      // Handle tool calls and results
-      if (message.toolCalls && message.toolCalls.length > 0) {
-        anthropicMessage.content = message.toolCalls.map(tc => ({
-          type: 'tool_use' as const,
-          id: tc.id,
-          name: tc.function.name,
-          input: JSON.parse(tc.function.arguments) as Record<string, unknown>
-        }));
+      const replayed = message.role === 'assistant' ? this.replayableContent(message) : undefined;
+      if (replayed) {
+        // Thinking blocks of a tool-use turn must come back complete, unmodified
+        // and in order, so the turn is sent exactly as Anthropic returned it.
+        anthropicMessage.content = replayed;
+      } else if (message.toolCalls && message.toolCalls.length > 0) {
+        anthropicMessage.content = [
+          // A rebuilt turn leaves out whitespace-only text (common beside tool calls),
+          // which carries nothing. A replayed turn keeps every block as Anthropic
+          // returned it.
+          ...(message.content?.trim() ? [{ type: 'text' as const, text: message.content }] : []),
+          ...message.toolCalls.map(tc => ({
+            type: 'tool_use' as const,
+            id: tc.id,
+            name: tc.function.name,
+            input: JSON.parse(tc.function.arguments) as Record<string, unknown>
+          }))
+        ];
       }
 
       if (message.toolResults && message.toolResults.length > 0) {
         anthropicMessage.content = message.toolResults.map(tr => ({
           type: 'tool_result' as const,
-          id: tr.id,
-          content: tr.output,
+          tool_use_id: tr.id,
+          // A failed tool's error text goes in content, after any partial output.
+          content: tr.error ? [tr.output, tr.error].filter(Boolean).join('\n\n') : tr.output,
           is_error: !!tr.error
         }));
       }
@@ -613,6 +638,34 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     return anthropicRequest;
+  }
+
+  /**
+   * Provider content this adapter produced, to send back verbatim. Content from
+   * another provider is ignored (the turn is rebuilt from content and toolCalls);
+   * malformed Anthropic content is rejected before the call.
+   */
+  private replayableContent(message: LLMMessage): Array<Record<string, unknown>> | undefined {
+    const providerContent = message.providerContent;
+    // Shape was checked in validateRequest, before dispatch.
+    if (!providerContent || providerContent.provider !== this.name) return undefined;
+    if (!toolUseIdsMatch(providerContent, message.toolCalls)) {
+      // Each resent tool_use needs a matching result; if the caller changed the
+      // tool calls, rebuild the turn from content and toolCalls instead.
+      this.logger.warn(`[${this.name}] providerContent tool_use ids differ from toolCalls; rebuilding the assistant turn`);
+      return undefined;
+    }
+    const replayedText = providerContent.blocks
+      .filter(block => block.type === 'text' && typeof block.text === 'string')
+      .map(block => block.text as string)
+      .join('');
+    const content = typeof message.content === 'string' ? message.content : '';
+    if (content.trim() !== replayedText.trim()) {
+      // Replay sends providerContent, not content: an edit (such as a redaction)
+      // made only to content is not sent.
+      this.logger.warn(`[${this.name}] assistant content differs from providerContent; sending providerContent unchanged`);
+    }
+    return providerContent.blocks;
   }
 
   private formatMessageContent(
@@ -717,6 +770,18 @@ export class AnthropicProvider extends BaseProvider {
         }
       }));
       response.toolCalls = this.validateToolCalls(raw);
+
+      // Keep the whole turn (thinking, redacted_thinking, text, tool_use, in order)
+      // so the tool loop can send it back unmodified, as Anthropic requires. Only
+      // when every tool_use survived validation: a resent tool_use with no result
+      // is rejected, so a turn with a dropped call is rebuilt instead.
+      const providerContent = {
+        provider: this.name,
+        blocks: JSON.parse(JSON.stringify(data.content)) as Array<Record<string, unknown>>
+      };
+      if (isValidProviderContent(providerContent) && toolUseIdsMatch(providerContent, response.toolCalls)) {
+        response.providerContent = providerContent;
+      }
     }
 
     return response;
@@ -894,6 +959,17 @@ export class AnthropicProvider extends BaseProvider {
         this.name,
         `${model} does not support forced tool choice; use toolChoice 'auto' and say in the prompt when to call the tool`
       );
+    }
+    // Replayed Anthropic content is checked before dispatch, so a caller mistake
+    // is not recorded as a provider failure.
+    for (const message of request.messages) {
+      if (message.role === 'assistant' && message.providerContent?.provider === this.name
+        && !isValidProviderContent(message.providerContent)) {
+        throw new ConfigurationError(
+          this.name,
+          'providerContent.blocks must be a non-empty array of content blocks, passed back unchanged from LLMResponse.providerContent: no user-turn blocks (tool_result, image, document, search_result), complete tool_use blocks, thinking blocks with their text and signatures, and text blocks with text.'
+        );
+      }
     }
   }
 
