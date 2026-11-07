@@ -173,6 +173,8 @@ export interface LLMRequest {
   response_format?:
     | { type: 'json_object' | 'text' }
     | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
+  /** Cloudflare: permit prompt-only JSON Schema emulation when native support is unavailable. */
+  allowStructuredOutputEmulation?: boolean;
   seed?: number;
   gatewayMetadata?: GatewayMetadata;
   cache?: CacheHints;
@@ -564,6 +566,8 @@ export interface ModelCapabilities {
   maxContextLength: number;
   supportsStreaming: boolean;
   supportsTools: boolean;
+  /** Native structured-output/JSON Schema enforcement is supported. */
+  supportsStructuredOutput?: boolean;
   supportsVision?: boolean;
   toolCalling?: boolean;
   supportsBatching: boolean;

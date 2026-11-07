@@ -19,11 +19,14 @@ export interface GatewayRouteRequirements {
   vision: boolean;
   builtInTools: BuiltInToolType[];
   lora: boolean;
+  structuredOutputKind?: 'json_object' | 'json_schema';
+  allowStructuredOutputEmulation?: boolean;
 }
 
 export interface GatewayRouteCapabilityReport {
   supportsStreaming: boolean;
   supportsTools: boolean;
+  supportsStructuredOutput?: boolean;
   supportsVision: boolean;
   supportsPromptCache: boolean;
   supportsBuiltInTools: BuiltInToolType[];
@@ -104,6 +107,10 @@ function routeRequirements(request: CanonicalLLMRequest): GatewayRouteRequiremen
     vision: request.requirements?.vision === true || (request.media?.length ?? 0) > 0,
     builtInTools,
     lora: request.providerOptions?.cloudflare?.lora !== undefined,
+    structuredOutputKind: request.output?.kind === 'json_object' || request.output?.kind === 'json_schema'
+      ? request.output.kind
+      : undefined,
+    allowStructuredOutputEmulation: request.providerOptions?.cloudflare?.allowStructuredOutputEmulation === true,
   };
 }
 
@@ -111,6 +118,7 @@ function capabilityReport(capabilities: ModelCapabilities | undefined): GatewayR
   return {
     supportsStreaming: capabilities?.supportsStreaming ?? false,
     supportsTools: capabilities?.supportsTools ?? false,
+    supportsStructuredOutput: capabilities?.supportsStructuredOutput,
     supportsVision: capabilities?.supportsVision ?? false,
     supportsPromptCache: capabilities?.supportsPromptCache ?? false,
     supportsBuiltInTools: capabilities?.supportsBuiltInTools ?? [],
@@ -159,12 +167,24 @@ function routeDegradations(
     });
   }
 
-  if (requirements.structuredOutput && !capabilities.supportsTools) {
-    degradations.push({
-      capability: 'structuredOutput',
-      action: 'emulated',
-      reason: 'selected model may require prompt-level JSON instruction instead of native schema enforcement',
-    });
+  if (requirements.structuredOutput) {
+    if (provider === 'cloudflare') {
+      if (requirements.structuredOutputKind === 'json_schema' && requirements.streaming) {
+        degradations.push({ capability: 'structuredOutput', action: 'failed', reason: 'Cloudflare Workers AI JSON Schema mode does not support streaming' });
+      } else if (requirements.structuredOutputKind === 'json_schema' && !capabilities.supportsStructuredOutput) {
+        degradations.push({
+          capability: 'structuredOutput',
+          action: requirements.allowStructuredOutputEmulation ? 'emulated' : 'failed',
+          reason: requirements.allowStructuredOutputEmulation
+            ? 'selected model uses prompt-level JSON Schema instruction instead of native schema enforcement'
+            : 'selected model does not advertise native JSON Schema support',
+        });
+      } else if (requirements.structuredOutputKind === 'json_object') {
+        degradations.push({ capability: 'structuredOutput', action: 'emulated', reason: 'Cloudflare Workers AI json_object is enforced with a prompt instruction' });
+      }
+    } else if (!capabilities.supportsTools) {
+      degradations.push({ capability: 'structuredOutput', action: 'emulated', reason: 'selected model may require prompt-level JSON instruction instead of native schema enforcement' });
+    }
   }
 
   if (requirements.vision && !capabilities.supportsVision) {

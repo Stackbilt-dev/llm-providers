@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LLMProviderFactory, createCostOptimizedFactory } from '../factory';
-import { AuthenticationError, ServerError } from '../errors';
+import { AuthenticationError, ServerError, StructuredOutputUnsupportedError } from '../errors';
 import type { LLMRequest, LLMResponse } from '../types';
 import { OpenAIProvider } from '../providers/openai';
 import { CreditLedger } from '../utils/credit-ledger';
@@ -226,6 +226,23 @@ describe('LLMProviderFactory', () => {
       expect(availableProviders).not.toContain('anthropic');
       expect(availableProviders).not.toContain('cloudflare');
     });
+  });
+
+  it('falls back when Cloudflare rejects unsupported structured output', async () => {
+    mockCloudflareProvider.generateResponse.mockRejectedValueOnce(
+      new StructuredOutputUnsupportedError('cloudflare', 'JSON Schema is unsupported')
+    );
+
+    const response = await factory.generateResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    });
+
+    expect(response.provider).not.toBe('cloudflare');
+    expect(mockAnthropicProvider.generateResponse).toHaveBeenCalled();
   });
 
   describe('Response Generation', () => {

@@ -365,6 +365,7 @@ describe('Cloudflare response_format', () => {
     expect(systemMsg).toBeDefined();
     expect(systemMsg.content).toContain('Be helpful.');
     expect(systemMsg.content).toContain('You must respond with valid JSON only.');
+    expect(body.response_format).toBeUndefined();
   });
 
   it('should create system message when none exists', async () => {
@@ -380,6 +381,109 @@ describe('Cloudflare response_format', () => {
     const systemMsg = body.messages.find((m: any) => m.role === 'system');
     expect(systemMsg).toBeDefined();
     expect(systemMsg.content).toContain('You must respond with valid JSON only.');
+  });
+
+  it('should forward json_schema using Cloudflare native JSON mode', async () => {
+    mockAiRun.mockResolvedValueOnce({ response: '{"ok":true}' });
+
+    await provider.generateResponse({
+      messages: [{ role: 'user', content: 'Return a status object.' }],
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'status',
+          schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
+          strict: true
+        }
+      }
+    });
+
+    const [, body] = mockAiRun.mock.calls[0];
+    expect(body.response_format).toEqual({
+      type: 'json_schema',
+      json_schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }
+    });
+    expect(body.messages.some((message: { role: string }) => message.role === 'system')).toBe(false);
+  });
+
+  it.each(['@cf/meta/llama-3-8b-instruct', '@cf/meta/llama-3.1-8b-instruct', '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b'])('uses raw JSON mode for documented model %s', async model => {
+    mockAiRun.mockResolvedValueOnce({ response: '{}' });
+    await provider.generateResponse({ messages: [{ role: 'user', content: 'JSON' }], model,
+      response_format: { type: 'json_schema', json_schema: { name: 'result', schema: { type: 'object' } } } });
+    expect(mockAiRun.mock.calls[0][1].response_format).toEqual({ type: 'json_schema', json_schema: { type: 'object' } });
+  });
+
+  it('should reject streaming json_schema requests clearly', async () => {
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      stream: true,
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    })).rejects.toThrow('JSON Schema mode does not support streaming');
+  });
+
+  it('should reject json_schema on models without native support', async () => {
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.1-8b-instruct-fp8',
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    })).rejects.toThrow('does not support native JSON Schema output');
+  });
+
+  it('should emulate json_schema only when explicitly enabled', async () => {
+    mockAiRun.mockResolvedValueOnce({ response: '{"ok":true}' });
+
+    await provider.generateResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.1-8b-instruct-fp8',
+      allowStructuredOutputEmulation: true,
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    });
+
+    const [, body] = mockAiRun.mock.calls[0];
+    expect(body.response_format).toBeUndefined();
+    expect(body.messages[0].content).toContain('JSON Schema');
+  });
+
+  it.each(['@cf/zai-org/glm-5.3', '@cf/zai-org/glm-5.3-flash'])('sends the wrapped schema to %s without prompt emulation', async model => {
+    mockAiRun.mockResolvedValueOnce({ response: '{"ok":true}' });
+    const json_schema = { name: 'status', schema: { type: 'object' }, strict: true };
+    await provider.generateResponse({ messages: [{ role: 'user', content: 'JSON' }], model,
+      allowStructuredOutputEmulation: true, response_format: { type: 'json_schema', json_schema } });
+    const [, body] = mockAiRun.mock.calls[0];
+    expect(body.response_format).toEqual({ type: 'json_schema', json_schema });
+    expect(body.messages.some((message: { role: string }) => message.role === 'system')).toBe(false);
+  });
+
+  it('emulates a schema on the raw Llama vision path', async () => {
+    mockAiRun.mockResolvedValueOnce({ response: '{"ok":true}' });
+    await provider.generateResponse({ messages: [{ role: 'user', content: 'Describe' }],
+      model: '@cf/meta/llama-3.2-11b-vision-instruct', images: [{ data: 'YQ==', mimeType: 'image/png' }],
+      allowStructuredOutputEmulation: true,
+      response_format: { type: 'json_schema', json_schema: { name: 'status', schema: { type: 'object' } } } });
+    expect(mockAiRun.mock.calls[0][1].prompt).toContain('JSON Schema');
+  });
+
+  it('should reject streaming json_schema through streamResponse before dispatch', async () => {
+    await expect(provider.streamResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'status', schema: { type: 'object' } }
+      }
+    })).rejects.toThrow('JSON Schema mode does not support streaming');
+    expect(mockAiRun).not.toHaveBeenCalled();
   });
 
   it('should not modify messages when response_format is not set', async () => {
