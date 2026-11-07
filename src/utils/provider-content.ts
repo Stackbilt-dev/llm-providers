@@ -73,8 +73,10 @@ export function toolUseIdsMatch(content: ProviderContent, toolCalls: ToolCall[] 
 /**
  * Deep copy, so edits to a copied message or response can't reach the original
  * blocks. Non-array blocks are copied as-is so the provider still rejects them
- * at dispatch; blocks that can't be represented as JSON (BigInt, circular
- * references) throw ConfigurationError.
+ * at dispatch. Blocks with a BigInt or a circular reference throw
+ * ConfigurationError; other values JSON can't hold are converted as
+ * JSON.stringify does (undefined, functions and symbols are dropped, NaN and
+ * Infinity become null). Blocks from an Anthropic response are always JSON.
  */
 export function copyProviderContent(content: ProviderContent): ProviderContent {
   if (!Array.isArray(content.blocks)) return { provider: content.provider, blocks: content.blocks };

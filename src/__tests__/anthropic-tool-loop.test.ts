@@ -809,7 +809,7 @@ describe('Anthropic tool loops (#124)', () => {
       expect(normalizeLLMResponse({ ...base, providerContent }).providerContent).toEqual(providerContent);
     });
 
-    it('canonical normalization rejects blocks that are not JSON with a library error', () => {
+    it('canonical normalization rejects blocks with a circular reference with a library error', () => {
       const circular: Record<string, unknown> = { type: 'text', text: 'x' };
       circular.self = circular;
       expect(() => normalizeLegacyRequest({

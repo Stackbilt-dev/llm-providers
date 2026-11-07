@@ -19,7 +19,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
   - Before the call, content with no blocks, a user-turn block type (`tool_result`, `image`, `document`, `search_result`), a `tool_use` block without an id, name or input, a `thinking` block without a signature or string `thinking` text, a `redacted_thinking` block without data, or a `text` block without string `text` throws `ConfigurationError`, which isn't recorded in the provider's metrics or circuit breaker (the factory still logs it, fires `onRequestError` and reports the failed attempt). A turn whose `tool_use` ids differ from the message's `toolCalls` is rebuilt; the shape is checked first, so malformed content throws even then.
   - The factory response cache applies the same checks and treats a failing entry as a miss.
   - Response cache keys now start with `llmp:v3:` (were `llmp:v2:`), so entries written by 1.24.x or earlier, which lack `providerContent`, are not reused; the cache starts cold after upgrading.
-  - Canonical normalization deep-copies the field and throws `ConfigurationError` for blocks that aren't JSON.
+  - Canonical normalization deep-copies the field as JSON and throws `ConfigurationError` for blocks with a BigInt or a circular reference.
 - The Anthropic response schema recognizes `redacted_thinking` blocks and the thinking `signature`.
 
 ## [1.24.1] — 2026-11-06

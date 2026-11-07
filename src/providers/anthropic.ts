@@ -532,7 +532,9 @@ export class AnthropicProvider extends BaseProvider {
         anthropicMessage.content = replayed;
       } else if (message.toolCalls && message.toolCalls.length > 0) {
         anthropicMessage.content = [
-          // Whitespace-only text (common beside tool calls) is not a valid text block.
+          // A rebuilt turn leaves out whitespace-only text (common beside tool calls),
+          // which carries nothing. A replayed turn keeps every block as Anthropic
+          // returned it.
           ...(message.content?.trim() ? [{ type: 'text' as const, text: message.content }] : []),
           ...message.toolCalls.map(tc => ({
             type: 'tool_use' as const,
