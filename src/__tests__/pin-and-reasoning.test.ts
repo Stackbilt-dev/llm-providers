@@ -455,11 +455,22 @@ describe('strict reasoning through the factory (#135)', () => {
     const run = vi.fn().mockResolvedValue(chatResult('unused'));
     const { llm, fetchMock } = setup(run);
     await expect(llm.generateResponse({
-      model: '@cf/meta/llama-3.1-8b-instruct', messages, allowFallback: false,
+      model: '@cf/meta/llama-3.1-8b-instruct-fp8', messages, allowFallback: false,
       response_format: { type: 'json_schema', json_schema: { name: 'result', schema: { type: 'object' } } },
     })).rejects.toMatchObject({ code: 'STRUCTURED_OUTPUT_UNSUPPORTED' });
     expect(run).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back on the real Cloudflare streaming schema rejection', async () => {
+    const run = vi.fn();
+    const { llm, fetchMock } = setup(run);
+    const result = await llm.generateManagedResponseStream({ model: flash, messages,
+      response_format: { type: 'json_schema', json_schema: { name: 'result', schema: { type: 'object' } } } });
+    await drain(result.stream);
+    expect((await result.completion).provider).toBe('groq');
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it('does not fail over to a provider that ignores the level when the strict call errors', async () => {

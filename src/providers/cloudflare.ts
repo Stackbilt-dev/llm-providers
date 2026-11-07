@@ -25,6 +25,7 @@ import {
   StructuredOutputUnsupportedError
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
+import { cloudflareStructuredOutputFormat } from './cloudflare-structured-output.js';
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { readChatStreamEvent } from '../utils/provider-stream.js';
 import { extractThinkBlocks, joinReasoning, lengthCauseFor } from '../utils/reasoning.js';
@@ -339,7 +340,7 @@ export class CloudflareProvider extends BaseProvider {
     const capabilities = this.getBaseModelCapabilities();
     for (const [model, entry] of Object.entries(capabilities)) {
       const reasoningEffort = cloudflareReasoningEffortCapability(model);
-      if (reasoningEffort) capabilities[model] = { ...entry, reasoningEffort };
+      capabilities[model] = { ...entry, ...(reasoningEffort ? { reasoningEffort } : {}), supportsStructuredOutput: !!cloudflareStructuredOutputFormat(model) };
     }
     return capabilities;
   }
@@ -460,7 +461,6 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
-        supportsStructuredOutput: false,
         supportsBatching: true,
         inputTokenCost: 0.0014,
         outputTokenCost: 0.0044,
@@ -471,7 +471,6 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
-        supportsStructuredOutput: true,
         supportsVision: true,
         supportsBatching: true,
         inputTokenCost: 0.00015,
@@ -589,7 +588,6 @@ export class CloudflareProvider extends BaseProvider {
         supportsStreaming: true,
         supportsTools: true,
         toolCalling: true,
-        supportsStructuredOutput: true,
         supportsBatching: true,
         inputTokenCost: 0.000293,
         outputTokenCost: 0.002253,
@@ -747,7 +745,10 @@ export class CloudflareProvider extends BaseProvider {
 
   private async runLlamaVisionRaw(request: LLMRequest, model: string): Promise<WorkersAIResult> {
     const responseFormat = request.response_format;
-    const schemaInstruction = this.structuredOutputInstruction(responseFormat, model, false);
+    if (responseFormat?.type === 'json_schema' && request.stream) {
+      throw new StructuredOutputUnsupportedError(this.name, 'Cloudflare Workers AI JSON Schema mode does not support streaming');
+    }
+    const schemaInstruction = this.structuredOutputInstruction(responseFormat, model, request.allowStructuredOutputEmulation === true);
     if (request.images!.length > 1) {
       throw new ConfigurationError(
         this.name,
@@ -896,16 +897,17 @@ export class CloudflareProvider extends BaseProvider {
     const responseFormat = request.response_format;
     const jsonMode = responseFormat?.type === 'json_object';
     const jsonSchema = responseFormat?.type === 'json_schema';
-    const supportsNativeJsonSchema = capabilities?.supportsStructuredOutput === true;
-    const allowEmulation = request.metadata?.allowStructuredOutputEmulation === true;
+    const nativeFormat = cloudflareStructuredOutputFormat(model);
+    const supportsNativeJsonSchema = nativeFormat !== undefined;
+    const allowEmulation = request.allowStructuredOutputEmulation === true;
     if (jsonSchema && !supportsNativeJsonSchema && !allowEmulation) {
       throw new StructuredOutputUnsupportedError(
         this.name,
-        `Model '${model}' does not support native JSON Schema output; set metadata.allowStructuredOutputEmulation=true to allow prompt emulation.`
+        `Model '${model}' does not support native JSON Schema output; set allowStructuredOutputEmulation=true to allow prompt emulation.`
       );
     }
     const nativeJsonSchema = responseFormat && responseFormat.type === 'json_schema' && supportsNativeJsonSchema
-      ? responseFormat.json_schema.schema
+      ? (nativeFormat === 'wrapped' ? responseFormat.json_schema : responseFormat.json_schema.schema)
       : undefined;
     if (jsonSchema && streaming) {
       throw new StructuredOutputUnsupportedError(
@@ -913,7 +915,8 @@ export class CloudflareProvider extends BaseProvider {
         'Cloudflare Workers AI JSON Schema mode does not support streaming'
       );
     }
-    const jsonInstruction = jsonMode || (jsonSchema && allowEmulation)
+    const emulateSchema = jsonSchema && !supportsNativeJsonSchema && allowEmulation;
+    const jsonInstruction = jsonMode || emulateSchema
       ? this.structuredOutputInstruction(responseFormat, model, allowEmulation)
       : '';
 
@@ -921,9 +924,9 @@ export class CloudflareProvider extends BaseProvider {
     if (request.systemPrompt) {
       messages.push({
         role: 'system',
-        content: jsonMode || (jsonSchema && allowEmulation) ? request.systemPrompt + jsonInstruction : request.systemPrompt
+        content: jsonMode || emulateSchema ? request.systemPrompt + jsonInstruction : request.systemPrompt
       });
-    } else if (jsonMode || (jsonSchema && allowEmulation)) {
+    } else if (jsonMode || emulateSchema) {
       messages.push({
         role: 'system',
         content: jsonInstruction.trimStart()
@@ -1063,7 +1066,7 @@ export class CloudflareProvider extends BaseProvider {
     }
 
     const responseFormat = request.response_format;
-    const allowEmulation = request.metadata?.allowStructuredOutputEmulation === true;
+    const allowEmulation = request.allowStructuredOutputEmulation === true;
     const schemaInstruction = this.structuredOutputInstruction(responseFormat, model, allowEmulation);
     if (responseFormat?.type === 'json_schema' && streaming) {
       throw new StructuredOutputUnsupportedError(this.name, 'Cloudflare Workers AI JSON Schema mode does not support streaming');
@@ -1071,7 +1074,7 @@ export class CloudflareProvider extends BaseProvider {
     if (responseFormat?.type === 'json_schema' && !allowEmulation) {
       throw new StructuredOutputUnsupportedError(
         this.name,
-        `Model '${model}' does not support native JSON Schema output; set metadata.allowStructuredOutputEmulation=true to allow prompt emulation.`
+        `Model '${model}' does not support native JSON Schema output; set allowStructuredOutputEmulation=true to allow prompt emulation.`
       );
     }
 

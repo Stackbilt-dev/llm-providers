@@ -20,7 +20,7 @@ export interface GatewayRouteRequirements {
   builtInTools: BuiltInToolType[];
   lora: boolean;
   structuredOutputKind?: 'json_object' | 'json_schema';
-  allowStructuredOutputEmulation: boolean;
+  allowStructuredOutputEmulation?: boolean;
 }
 
 export interface GatewayRouteCapabilityReport {
@@ -110,7 +110,7 @@ function routeRequirements(request: CanonicalLLMRequest): GatewayRouteRequiremen
     structuredOutputKind: request.output?.kind === 'json_object' || request.output?.kind === 'json_schema'
       ? request.output.kind
       : undefined,
-    allowStructuredOutputEmulation: request.metadata?.custom?.allowStructuredOutputEmulation === true,
+    allowStructuredOutputEmulation: request.providerOptions?.cloudflare?.allowStructuredOutputEmulation === true,
   };
 }
 
@@ -118,7 +118,7 @@ function capabilityReport(capabilities: ModelCapabilities | undefined): GatewayR
   return {
     supportsStreaming: capabilities?.supportsStreaming ?? false,
     supportsTools: capabilities?.supportsTools ?? false,
-    supportsStructuredOutput: capabilities?.supportsStructuredOutput ?? false,
+    supportsStructuredOutput: capabilities?.supportsStructuredOutput,
     supportsVision: capabilities?.supportsVision ?? false,
     supportsPromptCache: capabilities?.supportsPromptCache ?? false,
     supportsBuiltInTools: capabilities?.supportsBuiltInTools ?? [],

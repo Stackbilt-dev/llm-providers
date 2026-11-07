@@ -66,7 +66,7 @@ describe('getGatewayRoutePlan', () => {
   it('fails the route plan for unsupported Cloudflare JSON Schema output', () => {
     const plan = getGatewayRoutePlan({
       messages: [{ role: 'user', content: 'Return JSON.' }],
-      model: '@cf/meta/llama-3.1-8b-instruct',
+      model: '@cf/meta/llama-3.1-8b-instruct-fp8',
       response_format: { type: 'json_schema', json_schema: { name: 'status', schema: { type: 'object' } } }
     }, ['cloudflare']);
 
@@ -84,6 +84,21 @@ describe('getGatewayRoutePlan', () => {
 
     expect(plan.executable).toBe(false);
     expect(plan.degradations).toContainEqual(expect.objectContaining({ capability: 'structuredOutput', action: 'failed' }));
+  });
+
+  it('reports unknown structured output capability for other providers', () => {
+    const plan = getGatewayRoutePlan({ messages: [{ role: 'user', content: 'Hello' }], model: 'gpt-4o-mini' }, ['openai']);
+    expect(plan.capabilities.supportsStructuredOutput).toBeUndefined();
+  });
+
+  it('reports vision schema emulation and preserves its option in the adapter request', () => {
+    const plan = getGatewayRoutePlan({ messages: [{ role: 'user', content: 'Describe' }],
+      model: '@cf/meta/llama-3.2-11b-vision-instruct', images: [{ data: 'YQ==', mimeType: 'image/png' }],
+      allowStructuredOutputEmulation: true,
+      response_format: { type: 'json_schema', json_schema: { name: 'status', schema: { type: 'object' } } } }, ['cloudflare']);
+    expect(plan.executable).toBe(true);
+    expect(plan.legacyRequest.allowStructuredOutputEmulation).toBe(true);
+    expect(plan.degradations).toContainEqual(expect.objectContaining({ capability: 'structuredOutput', action: 'emulated' }));
   });
 
   it('does not warn about cache support when the request has no cache hints', () => {

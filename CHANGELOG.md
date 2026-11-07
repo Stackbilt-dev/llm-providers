@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- `StructuredOutputUnsupportedError`, `ModelCapabilities.supportsStructuredOutput`, structured-output route reports and requirements, and the Cloudflare `allowStructuredOutputEmulation` request option.
+
+### Changed
+- Direct Cloudflare JSON Schema calls on models without documented native support now throw unless prompt emulation is explicitly enabled. Cloudflare JSON Schema streaming requests also throw.
+
 ### Fixed
 - Cloudflare structured-output routing now matches adapter behavior: native JSON Schema is gated by model capability, unsupported requests fail or explicitly emulate, streaming requests reject consistently, and factory fallback remains available.
 

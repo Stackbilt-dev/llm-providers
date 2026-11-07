@@ -66,6 +66,7 @@ export interface CanonicalProviderOptions {
     lora?: string;
     topP?: number;
     frequencyPenalty?: number;
+    allowStructuredOutputEmulation?: boolean;
   };
   cerebras?: {
     reasoning?: LLMRequest['reasoning'];
@@ -234,6 +235,7 @@ export function canonicalToLLMRequest(request: CanonicalLLMRequest): LLMRequest 
     legacy.lora = cloudflare.lora;
     legacy.topP = cloudflare.topP;
     legacy.frequencyPenalty = cloudflare.frequencyPenalty;
+    legacy.allowStructuredOutputEmulation = cloudflare.allowStructuredOutputEmulation;
   }
 
   const cerebras = request.providerOptions?.cerebras;
@@ -364,6 +366,7 @@ function normalizeProviderOptions(request: LLMRequest): CanonicalProviderOptions
   if (request.lora !== undefined) cloudflare.lora = request.lora;
   if (request.topP !== undefined) cloudflare.topP = request.topP;
   if (request.frequencyPenalty !== undefined) cloudflare.frequencyPenalty = request.frequencyPenalty;
+  if (request.allowStructuredOutputEmulation !== undefined) cloudflare.allowStructuredOutputEmulation = request.allowStructuredOutputEmulation;
 
   const cerebras: NonNullable<CanonicalProviderOptions['cerebras']> = {};
   if (request.reasoning !== undefined) cerebras.reasoning = request.reasoning;
