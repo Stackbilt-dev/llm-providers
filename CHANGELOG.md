@@ -5,8 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.25.0] — 2026-11-06
+
+Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the factory response cache starts cold after upgrading (see Added).
+
 ### Fixed
-- Anthropic tool loops (#124). Multi-turn tool use through the Anthropic provider, including `generateResponseWithTools()`, was rejected by the Messages API on every Claude model:
+- Anthropic tool loops (#124, #142). Multi-turn tool use through the Anthropic provider, including `generateResponseWithTools()`, was rejected by the Messages API on every Claude model:
   - `tool_result` blocks now send `tool_use_id`; they sent `id`.
   - A failed tool's error message is now sent as the result's `content` with `is_error: true`, after any partial output; it was sent as empty content.
   - When an assistant turn with tool calls is rebuilt from `content` and `toolCalls`, its text is kept before the `tool_use` blocks; it was dropped. Whitespace-only text is still left out.
