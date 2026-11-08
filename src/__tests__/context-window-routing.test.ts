@@ -495,4 +495,54 @@ describe('fallback rules', () => {
     expect(response.provider).toBe('groq');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("a caller's own rule can bring back a provider skipped earlier in the chain", async () => {
+    const { llm, run, fetchMock } = setup('fail', {
+      preferredProvider: 'groq',
+      fallbackRules: [{ condition: 'error', fallbackProvider: 'groq' }],
+    });
+    expect(planOf(llm, requestOf(150_000)).contextSkips).toEqual(new Set(['groq']));
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.provider).toBe('groq');
+    expect(response.fallback?.failedAttempts.map(hop => [hop.provider, hop.errorCode])).toEqual([
+      ['groq', 'CONTEXT_WINDOW'],
+      ['cloudflare', expect.anything()],
+    ]);
+  });
+
+  it('a provider brought back by a rule is tried only once', async () => {
+    const { llm, run, fetchMock } = setup('fail', {
+      preferredProvider: 'groq',
+      fallbackRules: [{ condition: 'error', fallbackProvider: 'groq' }],
+    });
+    fetchMock.mockImplementation(async () => new Response('{"error":{"message":"boom"}}', { status: 500 }));
+    await expect(llm.generateResponse(requestOf(150_000))).rejects.toThrow();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fallbackRules: null keeps the built-in rules, which don't override a skip", () => {
+    const { llm } = setup('ok', { fallbackRules: null as unknown as undefined });
+    expect((llm as unknown as { factory: { fallbackRulesAreUserSupplied: boolean } }).factory.fallbackRulesAreUserSupplied).toBe(false);
+  });
+});
+
+describe('updateConfig', () => {
+  it('turning contextWindowRouting on after construction takes effect', async () => {
+    const { llm, fetchMock } = setup('ok', { contextWindowRouting: false, preferredProvider: 'groq' });
+    expect(planOf(llm, requestOf(150_000)).contextSkips.size).toBe(0);
+    llm.updateConfig({ contextWindowRouting: true });
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(response.provider).toBe('cloudflare');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fallbackRules set after construction override a skip', async () => {
+    const { llm } = setup('fail');
+    llm.updateConfig({ fallbackRules: [{ condition: 'error', fallbackProvider: 'groq' }] });
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(response.provider).toBe('groq');
+  });
 });

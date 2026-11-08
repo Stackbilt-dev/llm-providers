@@ -442,7 +442,7 @@ export class LLMProviderFactory {
       ? new CostTracker({}, config.ledger, this.logger)
       : this.resilienceContext.costTracker;
     this.fallbackRules = config.fallbackRules || this.getDefaultFallbackRules();
-    this.fallbackRulesAreUserSupplied = config.fallbackRules !== undefined;
+    this.fallbackRulesAreUserSupplied = Boolean(config.fallbackRules);
 
     this.initializeProviders();
   }
@@ -2285,11 +2285,15 @@ export class LLMProviderFactory {
     // A caller's own fallback rule is explicit routing: its target is tried as it would
     // be without context-window routing. The built-in defaults (including a catch-all
     // error rule) don't override a skip.
-    if (this.fallbackRulesAreUserSupplied) contextSkips.delete(targetProvider);
+    // If the target was skipped earlier in the chain, it hasn't been tried yet, so it is
+    // queued again right after the failed provider. Its skip is cleared here, so this
+    // happens at most once per provider.
+    const reviveSkipped = this.fallbackRulesAreUserSupplied && contextSkips.delete(targetProvider);
 
     const nextIndex = currentIndex + 1;
     const firstIndex = providerChain.indexOf(targetProvider);
     if (firstIndex >= 0 && firstIndex <= currentIndex) {
+      if (reviveSkipped) providerChain.splice(nextIndex, 0, targetProvider);
       return;
     }
 
