@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- Workers AI model `@cf/deepseek-ai/deepseek-v4.1-flash-1017` (DeepSeek V4.1 Flash): 1,048,576-token context, tools, streaming and reasoning effort none / low / high, at $0.30 / $1.20 per million input / output tokens; exported as `MODELS.CF_DEEPSEEK_V4_1_FLASH`. Like DeepSeek V4, it needs a Workers Paid plan or AI Gateway credits. Default model choices don't change; it ranks right after DeepSeek V4 Flash (fourth among Cloudflare long-context models). Cloudflare lists vision for it, but image input isn't enabled until the request shape is verified.
+
 ## [1.25.0] — 2026-11-06
 
 Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the factory response cache starts cold after upgrading (see Changed).
