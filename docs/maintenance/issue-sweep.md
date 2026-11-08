@@ -50,15 +50,15 @@ Main changes: [factory](../../src/factory.ts), [public exports](../../src/index.
 
 New utilities: [response cache identity/validation](../../src/utils/response-cache.ts), [provider SSE lifecycle](../../src/utils/provider-stream.ts), [resilience context](../../src/utils/resilience-context.ts).
 
-New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts), [stream lifecycle](../../src/__tests__/stream-lifecycle.test.ts), [context ownership/recovery](../../src/__tests__/resilience-context.test.ts), [canonical identity/routing](../../src/__tests__/canonical-identity-routing.test.ts). Existing schema-drift tests now reset breaker history between cases; gateway diagnostic tests check failed-plan executability. The sweep left the existing factory tests unchanged. Later work added [hook isolation](../../src/__tests__/hook-isolation.test.ts) (#120, 1.22.0), [catalog accuracy](../../src/__tests__/catalog-accuracy.test.ts) (1.22.1) [model refresh](../../src/__tests__/model-refresh.test.ts) (1.23.0) and [pinning and reasoning](../../src/__tests__/pin-and-reasoning.test.ts) (#139, 1.24.0). Test counts at 1.23.0: tenant safety 46, stream lifecycle 43, context ownership/recovery 14, canonical identity/routing 10, hook isolation 20, catalog accuracy 27, model refresh 125. At 1.24.0, pinning and reasoning has 45. At 1.25.0, [Anthropic tool loops](../../src/__tests__/anthropic-tool-loop.test.ts) (#142) has 57.
+New regression suites: [tenant safety](../../src/__tests__/tenant-safety.test.ts), [stream lifecycle](../../src/__tests__/stream-lifecycle.test.ts), [context ownership/recovery](../../src/__tests__/resilience-context.test.ts), [canonical identity/routing](../../src/__tests__/canonical-identity-routing.test.ts). Existing schema-drift tests now reset breaker history between cases; gateway diagnostic tests check failed-plan executability. The sweep left the existing factory tests unchanged. Later work added [hook isolation](../../src/__tests__/hook-isolation.test.ts) (#120, 1.22.0), [catalog accuracy](../../src/__tests__/catalog-accuracy.test.ts) (1.22.1) [model refresh](../../src/__tests__/model-refresh.test.ts) (1.23.0) and [pinning and reasoning](../../src/__tests__/pin-and-reasoning.test.ts) (#139, 1.24.0). Test counts at 1.23.0: tenant safety 46, stream lifecycle 43, context ownership/recovery 14, canonical identity/routing 10, hook isolation 20, catalog accuracy 27, model refresh 125. At 1.24.0, pinning and reasoning has 45. At 1.25.0, [Anthropic tool loops](../../src/__tests__/anthropic-tool-loop.test.ts) (#142) has 57. At 1.26.0 (#144, DeepSeek V4.1 Flash), model refresh has 127 and pinning and reasoning 49.
 
 ## Validation evidence
 
 Host: Windows, Node `v24.19.0`, npm `11.17.0`.
 
-Re-run at 1.25.0 (2026-11-06); the publish workflow re-runs them on Ubuntu with Node 22 when the release is created:
+Re-run at 1.26.0 (2026-11-08); the publish workflow re-runs them on Ubuntu with Node 22 when the release is created:
 
-- `npm test`: **894 passing tests across 32 files** (837 across 31 at 1.24.1; 834 at 1.24.0; 789 across 30 at 1.23.0).
+- `npm test`: **905 passing tests across 32 files** (894 at 1.25.0; 837 across 31 at 1.24.1; 834 at 1.24.0; 789 across 30 at 1.23.0).
 - `npm run typecheck`: passed.
 - `npm run build`, `npm run test:package` and `npm run test:worker-import`: passed.
 
