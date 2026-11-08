@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Changed
+- The factory skips providers whose planned model's context window can't hold the request's estimated input (message and system-prompt characters ÷ 4), on both the response and streaming paths, and throws `NoRouteError` before any call when no configured provider's model can (#113, #136). Such requests used to be sent anyway and failed with an error that doesn't fall back. Pinned models and fallback rules that name a `fallbackModel` are still tried. Catalog ranking (`rankModels`, `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`) prefers models that can hold the input and keeps its usual ranking when none can. Only the input is checked, not `maxTokens`.
+
 ## [1.26.0] — 2026-11-08
 
 ### Added

@@ -556,6 +556,14 @@ const llm = new LLMProviders({
 
 Default provider precedence remains Cloudflare → Cerebras → Groq → NVIDIA → Anthropic → OpenAI, but actual dispatch is catalog-driven and can be reordered at runtime by request fit, circuit-breaker state, and ledger burn-rate pressure.
 
+### Context windows
+
+The factory estimates a request's input as the characters of its messages and system prompt divided by four, and skips any provider whose planned model has a smaller context window. An oversized request is never sent to a model that can't hold it, and context overflow doesn't use up a fallback hop. If no configured provider's model can hold the input, it throws `NoRouteError` before any call. Catalog ranking (`rankModels`, `getRoutingInfo`, `getProviderDefaultModel`) likewise prefers models that can hold the input, and keeps its usual ranking when none can.
+
+- A pinned model is always tried; its provider decides whether the request fits. A fallback rule that names its `fallbackModel` is treated the same way. A rule without a model skips a provider whose planned model can't hold the input.
+- Only the input is checked, not `maxTokens`: providers differ on whether the requested output must also fit in the window.
+- The estimate leaves out tool definitions and images, and undercounts text with more tokens per character, such as Chinese, Japanese or Korean, so an overflow can still reach a provider.
+
 ### Pinned models and `allowFallback`
 
 A pinned `model` is tried first, but by default it is not a guarantee: on an eligible failure, or when the pinned provider is skipped (quota-exhausted, circuit open, ledger-limited), another provider and model can serve the request. `fallbackRules: []` removes the rule-based fallbacks only; server errors, network errors, timeouts and schema drift still fall back.

@@ -58,7 +58,10 @@ import { deriveResponseCacheKey, isCachedResponse } from './utils/response-cache
 import type { CreditLedger } from './utils/credit-ledger.js';
 import { ResilienceContext, defaultResilienceContext } from './utils/resilience-context.js';
 import {
+  MODEL_CATALOG,
   PROVIDER_FALLBACK_ORDER,
+  estimateRequestInputTokens,
+  fitsContextWindow,
   getCatalogEntry,
   getProviderDefaultModel,
   getProviderForCatalogModel,
@@ -1425,6 +1428,21 @@ export class LLMProviderFactory {
       throw new ConfigurationError('factory', 'No configured providers support image input');
     }
 
+    // Drop hops whose planned model can't hold the estimated input: they would fail
+    // after a billed or rate-limited attempt, and context overflow doesn't fall back.
+    // A pinned model is kept; its provider decides. Models outside the catalog are kept.
+    const unfitting = chain.filter(name => name !== pinnedProvider
+      && !this.plannedModelFitsContext(name, providerModels.get(name), request));
+    if (unfitting.length > 0) {
+      const remaining = chain.filter(name => !unfitting.includes(name));
+      if (remaining.length === 0) {
+        throw new NoRouteError(
+          `Estimated input of ${estimateRequestInputTokens(request)} tokens exceeds the context window of every configured provider's model`
+        );
+      }
+      chain.splice(0, chain.length, ...remaining);
+    }
+
     if (isStrictReasoning(request)) {
       // Only providers that enforce strict reasoning may serve the request, first
       // hop included; anything else would drop or reinterpret the level.
@@ -1459,6 +1477,12 @@ export class LLMProviderFactory {
     }
 
     return { chain, providerModels, useCase };
+  }
+
+  /** False only when the model is in the catalog for this provider and its window can't hold the input. */
+  private plannedModelFitsContext(provider: string, model: string | undefined, request: LLMRequest): boolean {
+    const entry = model ? MODEL_CATALOG.find(candidate => candidate.provider === provider && candidate.model === model) : undefined;
+    return entry === undefined || fitsContextWindow(entry, request);
   }
 
   /**
@@ -2205,6 +2229,11 @@ export class LLMProviderFactory {
       return;
     }
     if (isStrictReasoning(request) && !STRICT_REASONING_PROVIDERS.has(targetProvider)) {
+      return;
+    }
+    // A rule that names its model is an explicit choice, like a pin. Otherwise the
+    // provider's planned model must hold the input, as in the planned chain.
+    if (!decision.fallbackModel && !this.plannedModelFitsContext(targetProvider, providerModels.get(targetProvider), request)) {
       return;
     }
 

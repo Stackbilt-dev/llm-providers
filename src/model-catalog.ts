@@ -1030,6 +1030,25 @@ function totalMessageLength(request: Partial<LLMRequest> | undefined): number {
   return (request?.messages ?? []).reduce((sum, message) => sum + message.content.length, 0);
 }
 
+/**
+ * Rough input size for routing: characters of the messages and system prompt divided
+ * by four. Tool definitions and images are not counted, so it tends to undercount,
+ * which keeps context-window filtering from excluding models that would fit.
+ */
+export function estimateRequestInputTokens(request: Partial<LLMRequest> | undefined): number {
+  const charCount = totalMessageLength(request) + (request?.systemPrompt?.length ?? 0);
+  return Math.max(1, Math.ceil(charCount / 4));
+}
+
+/**
+ * Whether a model's context window can hold the request's estimated input. Only the
+ * input is counted: providers differ on whether `maxTokens` must also fit.
+ */
+export function fitsContextWindow(entry: ModelCatalogEntry, request: Partial<LLMRequest> | undefined): boolean {
+  if (!request?.messages) return true;
+  return estimateRequestInputTokens(request) <= entry.capabilities.maxContextLength;
+}
+
 function providerRank(provider: ProviderName): number {
   const index = PROVIDER_FALLBACK_ORDER.indexOf(provider);
   return index >= 0 ? index : PROVIDER_FALLBACK_ORDER.length;
@@ -1146,9 +1165,15 @@ export function rankModels(
   const allowedProviders = new Set(availableProviders as ProviderName[]);
   const precedencePenalty = useCase === 'COST_EFFECTIVE' ? 2 : 0.01;
 
-  return MODEL_CATALOG
+  const compatible = MODEL_CATALOG
     .filter(entry => allowedProviders.has(entry.provider))
-    .filter(entry => isCompatible(entry, context, useCase))
+    .filter(entry => isCompatible(entry, context, useCase));
+  // Prefer models whose context window holds the estimated input. When none does,
+  // keep the full ranking so callers still get a recommendation (the factory then
+  // refuses the request before calling a provider).
+  const fitting = compatible.filter(entry => fitsContextWindow(entry, context.request));
+
+  return (fitting.length > 0 ? fitting : compatible)
     .map(entry => ({
       entry,
       score:
@@ -1393,8 +1418,7 @@ function resolveRoutingInfo(
   const requestsStreaming = request.stream === true;
   const useCase = inferUseCaseFromRequest(request);
 
-  const charCount = totalMessageLength(request) + (request.systemPrompt?.length ?? 0);
-  const estimatedInputTokens = Math.max(1, Math.ceil(charCount / 4));
+  const estimatedInputTokens = estimateRequestInputTokens(request);
 
   // When a specific model is pinned, report on that model rather than recommending.
   if (request.model) {
