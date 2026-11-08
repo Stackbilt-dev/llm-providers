@@ -1,5 +1,5 @@
 import type { CreditLedger } from './utils/credit-ledger.js';
-import type { CircuitBreakerState, LLMMessage, LLMRequest, ModelCapabilities } from './types.js';
+import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
 import { NoRouteError } from './errors.js';
 import { cloudflareReasoningEffortCapability } from './providers/cloudflare-reasoning.js';
 
@@ -1030,33 +1030,64 @@ function stringLength(value: unknown): number {
   return typeof value === 'string' ? value.length : 0;
 }
 
-/** Characters of the text blocks in provider-native content (text, thinking). */
-function providerContentLength(message: LLMMessage): number {
-  return (message.providerContent?.blocks ?? []).reduce(
-    (sum, block) => sum + stringLength(block.text) + stringLength(block.thinking), 0);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/** Sum `measure` over `items` when it is an array of objects; anything else counts as zero. */
+function sumOver(items: unknown, measure: (item: Record<string, unknown>) => number): number {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((sum: number, item) => sum + (isRecord(item) ? measure(item) : 0), 0);
+}
+
+function jsonLength(value: unknown): number {
+  if (value === undefined) return 0;
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Characters of provider-native content blocks: text, thinking, redacted thinking
+ * (`data`) and tool-use input.
+ */
+function providerContentLength(message: Record<string, unknown>): number {
+  const providerContent = message.providerContent;
+  return isRecord(providerContent)
+    ? sumOver(providerContent.blocks, block => stringLength(block.text) + stringLength(block.thinking)
+      + stringLength(block.data) + jsonLength(block.input))
+    : 0;
 }
 
 /**
  * Characters a message sends: its text, tool-call arguments and tool results. When it
  * carries provider-native content, which replaces the text and tool calls for its own
- * provider, the larger of the two is counted. Non-string values count as zero.
+ * provider, the larger of the two is counted. Malformed values count as zero.
  */
-function messageLength(message: LLMMessage): number {
-  const toolCalls = (message.toolCalls ?? []).reduce(
-    (sum, call) => sum + stringLength(call?.function?.arguments), 0);
-  const toolResults = (message.toolResults ?? []).reduce(
-    (sum, result) => sum + stringLength(result?.output) + stringLength(result?.error), 0);
+function messageLength(message: Record<string, unknown>): number {
+  const toolCalls = sumOver(message.toolCalls, call =>
+    isRecord(call.function) ? stringLength(call.function.arguments) : 0);
+  const toolResults = sumOver(message.toolResults, result =>
+    stringLength(result.output) + stringLength(result.error));
   return Math.max(stringLength(message.content) + toolCalls, providerContentLength(message)) + toolResults;
 }
 
+/** Everything the messages send, for context-window checks. */
 function totalMessageLength(request: Partial<LLMRequest> | undefined): number {
-  return (request?.messages ?? []).reduce((sum, message) => sum + (message ? messageLength(message) : 0), 0);
+  return sumOver(request?.messages, messageLength);
+}
+
+/** Message text only, for use-case inference (unchanged by context-window routing). */
+function totalMessageTextLength(request: Partial<LLMRequest> | undefined): number {
+  return sumOver(request?.messages, message => stringLength(message.content));
 }
 
 /**
  * Rough input size for routing: characters of the messages (text, tool-call arguments,
- * tool results, provider-native text) and system prompt, divided by four. Tool
- * definitions and images are not counted.
+ * tool results and errors, provider-native content) and system prompt, divided by
+ * four. Tool definitions and images are not counted.
  */
 export function estimateRequestInputTokens(request: Partial<LLMRequest> | undefined): number {
   const charCount = totalMessageLength(request) + stringLength(request?.systemPrompt);
@@ -1172,7 +1203,7 @@ export function inferUseCaseFromRequest(request: Partial<LLMRequest>): ModelReco
   if (usesVision(request)) return 'VISION';
   if (usesTools(request) || isStructuredRequest(request)) return 'TOOL_CALLING';
 
-  const messageLength = totalMessageLength(request);
+  const messageLength = totalMessageTextLength(request);
   if ((request.maxTokens ?? 0) >= 4000 || messageLength >= 20_000) {
     return 'LONG_CONTEXT';
   }
@@ -1188,15 +1219,9 @@ export function rankModels(
   const allowedProviders = new Set(availableProviders as ProviderName[]);
   const precedencePenalty = useCase === 'COST_EFFECTIVE' ? 2 : 0.01;
 
-  const compatible = MODEL_CATALOG
+  const ranked = MODEL_CATALOG
     .filter(entry => allowedProviders.has(entry.provider))
-    .filter(entry => isCompatible(entry, context, useCase));
-  // Prefer models whose context window holds the estimated input. When none does,
-  // keep the full ranking so callers still get a recommendation (the factory then
-  // refuses the request before calling a provider).
-  const fitting = compatible.filter(entry => fitsContextWindow(entry, context.request));
-
-  return (fitting.length > 0 ? fitting : compatible)
+    .filter(entry => isCompatible(entry, context, useCase))
     .map(entry => ({
       entry,
       score:
@@ -1208,6 +1233,12 @@ export function rankModels(
     .filter(result => Number.isFinite(result.score))
     .sort((a, b) => b.score - a.score)
     .map(result => result.entry);
+
+  // Prefer models whose context window holds the estimated input, among the models
+  // still routable (an open breaker scores -Infinity and is already gone). When none
+  // does, keep the full ranking so callers still get a recommendation.
+  const fitting = ranked.filter(entry => fitsContextWindow(entry, context.request));
+  return fitting.length > 0 ? fitting : ranked;
 }
 
 export function getRecommendedModel(

@@ -10,9 +10,10 @@ import {
   getCatalogEntry,
   getProviderDefaultModel,
   getRecommendedModel,
+  inferUseCaseFromRequest,
   rankModels,
 } from '../model-catalog';
-import { LLMProviders } from '../index';
+import { LLMProviders, ResilienceContext } from '../index';
 import type { ProviderFactoryConfig } from '../factory';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
@@ -135,6 +136,41 @@ describe('context-window estimate', () => {
     expect(() => getRecommendedModel('BALANCED', ['groq'], { request: malformed })).not.toThrow();
   });
 
+  it('counts every provider-native block kind: text, thinking, redacted thinking and tool-use input', () => {
+    const blocks = [
+      { type: 'thinking', thinking: 'x'.repeat(40), signature: 's' },
+      { type: 'redacted_thinking', data: 'x'.repeat(40) },
+      { type: 'text', text: 'x'.repeat(40) },
+      { type: 'tool_use', id: 't', name: 'f', input: { q: 'x'.repeat(31) } },
+    ];
+    // input serialises to {"q":"…"}: 31 + 9 characters.
+    expect(estimateRequestInputTokens({ messages: [{ role: 'assistant', content: '', providerContent: { provider: 'anthropic', blocks } }] })).toBe(40);
+  });
+
+  it('counts malformed containers as zero instead of throwing', () => {
+    const malformed = [
+      { role: 'assistant', content: 'x'.repeat(40), providerContent: { provider: 'anthropic', blocks: [null, 'text', 7] } },
+      { role: 'assistant', content: '', providerContent: { provider: 'anthropic', blocks: {} } },
+      { role: 'assistant', content: '', providerContent: 'not an object' },
+      { role: 'assistant', content: '', toolCalls: {} },
+      { role: 'assistant', content: '', toolCalls: [null, { function: null }, { function: { arguments: 5 } }] },
+      { role: 'user', content: '', toolResults: 'nope' },
+      { role: 'user', content: '', toolResults: [null, { output: {} }] },
+      null,
+    ];
+    const request = { messages: malformed } as unknown as LLMRequest;
+    expect(estimateRequestInputTokens(request)).toBe(10);
+    expect(estimateRequestInputTokens({ messages: {} } as unknown as LLMRequest)).toBe(1);
+    expect(() => rankModels('BALANCED', ['groq'], { request: { messages: malformed.slice(0, 3) } as unknown as LLMRequest })).not.toThrow();
+  });
+
+  it('does not change use-case inference: only message text counts there', () => {
+    const thinking = { provider: 'anthropic', blocks: [{ type: 'thinking', thinking: 'x'.repeat(48_000), signature: 's' }] };
+    const request = { messages: [{ role: 'assistant' as const, content: 'x'.repeat(10_000), providerContent: thinking }] };
+    expect(inferUseCaseFromRequest(request)).toBe('BALANCED');
+    expect(inferUseCaseFromRequest({ messages: [{ role: 'user', content: 'x'.repeat(20_000) }] })).toBe('LONG_CONTEXT');
+  });
+
   it('checks only the input against the window, not maxTokens', () => {
     const groq = getCatalogEntry('llama-3.3-70b-versatile')!;
     const window = groq.capabilities.maxContextLength;
@@ -154,6 +190,15 @@ describe('ranking prefers models that can hold the input', () => {
     expect(ranked.some(entry => entry.provider === 'groq')).toBe(false);
     expect(getRecommendedModel('LONG_CONTEXT', ['cloudflare', 'groq'], { request }))
       .toBe(ranked[0].model);
+  });
+
+  it('ignores fitting models on an open-breaker provider rather than returning nothing', () => {
+    const request = requestOf(150_000);
+    const providerHealth = { cloudflare: { circuitBreaker: { state: 'OPEN' as const } } };
+    const ranked = rankModels('LONG_CONTEXT', ['cloudflare', 'groq'], { request, providerHealth });
+    expect(ranked.length).toBeGreaterThan(0);
+    expect(ranked.every(entry => entry.provider === 'groq')).toBe(true);
+    expect(getRecommendedModel('LONG_CONTEXT', ['cloudflare', 'groq'], { request, providerHealth })).toBe(ranked[0].model);
   });
 
   it('keeps the full ranking when no model can hold the input', () => {
@@ -230,6 +275,35 @@ describe('factory fallback respects context windows', () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(response.provider).toBe('groq');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps smaller models when the only fitting provider is quota-exhausted', async () => {
+    const resilienceContext = new ResilienceContext();
+    resilienceContext.exhaustion.markExhausted('cloudflare');
+    const { llm, run, fetchMock } = setup('ok', { resilienceContext });
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(response.provider).toBe('groq');
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(llm.getRoutingInfo(requestOf(150_000)).provider).toBe('groq');
+  });
+
+  it('keeps smaller models when the only fitting provider has an open circuit breaker', async () => {
+    const resilienceContext = new ResilienceContext();
+    resilienceContext.circuitBreakers.getBreaker('cloudflare').forceOpen();
+    const { llm, run, fetchMock } = setup('ok', { resilienceContext, enableCircuitBreaker: true });
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(response.provider).toBe('groq');
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies to image requests', async () => {
+    const { llm, run, fetchMock } = setup('fail');
+    await expect(llm.generateResponse(requestOf(150_000, { images: [{ data: 'YQ==', mimeType: 'image/png' }] })))
+      .rejects.toThrow('binding exploded');
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('skips a preferred provider that cannot hold the input', async () => {
@@ -309,6 +383,24 @@ describe('fallback rules and context windows', () => {
     const response = await llm.generateResponse(requestOf(150_000));
     expect(response.provider).toBe('groq');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies a rule without a model as before when no configured model can hold the input', async () => {
+    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
+    const urls: string[] = [];
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => { urls.push(String(url)); return groqResponse(); });
+    vi.stubGlobal('fetch', fetchMock);
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      cerebras: { apiKey: 'test', maxRetries: 0 },
+      groq: { apiKey: 'test', maxRetries: 0 },
+      stateScope: 'client',
+      fallbackRules: [{ condition: 'error', fallbackProvider: 'groq' }],
+    });
+    // Without the rule, Cerebras would come before Groq.
+    const response = await llm.generateResponse(requestOf(1_100_000));
+    expect(response.provider).toBe('groq');
+    expect(urls[0]).toContain('groq');
   });
 
   it('still falls back through the planned chain when no configured model can hold the input', async () => {

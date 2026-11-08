@@ -1344,10 +1344,7 @@ export class LLMProviderFactory {
   getRoutingInfo(request: LLMRequest): RoutingInfo {
     request = withResolvedModel(request);
     const plan = this.buildProviderPlan(request);
-    const selected = plan.chain.find(name => this.providers.has(name)
-      && !this.resilienceContext.exhaustion.isExhausted(name)
-      && (!this.config.enableCircuitBreaker || !this.resilienceContext.circuitBreakers.getBreaker(name).isOpen())
-      && (!this.config.ledger || !this.isLedgerLimited(name)));
+    const selected = plan.chain.find(name => this.isProviderAdmissible(name));
     if (!selected) throw new NoRouteError();
     const selectedRequest = this.requestForProvider(request, selected, plan.providerModels);
     return describeRouting(selectedRequest, [selected as ProviderName], {
@@ -1456,10 +1453,10 @@ export class LLMProviderFactory {
       chain.splice(0, chain.length, ...enforcing);
     }
 
-    // When some hop's planned model can hold the estimated input, drop the hops whose
-    // model can't: they would fail after a billed or rate-limited attempt, and context
-    // overflow doesn't fall back. When none can, the chain is left as it is, since the
-    // estimate is approximate. A pinned model is always kept (its provider decides), and
+    // When a hop that can be tried right now has a planned model that holds the
+    // estimated input, drop the hops whose model can't: they would fail after a billed
+    // or rate-limited attempt, and context overflow doesn't fall back. Otherwise the
+    // chain is left as it is, since the estimate is approximate. A pinned model is always kept (its provider decides), and
     // models outside the catalog count as fitting. Runs after the strict-reasoning
     // filter so that filter's errors never stem from this one, and before
     // allowFallback: false trims the chain, so an unpinned request goes to the first
@@ -1477,8 +1474,22 @@ export class LLMProviderFactory {
     return { chain, providerModels, useCase };
   }
 
+  /** Whether the provider is configured and not quota-exhausted, circuit-open or ledger-limited right now. */
+  private isProviderAdmissible(name: string): boolean {
+    return this.providers.has(name)
+      && !this.resilienceContext.exhaustion.isExhausted(name)
+      && (!this.config.enableCircuitBreaker || !this.resilienceContext.circuitBreakers.getBreaker(name).isOpen())
+      && (!this.config.ledger || !this.isLedgerLimited(name));
+  }
+
+  /**
+   * Whether a hop that can be tried right now has a planned model that holds the input.
+   * Unavailable hops don't count: dropping smaller models in favour of a fitting
+   * provider that is down would leave nothing to serve the request.
+   */
   private chainHasContextFit(chain: string[], providerModels: Map<string, string>, request: LLMRequest): boolean {
-    return chain.some(name => this.plannedModelFitsContext(name, providerModels.get(name), request));
+    return chain.some(name => this.isProviderAdmissible(name)
+      && this.plannedModelFitsContext(name, providerModels.get(name), request));
   }
 
   /** False only when the model is in the catalog for this provider and its window can't hold the input. */
@@ -2233,10 +2244,12 @@ export class LLMProviderFactory {
     if (isStrictReasoning(request) && !STRICT_REASONING_PROVIDERS.has(targetProvider)) {
       return;
     }
-    // A rule that names its model is an explicit choice, like a pin. Otherwise a rule
-    // doesn't move a provider whose planned model can't hold the input. (When no model
-    // can, the planned chain is unchanged and still includes that provider.)
-    if (!decision.fallbackModel && !this.plannedModelFitsContext(targetProvider, providerModels.get(targetProvider), request)) {
+    // A rule that names its model is an explicit choice, like a pin. Otherwise, as in
+    // the planned chain, a rule doesn't move a provider whose planned model can't hold
+    // the input while an available hop's model can; when none can, rules apply as before.
+    if (!decision.fallbackModel
+        && !this.plannedModelFitsContext(targetProvider, providerModels.get(targetProvider), request)
+        && this.chainHasContextFit(providerChain, providerModels, request)) {
       return;
     }
 
