@@ -99,6 +99,13 @@ export interface ProviderFactoryConfig {
   nvidia?: NvidiaConfig;
   preferredProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia' | 'auto';
   defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia' | 'auto';
+  /**
+   * Skip providers whose planned model's context window can't hold the request's
+   * estimated input, when an available provider's model can (default true). Skips are
+   * recorded as `CONTEXT_WINDOW` in `fallback.failedAttempts`. Set false to route
+   * without this check.
+   */
+  contextWindowRouting?: boolean;
   fallbackRules?: FallbackRule[];
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
@@ -148,6 +155,8 @@ interface ProviderSelectionPlan {
   chain: string[];
   providerModels: Map<string, string>;
   useCase: ModelRecommendationUseCase;
+  /** Providers to skip with CONTEXT_WINDOW: their planned model can't hold the input. */
+  contextSkips: Set<string>;
 }
 
 interface ImageAnalysisTotals {
@@ -593,6 +602,12 @@ export class LLMProviderFactory {
         const provider = this.providers.get(providerName);
         if (!provider) continue;
 
+        if (selectionPlan.contextSkips.has(providerName)) {
+          this.logger.warn(`[LLMProviderFactory] Planned model for ${providerName} can't hold the estimated input, skipping`);
+          skip(providerName, 'CONTEXT_WINDOW');
+          continue;
+        }
+
         // Check exhaustion registry
         if (this.resilienceContext.exhaustion.isExhausted(providerName)) {
           this.logger.warn(`[LLMProviderFactory] Provider ${providerName} is quota-exhausted, skipping`);
@@ -924,7 +939,8 @@ export class LLMProviderFactory {
           providerChain,
           index,
           providerModels,
-          request
+          request,
+          selectionPlan.contextSkips
         );
       }
     }
@@ -956,6 +972,7 @@ export class LLMProviderFactory {
         const provider = this.providers.get(providerName);
         if (!provider) continue;
         if (!provider.supportsStreaming || !provider.streamResponse) { skip(providerName, 'STREAMING_UNSUPPORTED'); continue; }
+        if (selectionPlan.contextSkips.has(providerName)) { skip(providerName, 'CONTEXT_WINDOW'); continue; }
         if (this.resilienceContext.exhaustion.isExhausted(providerName)) { skip(providerName, 'QUOTA_EXHAUSTED'); continue; }
         if (this.config.enableCircuitBreaker && this.resilienceContext.circuitBreakers.getBreaker(providerName).isOpen()) {
           skip(providerName, 'CIRCUIT_BREAKER_OPEN');
@@ -1039,7 +1056,7 @@ export class LLMProviderFactory {
           throw error;
         }
 
-        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels, request);
+        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels, request, selectionPlan.contextSkips);
       }
     }
 
@@ -1346,6 +1363,7 @@ export class LLMProviderFactory {
     request = withResolvedModel(request);
     const plan = this.buildProviderPlan(request);
     const selected = plan.chain.find(name => this.providers.has(name)
+      && !plan.contextSkips.has(name)
       && !this.resilienceContext.exhaustion.isExhausted(name)
       && (!this.config.enableCircuitBreaker || !this.resilienceContext.circuitBreakers.getBreaker(name).isOpen())
       && (!this.config.ledger || !this.isLedgerLimited(name)));
@@ -1457,21 +1475,22 @@ export class LLMProviderFactory {
       chain.splice(0, chain.length, ...enforcing);
     }
 
-    // Context windows. When a provider that can be tried right now has a planned model
-    // whose window holds the estimated input, remove the providers whose planned model
-    // can't: they would fail after a billed or rate-limited attempt, and the overflow
-    // error doesn't fall back. Hops are only removed, never reordered or re-planned, so
-    // when no available provider fits the chain is exactly what it would otherwise be.
-    // A pinned model is always kept (its provider decides); models outside the catalog
-    // count as fitting. Runs after the strict-reasoning filter, so that filter's errors
-    // never stem from this one, and before allowFallback: false trims the chain, so an
-    // unpinned request goes to the first provider whose model fits.
-    if (request.messages !== undefined) {
+    // Context windows. When a provider that can be relied on right now has a planned
+    // model whose window holds the estimated input, providers whose planned model can't
+    // are skipped at dispatch (recorded as CONTEXT_WINDOW): they would fail after a
+    // billed or rate-limited attempt, and the overflow error doesn't fall back. The
+    // chain itself is not changed. A pinned model is never skipped (its provider
+    // decides), and models outside the catalog count as fitting. Decided on the full
+    // chain, after the strict-reasoning filter and before allowFallback: false trims it,
+    // so a trimmed chain whose only provider can't hold the input ends in NoRouteError.
+    const contextSkips = new Set<string>();
+    if (this.config.contextWindowRouting !== false && request.messages !== undefined) {
       const estimatedInputTokens = estimateRequestInputTokens(request);
       const fits = (name: string) => this.plannedModelFitsContext(name, providerModels.get(name), estimatedInputTokens);
       if (chain.some(name => fits(name) && this.isAvailableForContextRouting(name))) {
-        const kept = chain.filter(name => name === pinnedProvider || fits(name));
-        chain.splice(0, chain.length, ...kept);
+        for (const name of chain) {
+          if (name !== pinnedProvider && !fits(name)) contextSkips.add(name);
+        }
       }
     }
 
@@ -1479,22 +1498,24 @@ export class LLMProviderFactory {
       chain.splice(1);
     }
 
-    return { chain, providerModels, useCase };
+    return { chain, providerModels, useCase, contextSkips };
   }
 
   /**
    * Whether a provider can be relied on to serve a request right now, for deciding
-   * whether smaller models may be removed from the chain: configured, not
+   * whether providers with smaller models may be skipped: configured, not
    * quota-exhausted or ledger-limited, and with a fully closed circuit breaker. The
    * breaker is checked whatever `enableCircuitBreaker` says, because adapters use the
    * same breaker by default; a degraded or recovering breaker may still reject calls.
-   * Erring towards "unavailable" only leaves the chain as it would otherwise be.
+   * Erring towards "unavailable" only means nothing is skipped. Has no side effects.
    */
   private isAvailableForContextRouting(name: string): boolean {
+    // Read breaker state without creating a breaker: one that doesn't exist yet is closed.
+    const breakerState = this.resilienceContext.circuitBreakers.getAllStates()[name]?.state ?? 'CLOSED';
     return this.providers.has(name)
       && !this.resilienceContext.exhaustion.isExhausted(name)
-      && this.resilienceContext.circuitBreakers.getBreaker(name).isClosed()
-      && (!this.config.ledger || !this.isLedgerLimited(name));
+      && breakerState === 'CLOSED'
+      && (!this.config.ledger || !this.isLedgerLimited(name, false));
   }
 
   /** False only when the model is in the catalog for this provider and its window can't hold the input. */
@@ -2205,13 +2226,13 @@ export class LLMProviderFactory {
     };
   }
 
-  private isLedgerLimited(providerName: string): boolean {
+  private isLedgerLimited(providerName: string, log = true): boolean {
     if (!this.config.ledger) return false;
 
     for (const dimension of ['rpm', 'rpd', 'tpm', 'tpd'] as const) {
       const check = this.config.ledger.checkRateLimit(providerName, dimension);
       if (!check.allowed) {
-        this.logger.warn(
+        if (log) this.logger.warn(
           `[LLMProviderFactory] Rate limit (${dimension}) exceeded for ${providerName} (${check.used}/${check.limit}), skipping`
         );
         return true;
@@ -2240,7 +2261,8 @@ export class LLMProviderFactory {
     providerChain: string[],
     currentIndex: number,
     providerModels: Map<string, string>,
-    request: LLMRequest
+    request: LLMRequest,
+    contextSkips: Set<string>
   ): void {
     const targetProvider = decision.fallbackProvider;
     if (!targetProvider || targetProvider === failedProvider || !this.providers.has(targetProvider)) {
@@ -2253,6 +2275,9 @@ export class LLMProviderFactory {
     if (decision.fallbackModel) {
       providerModels.set(targetProvider, decision.fallbackModel);
     }
+    // A fallback rule is explicit routing: its target is tried as it would be without
+    // context-window routing.
+    contextSkips.delete(targetProvider);
 
     const nextIndex = currentIndex + 1;
     const firstIndex = providerChain.indexOf(targetProvider);

@@ -5,9 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- `contextWindowRouting` factory option (default `true`). Set it to `false` to route without the context-window check below.
+
 ### Changed
-- When a provider that can be relied on right now has a planned model whose context window can hold the request's estimated input, the factory removes providers whose planned model can't from the fallback chain, on the response, streaming and tool-loop paths (#113, #136). "Relied on" means not quota-exhausted or ledger-limited, with a fully closed circuit breaker. A failure used to fall back onto a model too small for the request, and the overflow error doesn't fall back, so the request failed. Providers are only removed, never reordered or re-planned, so when no available provider's model fits, routing is unchanged. With `allowFallback: false` and no pinned model, the request goes to the first provider whose model can hold the input. Pinned models, fallback rules and catalog ranking are unchanged. Only the input is checked, not `maxTokens`.
-- The input estimate (characters ÷ 4) now counts tool-call arguments, tool results and errors, and provider-native text and thinking, as well as message text and the system prompt. As a result, `RoutingInfo.estimatedInputTokens` and the `getGatewayRoutePlan` context-length warning are higher for tool-loop requests. The estimate counts malformed message fields as zero.
+- When a provider that can be relied on right now has a planned model whose context window can hold the request's estimated input, the factory skips providers whose planned model can't, recording `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts` (#113, #136). "Relied on" means not quota-exhausted or ledger-limited, with a fully closed circuit breaker. This applies on the response, streaming and tool-loop paths.
+  - Before, a failure fell back onto a model too small for the request. The overflow error doesn't fall back, so the request failed. Now a skipped provider also no longer absorbs a transient failure of the provider that fits.
+  - With `allowFallback: false` and no pinned model, a skipped first provider throws `NoRouteError`.
+  - Pinned models, providers chosen by fallback rules, the fallback chain, planned models and catalog ranking are unchanged. When no available provider's model fits, nothing is skipped.
+  - Only the input is checked, not `maxTokens`.
+- The input estimate (characters ÷ 4) now counts tool-call arguments, tool results and errors, and provider-native text and thinking, as well as message text and the system prompt. So `RoutingInfo.estimatedInputTokens` and the `getGatewayRoutePlan` context-length warning are higher for tool-loop requests. Malformed message fields count as zero in the estimate, and in use-case inference, which used to throw on them.
 
 ## [1.26.0] — 2026-11-08
 

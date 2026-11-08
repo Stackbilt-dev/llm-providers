@@ -1,8 +1,8 @@
 /**
  * #136 / #113: the context window is a routing constraint. When a provider that can be
- * tried right now has a planned model that holds the estimated input, providers whose
- * planned model can't are removed from the fallback chain. Nothing is reordered or
- * re-planned, and catalog ranking is unchanged.
+ * relied on right now has a planned model that holds the estimated input, providers
+ * whose planned model can't are skipped at dispatch and recorded as CONTEXT_WINDOW.
+ * The chain, planned models and catalog ranking are unchanged.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -14,7 +14,7 @@ import {
   inferUseCaseFromRequest,
   rankModels,
 } from '../model-catalog';
-import { LLMProviders, ResilienceContext } from '../index';
+import { CreditLedger, LLMProviders, NoRouteError, ResilienceContext } from '../index';
 import type { ProviderFactoryConfig } from '../factory';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
@@ -79,6 +79,11 @@ function setup(cloudflare: 'ok' | 'fail' | 'stream', config: Partial<ProviderFac
     ...config,
   });
   return { llm, run, fetchMock };
+}
+
+type Plan = { chain: string[]; contextSkips: Set<string> };
+function planOf(llm: LLMProviders, request: LLMRequest): Plan {
+  return (llm as unknown as { factory: { buildProviderPlan(request: LLMRequest): Plan } }).factory.buildProviderPlan(request);
 }
 
 async function drain(stream: ReadableStream<string>) {
@@ -275,7 +280,7 @@ describe('factory fallback respects context windows', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('removes nothing when the only fitting provider is unavailable, with three providers', () => {
+  it('skips nothing when the only fitting provider is unavailable, with three providers', () => {
     const resilienceContext = new ResilienceContext();
     resilienceContext.exhaustion.markExhausted('cloudflare');
     vi.stubGlobal('fetch', vi.fn());
@@ -286,9 +291,9 @@ describe('factory fallback respects context windows', () => {
       stateScope: 'client',
       resilienceContext,
     });
-    const plan = (llm as unknown as { factory: { buildProviderPlan(request: LLMRequest): { chain: string[] } } })
-      .factory.buildProviderPlan(requestOf(150_000));
+    const plan = planOf(llm, requestOf(150_000));
     expect([...plan.chain].sort()).toEqual(['cloudflare', 'groq', 'openai']);
+    expect(plan.contextSkips.size).toBe(0);
   });
 
   it('keeps smaller models when the only fitting provider has an open circuit breaker', async () => {
@@ -319,19 +324,84 @@ describe('factory fallback respects context windows', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('with allowFallback: false and no pin, uses the first hop that can hold the input', async () => {
+  it('with allowFallback: false and no pin, throws NoRouteError when the first provider is skipped', async () => {
     const { llm, run, fetchMock } = setup('ok', { preferredProvider: 'groq' });
-    const response = await llm.generateResponse(requestOf(150_000, { allowFallback: false }));
-    expect(response.provider).toBe('cloudflare');
-    expect(run).toHaveBeenCalledTimes(1);
+    const error = await llm.generateResponse(requestOf(150_000, { allowFallback: false })).catch(caught => caught);
+    expect(error).toBeInstanceOf(NoRouteError);
+    expect(error.message).toContain('groq: CONTEXT_WINDOW');
+    expect(run).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+    await expect(llm.generateManagedResponseStream(requestOf(150_000, { allowFallback: false })))
+      .rejects.toBeInstanceOf(NoRouteError);
+  });
+
+  it('records a skip in the fallback report, naming the requested provider', async () => {
+    const { llm } = setup('ok', { preferredProvider: 'groq' });
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(response.provider).toBe('cloudflare');
+    expect(response.fallback).toEqual({
+      requestedProvider: 'groq',
+      requestedModel: 'llama-3.3-70b-versatile',
+      failedAttempts: [{ provider: 'groq', model: 'llama-3.3-70b-versatile', errorCode: 'CONTEXT_WINDOW' }],
+    });
+  });
+
+  it('contextWindowRouting: false routes without the check', async () => {
+    const { llm, run, fetchMock } = setup('fail', { contextWindowRouting: false });
+    expect(planOf(llm, requestOf(150_000)).contextSkips.size).toBe(0);
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(response.provider).toBe('groq');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips nothing when the fitting provider has a degraded or recovering breaker', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const resilienceContext = new ResilienceContext();
+      const breaker = resilienceContext.circuitBreakers.getBreaker('cloudflare');
+      const { llm } = setup('ok', { resilienceContext });
+      breaker.beginExecution().failure(new Error('x'));
+      vi.advanceTimersByTime(10);
+      breaker.beginExecution().failure(new Error('x'));
+      vi.advanceTimersByTime(10);
+      expect(breaker.getState().state).toBe('DEGRADED');
+      expect(planOf(llm, requestOf(150_000)).contextSkips.size).toBe(0);
+      breaker.beginExecution().success();
+      vi.advanceTimersByTime(10);
+      expect(breaker.getState().state).toBe('RECOVERING');
+      expect(planOf(llm, requestOf(150_000)).contextSkips.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips nothing when the fitting provider is ledger-limited, and logs nothing while planning', () => {
+    const ledger = new CreditLedger({ budgets: [{ provider: 'cloudflare', monthlyBudget: 100, rateLimits: { rpm: 1 } }] });
+    ledger.record('cloudflare', '@cf/zai-org/glm-5.3-flash', 0, 10, 10);
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { llm } = setup('ok', { ledger, logger });
+    expect(planOf(llm, requestOf(150_000)).contextSkips.size).toBe(0);
+    expect(logger.warn.mock.calls.some(call => String(call[0]).includes('Rate limit'))).toBe(false);
+  });
+
+  it('does not create circuit breakers while planning', () => {
+    const resilienceContext = new ResilienceContext();
+    const { llm } = setup('ok', { resilienceContext });
+    expect(planOf(llm, requestOf(150_000)).contextSkips).toEqual(new Set(['groq']));
+    expect(Object.keys(resilienceContext.circuitBreakers.getAllStates())).toEqual([]);
   });
 
   it('applies on the managed streaming path', async () => {
     const { llm, run, fetchMock } = setup('stream', { preferredProvider: 'groq' });
     const managed = await llm.generateManagedResponseStream(requestOf(150_000));
     expect(await drain(managed.stream)).toBe('streamed');
-    await expect(managed.completion).resolves.toMatchObject({ outcome: 'success', provider: 'cloudflare' });
+    await expect(managed.completion).resolves.toMatchObject({
+      outcome: 'success', provider: 'cloudflare',
+      fallback: { requestedProvider: 'groq', failedAttempts: [{ provider: 'groq', errorCode: 'CONTEXT_WINDOW' }] },
+    });
     expect(run).toHaveBeenCalledTimes(1);
     expect(fetchMock).not.toHaveBeenCalled();
   });
