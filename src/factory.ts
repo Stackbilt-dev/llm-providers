@@ -58,7 +58,10 @@ import { deriveResponseCacheKey, isCachedResponse } from './utils/response-cache
 import type { CreditLedger } from './utils/credit-ledger.js';
 import { ResilienceContext, defaultResilienceContext } from './utils/resilience-context.js';
 import {
+  MODEL_CATALOG,
   PROVIDER_FALLBACK_ORDER,
+  estimateRequestInputTokens,
+  fitsContextWindow,
   getCatalogEntry,
   getProviderDefaultModel,
   getProviderForCatalogModel,
@@ -96,6 +99,14 @@ export interface ProviderFactoryConfig {
   nvidia?: NvidiaConfig;
   preferredProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia' | 'auto';
   defaultProvider?: 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia' | 'auto';
+  /**
+   * Opt in to skipping providers whose planned model's context window can't hold the
+   * request's estimated input, when an available provider's model can (default false).
+   * Skips are recorded as `CONTEXT_WINDOW` in `fallback.failedAttempts`. This avoids
+   * calls that would fail on overflow; a skipped provider can't then absorb a transient
+   * failure of the provider that fits.
+   */
+  contextWindowRouting?: boolean;
   fallbackRules?: FallbackRule[];
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
@@ -145,6 +156,8 @@ interface ProviderSelectionPlan {
   chain: string[];
   providerModels: Map<string, string>;
   useCase: ModelRecommendationUseCase;
+  /** Providers to skip with CONTEXT_WINDOW: their planned model can't hold the input. */
+  contextSkips: Set<string>;
 }
 
 interface ImageAnalysisTotals {
@@ -413,6 +426,8 @@ export class LLMProviderFactory {
   private costTracker: CostTracker;
   private fallbackRules: FallbackRule[];
   private logger: Logger;
+  /** False while the built-in default fallback rules are in use. */
+  private fallbackRulesAreUserSupplied = false;
   private hooks: ObservabilityHooks;
   private resilienceContext: ResilienceContext;
 
@@ -427,6 +442,7 @@ export class LLMProviderFactory {
       ? new CostTracker({}, config.ledger, this.logger)
       : this.resilienceContext.costTracker;
     this.fallbackRules = config.fallbackRules || this.getDefaultFallbackRules();
+    this.fallbackRulesAreUserSupplied = Boolean(config.fallbackRules);
 
     this.initializeProviders();
   }
@@ -505,6 +521,8 @@ export class LLMProviderFactory {
         costOptimization: this.config.costOptimization,
         defaultVisionModel: this.config.defaultVisionModel,
         fallbackRules: this.fallbackRules,
+        // Undefined when off, so keys for the default config are unchanged.
+        contextWindowRouting: this.config.contextWindowRouting === true ? true : undefined,
       }
     ) : undefined;
 
@@ -609,6 +627,12 @@ export class LLMProviderFactory {
 
         if (this.config.ledger && this.isLedgerLimited(providerName)) {
           skip(providerName, 'LEDGER_LIMITED');
+          continue;
+        }
+
+        if (selectionPlan.contextSkips.has(providerName)) {
+          this.logger.debug(`[LLMProviderFactory] Planned model for ${providerName} can't hold the estimated input, skipping`);
+          skip(providerName, 'CONTEXT_WINDOW');
           continue;
         }
 
@@ -921,7 +945,8 @@ export class LLMProviderFactory {
           providerChain,
           index,
           providerModels,
-          request
+          request,
+          selectionPlan.contextSkips
         );
       }
     }
@@ -959,6 +984,7 @@ export class LLMProviderFactory {
           continue;
         }
         if (this.config.ledger && this.isLedgerLimited(providerName)) { skip(providerName, 'LEDGER_LIMITED'); continue; }
+        if (selectionPlan.contextSkips.has(providerName)) { skip(providerName, 'CONTEXT_WINDOW'); continue; }
 
         if (previousProvider && lastError) {
           this.hooks.onFallback?.({
@@ -1036,7 +1062,7 @@ export class LLMProviderFactory {
           throw error;
         }
 
-        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels, request);
+        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels, request, selectionPlan.contextSkips);
       }
     }
 
@@ -1343,6 +1369,7 @@ export class LLMProviderFactory {
     request = withResolvedModel(request);
     const plan = this.buildProviderPlan(request);
     const selected = plan.chain.find(name => this.providers.has(name)
+      && !plan.contextSkips.has(name)
       && !this.resilienceContext.exhaustion.isExhausted(name)
       && (!this.config.enableCircuitBreaker || !this.resilienceContext.circuitBreakers.getBreaker(name).isOpen())
       && (!this.config.ledger || !this.isLedgerLimited(name)));
@@ -1454,11 +1481,53 @@ export class LLMProviderFactory {
       chain.splice(0, chain.length, ...enforcing);
     }
 
+    // Context windows (opt-in, contextWindowRouting: true). When a provider that can be
+    // relied on right now has a planned model whose window holds the estimated input,
+    // providers whose planned model can't are skipped at dispatch (recorded as
+    // CONTEXT_WINDOW), so no call is spent on a model that would overflow. The chain
+    // itself is not changed. A pinned model is never skipped (its provider
+    // decides), and models outside the catalog count as fitting. Decided on the full
+    // chain, after the strict-reasoning filter and before allowFallback: false trims it,
+    // so a trimmed chain whose only provider can't hold the input ends in NoRouteError.
+    const contextSkips = new Set<string>();
+    if (this.config.contextWindowRouting === true && request.messages !== undefined) {
+      const estimatedInputTokens = estimateRequestInputTokens(request);
+      const fits = (name: string) => this.plannedModelFitsContext(name, providerModels.get(name), estimatedInputTokens);
+      if (chain.some(name => fits(name) && this.isAvailableForContextRouting(name))) {
+        for (const name of chain) {
+          if (name !== pinnedProvider && !fits(name)) contextSkips.add(name);
+        }
+      }
+    }
+
     if (request.allowFallback === false) {
       chain.splice(1);
     }
 
-    return { chain, providerModels, useCase };
+    return { chain, providerModels, useCase, contextSkips };
+  }
+
+  /**
+   * Whether a provider can be relied on to serve a request right now, for deciding
+   * whether providers with smaller models may be skipped: configured, not
+   * quota-exhausted or ledger-limited, and with a fully closed circuit breaker. The
+   * breaker is checked whatever `enableCircuitBreaker` says, because adapters use the
+   * same breaker by default; a degraded or recovering breaker may still reject calls.
+   * Erring towards "unavailable" only means nothing is skipped. Has no side effects.
+   */
+  private isAvailableForContextRouting(name: string): boolean {
+    // Read breaker state without creating a breaker: one that doesn't exist yet is closed.
+    const breakerState = this.resilienceContext.circuitBreakers.getAllStates()[name]?.state ?? 'CLOSED';
+    return this.providers.has(name)
+      && !this.resilienceContext.exhaustion.isExhausted(name)
+      && breakerState === 'CLOSED'
+      && (!this.config.ledger || !this.isLedgerLimited(name, false));
+  }
+
+  /** False only when the model is in the catalog for this provider and its window can't hold the input. */
+  private plannedModelFitsContext(provider: string, model: string | undefined, estimatedInputTokens: number): boolean {
+    const entry = model ? MODEL_CATALOG.find(candidate => candidate.provider === provider && candidate.model === model) : undefined;
+    return entry === undefined || fitsContextWindow(entry, estimatedInputTokens);
   }
 
   /**
@@ -1773,6 +1842,7 @@ export class LLMProviderFactory {
 
     if (config.fallbackRules) {
       this.fallbackRules = config.fallbackRules;
+      this.fallbackRulesAreUserSupplied = true;
     }
 
     // Re-initialize providers if configs changed
@@ -2163,13 +2233,13 @@ export class LLMProviderFactory {
     };
   }
 
-  private isLedgerLimited(providerName: string): boolean {
+  private isLedgerLimited(providerName: string, log = true): boolean {
     if (!this.config.ledger) return false;
 
     for (const dimension of ['rpm', 'rpd', 'tpm', 'tpd'] as const) {
       const check = this.config.ledger.checkRateLimit(providerName, dimension);
       if (!check.allowed) {
-        this.logger.warn(
+        if (log) this.logger.warn(
           `[LLMProviderFactory] Rate limit (${dimension}) exceeded for ${providerName} (${check.used}/${check.limit}), skipping`
         );
         return true;
@@ -2198,7 +2268,8 @@ export class LLMProviderFactory {
     providerChain: string[],
     currentIndex: number,
     providerModels: Map<string, string>,
-    request: LLMRequest
+    request: LLMRequest,
+    contextSkips: Set<string>
   ): void {
     const targetProvider = decision.fallbackProvider;
     if (!targetProvider || targetProvider === failedProvider || !this.providers.has(targetProvider)) {
@@ -2211,10 +2282,18 @@ export class LLMProviderFactory {
     if (decision.fallbackModel) {
       providerModels.set(targetProvider, decision.fallbackModel);
     }
+    // A caller's own fallback rule is explicit routing: its target is tried as it would
+    // be without context-window routing. The built-in defaults (including a catch-all
+    // error rule) don't override a skip.
+    // If the target was skipped earlier in the chain, it hasn't been tried yet, so it is
+    // queued again right after the failed provider. Its skip is cleared here, so this
+    // happens at most once per provider.
+    const reviveSkipped = this.fallbackRulesAreUserSupplied && contextSkips.delete(targetProvider);
 
     const nextIndex = currentIndex + 1;
     const firstIndex = providerChain.indexOf(targetProvider);
     if (firstIndex >= 0 && firstIndex <= currentIndex) {
+      if (reviveSkipped) providerChain.splice(nextIndex, 0, targetProvider);
       return;
     }
 

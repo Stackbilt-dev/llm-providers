@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- `contextWindowRouting` factory option, off by default (#113, #136). When it's on and a provider that can be relied on right now has a planned model whose context window can hold the request's estimated input, the factory skips providers whose planned model can't. "Relied on" means not quota-exhausted or ledger-limited, with a fully closed circuit breaker. Skips are recorded as `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts`. This saves the failed, possibly billed call that an overflow costs before it falls back.
+  - It applies on the response, streaming and tool-loop paths.
+  - Trade-off: a skipped provider can't absorb a transient failure of the provider that fits.
+  - With `allowFallback: false` and no pinned model, a skipped first provider throws `NoRouteError`.
+  - Pinned models and providers chosen by your own `fallbackRules` are never skipped (a rule target skipped earlier in the chain is tried after the provider that failed); the built-in default rules don't override a skip.
+  - Only the input is checked, not `maxTokens`.
+  - The option is part of the response cache key when on, so default cache keys don't change.
+
+### Changed
+- The input estimate (characters ÷ 4) now counts tool-call arguments, tool results and errors, and provider-native text and thinking, as well as message text and the system prompt. So `RoutingInfo.estimatedInputTokens` and the `getGatewayRoutePlan` context-length warning are higher for tool-loop requests. Malformed fields inside a message (non-string content, tool calls, tool results or provider-native content) count as zero in the estimate and in use-case inference, which used to throw on them. A `messages` value that isn't an array, or a `null` message, still throws in catalog `getRoutingInfo`, as before.
+
 ## [1.26.0] — 2026-11-08
 
 ### Added
