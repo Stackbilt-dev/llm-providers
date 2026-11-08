@@ -556,14 +556,12 @@ const llm = new LLMProviders({
 
 Default provider precedence remains Cloudflare → Cerebras → Groq → NVIDIA → Anthropic → OpenAI, but actual dispatch is catalog-driven and can be reordered at runtime by request fit, circuit-breaker state, and ledger burn-rate pressure.
 
-### Context windows
+### Context windows (opt-in)
 
-The factory estimates a request's input as characters divided by four. It counts the system prompt and each message's text (or the text and thinking of its provider-native content, when that is larger), tool-call arguments, and tool results and errors. A provider "can be relied on right now" if it is configured, not quota-exhausted or ledger-limited, and its circuit breaker is fully closed. When such a provider has a planned model whose context window holds the estimate, providers whose planned model can't are skipped when their turn comes. The skip is recorded like a quota-exhausted provider: `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts` on the response or `StreamCompletion`. A failure then doesn't fall back onto a model too small for the request. This applies on the response and streaming paths, and to each turn of `generateResponseWithTools` as tool results accumulate.
-
-The fallback chain, planned models and catalog ranking (`rankModels`, catalog `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`) don't change. When no available provider's model fits, nothing is skipped.
+By default, a request too large for a provider's model is still sent to it. The overflow error then falls back like any other error, through the built-in catch-all fallback rule, which costs a failed call that may be billed or rate-limited. Set `contextWindowRouting: true` to skip those calls.
 
 ```typescript
-const llm = new LLMProviders({ cloudflare: { ai: env.AI }, groq: { apiKey }, preferredProvider: 'groq' });
+const llm = new LLMProviders({ cloudflare: { ai: env.AI }, groq: { apiKey }, preferredProvider: 'groq', contextWindowRouting: true });
 const response = await llm.generateResponse({ messages: longDocument }); // ~150k tokens
 response.provider; // 'cloudflare'
 response.fallback;
@@ -571,17 +569,25 @@ response.fallback;
 //   failedAttempts: [{ provider: 'groq', model: 'llama-3.3-70b-versatile', errorCode: 'CONTEXT_WINDOW' }] }
 ```
 
-- **Trade-off:** a skipped provider no longer absorbs a transient failure of the provider that fits. If that provider returns a 503, the request fails instead of being retried on a model that is probably too small. Because the estimate is approximate, a provider near the edge of its window may be skipped when it would have worked. Set `contextWindowRouting: false` in the factory config to route without this check.
-- **Pins and rules:** a pinned model is never skipped; its provider decides whether the request fits. A provider that a fallback rule sends the request to is tried as before, even if its model is too small.
+**How it works**
+- **The estimate:** the factory estimates the request's input as characters divided by four. It counts the system prompt and each message's text (or the text and thinking of its provider-native content, when that is larger), tool-call arguments, and tool results and errors.
+- **When providers are skipped:** a provider "can be relied on right now" if it is configured, not quota-exhausted or ledger-limited, and its circuit breaker is fully closed. When such a provider has a planned model whose context window holds the estimate, providers whose planned model can't are skipped when their turn comes.
+- **How a skip is reported:** like a quota-exhausted provider, as `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts` on the response or `StreamCompletion`.
+- **Where it applies:** on the response and streaming paths, and to each turn of `generateResponseWithTools` as tool results accumulate.
+- **What doesn't change:** the fallback chain, planned models and catalog ranking (`rankModels`, catalog `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`). When no available provider's model fits, nothing is skipped.
+
+**Trade-offs and rules**
+- **Trade-off:** a skipped provider can no longer absorb a transient failure of the provider that fits. If that provider returns a 503, the request fails instead of being sent to the smaller model, which might have held it. Because the estimate is approximate, a provider near the edge of its window may be skipped when it would have worked.
+- **Pins and rules:** a pinned model is never skipped; its provider decides whether the request fits. A provider that one of your own `fallbackRules` sends the request to is tried as usual. The built-in default rules don't override a skip.
 - **`allowFallback: false`:** with `allowFallback: false` and no pinned model, if the first planned provider (for example a `preferredProvider`) is skipped, the request throws `NoRouteError` naming `CONTEXT_WINDOW`. Another provider is not substituted.
 - **Input only:** `maxTokens` is not checked, because providers differ on whether the requested output must also fit in the window.
-- **Accuracy:** the estimate leaves out tool definitions, images and redacted (encrypted) thinking. It undercounts text with more tokens per character, such as Chinese, Japanese or Korean, and overcounts text with fewer, such as heavily indented code. Models outside the catalog count as fitting. `RoutingInfo.estimatedInputTokens` reports the same estimate. The client `llm.getRoutingInfo` reports the first provider that wouldn't be skipped.
+- **Accuracy:** the estimate leaves out tool definitions, images and redacted (encrypted) thinking. It undercounts text with more tokens per character, such as Chinese, Japanese or Korean, and overcounts text with fewer, such as heavily indented code. Models outside the catalog count as fitting. `RoutingInfo.estimatedInputTokens` reports the same estimate whether or not the option is on. The client `llm.getRoutingInfo` reports the first provider that wouldn't be skipped.
 
 ### Pinned models and `allowFallback`
 
 A pinned `model` is tried first, but by default it is not a guarantee: on an eligible failure, or when the pinned provider is skipped (quota-exhausted, circuit open, ledger-limited), another provider and model can serve the request. `fallbackRules: []` removes the rule-based fallbacks only; server errors, network errors, timeouts and schema drift still fall back.
 
-Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open, ledger-limited or (without a pin) too small for the input; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. With `reasoning.strict` and an effort, a pin on another configured provider (for example a Groq model) throws `ReasoningEffortUnsupportedError`; a pin no configured provider can serve still throws `NoRouteError`, because that check runs first. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
+Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open, ledger-limited or (with `contextWindowRouting` and no pin) too small for the input; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. With `reasoning.strict` and an effort, a pin on another configured provider (for example a Groq model) throws `ReasoningEffortUnsupportedError`; a pin no configured provider can serve still throws `NoRouteError`, because that check runs first. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
 
 ```typescript
 const response = await llm.generateResponse({

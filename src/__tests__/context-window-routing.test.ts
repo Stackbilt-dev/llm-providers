@@ -1,8 +1,9 @@
 /**
- * #136 / #113: the context window is a routing constraint. When a provider that can be
- * relied on right now has a planned model that holds the estimated input, providers
- * whose planned model can't are skipped at dispatch and recorded as CONTEXT_WINDOW.
- * The chain, planned models and catalog ranking are unchanged.
+ * #136 / #113: opt-in context-window routing (contextWindowRouting: true). When a
+ * provider that can be relied on right now has a planned model that holds the
+ * estimated input, providers whose planned model can't are skipped at dispatch and
+ * recorded as CONTEXT_WINDOW. The chain, planned models and catalog ranking are
+ * unchanged, and nothing changes unless the option is on.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -76,6 +77,7 @@ function setup(cloudflare: 'ok' | 'fail' | 'stream', config: Partial<ProviderFac
     cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
     groq: { apiKey: 'test', maxRetries: 0 },
     stateScope: 'client',
+    contextWindowRouting: true,
     ...config,
   });
   return { llm, run, fetchMock };
@@ -234,6 +236,7 @@ describe('factory fallback respects context windows', () => {
       cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
       groq: { apiKey: 'test', maxRetries: 0 },
       stateScope: 'client',
+      contextWindowRouting: true,
     });
     await expect(llm.generateResponseWithTools(
       { messages: [{ role: 'user', content: 'Summarise the document.' }], tools: [lookupTool], maxTokens: 10 },
@@ -289,6 +292,7 @@ describe('factory fallback respects context windows', () => {
       groq: { apiKey: 'test', maxRetries: 0 },
       openai: { apiKey: 'test', maxRetries: 0 },
       stateScope: 'client',
+      contextWindowRouting: true,
       resilienceContext,
     });
     const plan = planOf(llm, requestOf(150_000));
@@ -346,13 +350,37 @@ describe('factory fallback respects context windows', () => {
     });
   });
 
-  it('contextWindowRouting: false routes without the check', async () => {
-    const { llm, run, fetchMock } = setup('fail', { contextWindowRouting: false });
+  it.each([false, undefined])('contextWindowRouting: %s routes without the check (off by default)', async contextWindowRouting => {
+    const { llm, run, fetchMock } = setup('fail', { contextWindowRouting });
     expect(planOf(llm, requestOf(150_000)).contextSkips.size).toBe(0);
     const response = await llm.generateResponse(requestOf(150_000));
     expect(run).toHaveBeenCalledTimes(1);
     expect(response.provider).toBe('groq');
+    expect(response.fallback?.failedAttempts.map(hop => hop.errorCode)).not.toContain('CONTEXT_WINDOW');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an exhausted provider as QUOTA_EXHAUSTED even when its model is also too small', async () => {
+    const resilienceContext = new ResilienceContext();
+    resilienceContext.exhaustion.markExhausted('groq');
+    const { llm } = setup('ok', { resilienceContext, preferredProvider: 'groq' });
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(response.provider).toBe('cloudflare');
+    expect(response.fallback?.failedAttempts).toEqual([
+      { provider: 'groq', model: 'llama-3.3-70b-versatile', errorCode: 'QUOTA_EXHAUSTED' },
+    ]);
+  });
+
+  it('includes the option in the response cache key, leaving default keys unchanged', async () => {
+    const keys: Record<string, string> = {};
+    for (const [label, contextWindowRouting] of [['unset', undefined], ['false', false], ['true', true]] as const) {
+      const cache = { get: vi.fn().mockResolvedValue(null), put: vi.fn().mockResolvedValue(undefined) };
+      const { llm } = setup('ok', { contextWindowRouting, responseCache: cache });
+      await llm.generateResponse(requestOf(10));
+      keys[label] = cache.get.mock.calls[0][0];
+    }
+    expect(keys.unset).toBe(keys.false);
+    expect(keys.true).not.toBe(keys.unset);
   });
 
   it('skips nothing when the fitting provider has a degraded or recovering breaker', () => {
@@ -383,8 +411,9 @@ describe('factory fallback respects context windows', () => {
     ledger.record('cloudflare', '@cf/zai-org/glm-5.3-flash', 0, 10, 10);
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const { llm } = setup('ok', { ledger, logger });
+    for (const method of Object.values(logger)) method.mockClear();
     expect(planOf(llm, requestOf(150_000)).contextSkips.size).toBe(0);
-    expect(logger.warn.mock.calls.some(call => String(call[0]).includes('Rate limit'))).toBe(false);
+    for (const method of Object.values(logger)) expect(method).not.toHaveBeenCalled();
   });
 
   it('does not create circuit breakers while planning', () => {
@@ -431,8 +460,27 @@ describe('factory fallback respects context windows', () => {
   });
 });
 
-describe('fallback rules are unchanged', () => {
-  it('a rule can still send the request to a provider whose model is too small', async () => {
+describe('fallback rules', () => {
+  it('the built-in default rules do not override a skip', async () => {
+    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
+    const urls: string[] = [];
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => { urls.push(String(url)); return groqResponse(); });
+    vi.stubGlobal('fetch', fetchMock);
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      anthropic: { apiKey: 'test', maxRetries: 0 },
+      groq: { apiKey: 'test', maxRetries: 0 },
+      stateScope: 'client',
+      contextWindowRouting: true,
+    });
+    // Holds in Cloudflare's 1,048,576-token window, not in Anthropic's 1,000,000 or Groq's.
+    const request = requestOf(1_040_000);
+    expect(planOf(llm, request).contextSkips).toEqual(new Set(['anthropic', 'groq']));
+    await expect(llm.generateResponse(request)).rejects.toThrow('binding exploded');
+    expect(urls).toEqual([]);
+  });
+
+  it('a caller\'s own rule can still send the request to a provider whose model is too small', async () => {
     const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
     const fetchMock = vi.fn().mockImplementation(async () => groqResponse());
     vi.stubGlobal('fetch', fetchMock);
@@ -440,6 +488,7 @@ describe('fallback rules are unchanged', () => {
       cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
       groq: { apiKey: 'test', maxRetries: 0 },
       stateScope: 'client',
+      contextWindowRouting: true,
       fallbackRules: [{ condition: 'error', fallbackProvider: 'groq' }],
     });
     const response = await llm.generateResponse(requestOf(150_000));
