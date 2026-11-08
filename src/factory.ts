@@ -60,7 +60,6 @@ import { ResilienceContext, defaultResilienceContext } from './utils/resilience-
 import {
   MODEL_CATALOG,
   PROVIDER_FALLBACK_ORDER,
-  estimateRequestInputTokens,
   fitsContextWindow,
   getCatalogEntry,
   getProviderDefaultModel,
@@ -1428,21 +1427,6 @@ export class LLMProviderFactory {
       throw new ConfigurationError('factory', 'No configured providers support image input');
     }
 
-    // Drop hops whose planned model can't hold the estimated input: they would fail
-    // after a billed or rate-limited attempt, and context overflow doesn't fall back.
-    // A pinned model is kept; its provider decides. Models outside the catalog are kept.
-    const unfitting = chain.filter(name => name !== pinnedProvider
-      && !this.plannedModelFitsContext(name, providerModels.get(name), request));
-    if (unfitting.length > 0) {
-      const remaining = chain.filter(name => !unfitting.includes(name));
-      if (remaining.length === 0) {
-        throw new NoRouteError(
-          `Estimated input of ${estimateRequestInputTokens(request)} tokens exceeds the context window of every configured provider's model`
-        );
-      }
-      chain.splice(0, chain.length, ...remaining);
-    }
-
     if (isStrictReasoning(request)) {
       // Only providers that enforce strict reasoning may serve the request, first
       // hop included; anything else would drop or reinterpret the level.
@@ -1472,11 +1456,29 @@ export class LLMProviderFactory {
       chain.splice(0, chain.length, ...enforcing);
     }
 
+    // When some hop's planned model can hold the estimated input, drop the hops whose
+    // model can't: they would fail after a billed or rate-limited attempt, and context
+    // overflow doesn't fall back. When none can, the chain is left as it is, since the
+    // estimate is approximate. A pinned model is always kept (its provider decides), and
+    // models outside the catalog count as fitting. Runs after the strict-reasoning
+    // filter so that filter's errors never stem from this one, and before
+    // allowFallback: false trims the chain, so an unpinned request goes to the first
+    // hop that fits.
+    if (this.chainHasContextFit(chain, providerModels, request)) {
+      const fitting = chain.filter(name => name === pinnedProvider
+        || this.plannedModelFitsContext(name, providerModels.get(name), request));
+      chain.splice(0, chain.length, ...fitting);
+    }
+
     if (request.allowFallback === false) {
       chain.splice(1);
     }
 
     return { chain, providerModels, useCase };
+  }
+
+  private chainHasContextFit(chain: string[], providerModels: Map<string, string>, request: LLMRequest): boolean {
+    return chain.some(name => this.plannedModelFitsContext(name, providerModels.get(name), request));
   }
 
   /** False only when the model is in the catalog for this provider and its window can't hold the input. */
@@ -2231,8 +2233,9 @@ export class LLMProviderFactory {
     if (isStrictReasoning(request) && !STRICT_REASONING_PROVIDERS.has(targetProvider)) {
       return;
     }
-    // A rule that names its model is an explicit choice, like a pin. Otherwise the
-    // provider's planned model must hold the input, as in the planned chain.
+    // A rule that names its model is an explicit choice, like a pin. Otherwise a rule
+    // doesn't move a provider whose planned model can't hold the input. (When no model
+    // can, the planned chain is unchanged and still includes that provider.)
     if (!decision.fallbackModel && !this.plannedModelFitsContext(targetProvider, providerModels.get(targetProvider), request)) {
       return;
     }

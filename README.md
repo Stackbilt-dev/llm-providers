@@ -558,11 +558,12 @@ Default provider precedence remains Cloudflare → Cerebras → Groq → NVIDIA 
 
 ### Context windows
 
-The factory estimates a request's input as the characters of its messages and system prompt divided by four, and skips any provider whose planned model has a smaller context window. An oversized request is never sent to a model that can't hold it, and context overflow doesn't use up a fallback hop. If no configured provider's model can hold the input, it throws `NoRouteError` before any call. Catalog ranking (`rankModels`, `getRoutingInfo`, `getProviderDefaultModel`) likewise prefers models that can hold the input, and keeps its usual ranking when none can.
+The factory estimates a request's input: the characters of its messages (text, tool-call arguments, tool results and errors, and the text of provider-native blocks such as Anthropic thinking) and system prompt, divided by four. When at least one provider in the fallback chain has a planned model whose context window holds that estimate, providers whose model can't are skipped, so a failure doesn't fall back onto a model too small for the request. This also applies to each turn of `generateResponseWithTools` as tool results accumulate. When no planned model can hold the estimate, routing is unchanged, since the estimate is approximate. Catalog ranking (`rankModels`, `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`) prefers models that can hold the input the same way, and keeps its usual ranking when none can.
 
-- A pinned model is always tried; its provider decides whether the request fits. A fallback rule that names its `fallbackModel` is treated the same way. A rule without a model skips a provider whose planned model can't hold the input.
+- A pinned model is always tried; its provider decides whether the request fits. A fallback rule that names its `fallbackModel` is treated the same way. A rule without a model doesn't move a provider whose planned model can't hold the input.
+- A `preferredProvider` whose planned model can't hold the input is skipped like any other hop. With `allowFallback: false` and no pinned model, the request goes to the first provider whose model can hold it.
 - Only the input is checked, not `maxTokens`: providers differ on whether the requested output must also fit in the window.
-- The estimate leaves out tool definitions and images, and undercounts text with more tokens per character, such as Chinese, Japanese or Korean, so an overflow can still reach a provider.
+- The estimate leaves out tool definitions and images, undercounts text with more tokens per character (such as Chinese, Japanese or Korean) and overcounts text with fewer (such as heavily indented code). Models outside the catalog are never skipped.
 
 ### Pinned models and `allowFallback`
 

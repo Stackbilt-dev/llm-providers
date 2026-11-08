@@ -1,5 +1,5 @@
 import type { CreditLedger } from './utils/credit-ledger.js';
-import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
+import type { CircuitBreakerState, LLMMessage, LLMRequest, ModelCapabilities } from './types.js';
 import { NoRouteError } from './errors.js';
 import { cloudflareReasoningEffortCapability } from './providers/cloudflare-reasoning.js';
 
@@ -1026,17 +1026,40 @@ function usesVision(request: Partial<LLMRequest> | undefined): boolean {
   return (request?.images?.length ?? 0) > 0;
 }
 
-function totalMessageLength(request: Partial<LLMRequest> | undefined): number {
-  return (request?.messages ?? []).reduce((sum, message) => sum + message.content.length, 0);
+function stringLength(value: unknown): number {
+  return typeof value === 'string' ? value.length : 0;
+}
+
+/** Characters of the text blocks in provider-native content (text, thinking). */
+function providerContentLength(message: LLMMessage): number {
+  return (message.providerContent?.blocks ?? []).reduce(
+    (sum, block) => sum + stringLength(block.text) + stringLength(block.thinking), 0);
 }
 
 /**
- * Rough input size for routing: characters of the messages and system prompt divided
- * by four. Tool definitions and images are not counted, so it tends to undercount,
- * which keeps context-window filtering from excluding models that would fit.
+ * Characters a message sends: its text, tool-call arguments and tool results. When it
+ * carries provider-native content, which replaces the text and tool calls for its own
+ * provider, the larger of the two is counted. Non-string values count as zero.
+ */
+function messageLength(message: LLMMessage): number {
+  const toolCalls = (message.toolCalls ?? []).reduce(
+    (sum, call) => sum + stringLength(call?.function?.arguments), 0);
+  const toolResults = (message.toolResults ?? []).reduce(
+    (sum, result) => sum + stringLength(result?.output) + stringLength(result?.error), 0);
+  return Math.max(stringLength(message.content) + toolCalls, providerContentLength(message)) + toolResults;
+}
+
+function totalMessageLength(request: Partial<LLMRequest> | undefined): number {
+  return (request?.messages ?? []).reduce((sum, message) => sum + (message ? messageLength(message) : 0), 0);
+}
+
+/**
+ * Rough input size for routing: characters of the messages (text, tool-call arguments,
+ * tool results, provider-native text) and system prompt, divided by four. Tool
+ * definitions and images are not counted.
  */
 export function estimateRequestInputTokens(request: Partial<LLMRequest> | undefined): number {
-  const charCount = totalMessageLength(request) + (request?.systemPrompt?.length ?? 0);
+  const charCount = totalMessageLength(request) + stringLength(request?.systemPrompt);
   return Math.max(1, Math.ceil(charCount / 4));
 }
 

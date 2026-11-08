@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ## [Unreleased]
 
 ### Changed
-- The factory skips providers whose planned model's context window can't hold the request's estimated input (message and system-prompt characters ÷ 4), on both the response and streaming paths, and throws `NoRouteError` before any call when no configured provider's model can (#113, #136). Such requests used to be sent anyway and failed with an error that doesn't fall back. Pinned models and fallback rules that name a `fallbackModel` are still tried. Catalog ranking (`rankModels`, `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`) prefers models that can hold the input and keeps its usual ranking when none can. Only the input is checked, not `maxTokens`.
+- When at least one provider in the fallback chain has a planned model whose context window can hold the request's estimated input, the factory skips providers whose model can't, on the response, streaming and tool-loop paths (#113, #136). A failure used to fall back onto a model too small for the request, and the overflow error doesn't fall back, so the request failed. When no planned model can hold the estimate, routing is unchanged. The estimate counts message text, tool-call arguments, tool results and errors, provider-native text and the system prompt, divided by four. Pinned models and fallback rules that name a `fallbackModel` are still tried. Catalog ranking (`rankModels`, `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`) prefers models that can hold the input and keeps its usual ranking when none can. Only the input is checked, not `maxTokens`.
 
 ## [1.26.0] — 2026-11-08
 
