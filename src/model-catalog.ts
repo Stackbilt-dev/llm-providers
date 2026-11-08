@@ -1040,38 +1040,30 @@ function sumOver(items: unknown, measure: (item: Record<string, unknown>) => num
   return items.reduce((sum: number, item) => sum + (isRecord(item) ? measure(item) : 0), 0);
 }
 
-function jsonLength(value: unknown): number {
-  if (value === undefined) return 0;
-  try {
-    return JSON.stringify(value)?.length ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
 /**
- * Characters of provider-native content blocks: text, thinking, redacted thinking
- * (`data`) and tool-use input.
+ * Characters of the text and thinking blocks in provider-native content. Tool-use
+ * blocks carry the same input as the message's `toolCalls`, which are counted
+ * instead (no serialisation needed). Redacted thinking is encrypted, so its length
+ * says little about tokens; it is left out rather than risk overcounting.
  */
-function providerContentLength(message: Record<string, unknown>): number {
+function providerTextLength(message: Record<string, unknown>): number {
   const providerContent = message.providerContent;
   return isRecord(providerContent)
-    ? sumOver(providerContent.blocks, block => stringLength(block.text) + stringLength(block.thinking)
-      + stringLength(block.data) + jsonLength(block.input))
+    ? sumOver(providerContent.blocks, block => stringLength(block.text) + stringLength(block.thinking))
     : 0;
 }
 
 /**
- * Characters a message sends: its text, tool-call arguments and tool results. When it
- * carries provider-native content, which replaces the text and tool calls for its own
- * provider, the larger of the two is counted. Malformed values count as zero.
+ * Characters a message sends: its text (or, when larger, the text and thinking of its
+ * provider-native content, which replaces the text for its own provider), tool-call
+ * arguments and tool results. Malformed values count as zero.
  */
 function messageLength(message: Record<string, unknown>): number {
   const toolCalls = sumOver(message.toolCalls, call =>
     isRecord(call.function) ? stringLength(call.function.arguments) : 0);
   const toolResults = sumOver(message.toolResults, result =>
     stringLength(result.output) + stringLength(result.error));
-  return Math.max(stringLength(message.content) + toolCalls, providerContentLength(message)) + toolResults;
+  return Math.max(stringLength(message.content), providerTextLength(message)) + toolCalls + toolResults;
 }
 
 /** Everything the messages send, for context-window checks. */
@@ -1095,12 +1087,12 @@ export function estimateRequestInputTokens(request: Partial<LLMRequest> | undefi
 }
 
 /**
- * Whether a model's context window can hold the request's estimated input. Only the
- * input is counted: providers differ on whether `maxTokens` must also fit.
+ * Whether a model's context window can hold an estimated input (from
+ * `estimateRequestInputTokens`). Only the input is counted: providers differ on
+ * whether `maxTokens` must also fit.
  */
-export function fitsContextWindow(entry: ModelCatalogEntry, request: Partial<LLMRequest> | undefined): boolean {
-  if (!request?.messages) return true;
-  return estimateRequestInputTokens(request) <= entry.capabilities.maxContextLength;
+export function fitsContextWindow(entry: ModelCatalogEntry, estimatedInputTokens: number): boolean {
+  return estimatedInputTokens <= entry.capabilities.maxContextLength;
 }
 
 function providerRank(provider: ProviderName): number {
@@ -1219,7 +1211,7 @@ export function rankModels(
   const allowedProviders = new Set(availableProviders as ProviderName[]);
   const precedencePenalty = useCase === 'COST_EFFECTIVE' ? 2 : 0.01;
 
-  const ranked = MODEL_CATALOG
+  return MODEL_CATALOG
     .filter(entry => allowedProviders.has(entry.provider))
     .filter(entry => isCompatible(entry, context, useCase))
     .map(entry => ({
@@ -1233,12 +1225,6 @@ export function rankModels(
     .filter(result => Number.isFinite(result.score))
     .sort((a, b) => b.score - a.score)
     .map(result => result.entry);
-
-  // Prefer models whose context window holds the estimated input, among the models
-  // still routable (an open breaker scores -Infinity and is already gone). When none
-  // does, keep the full ranking so callers still get a recommendation.
-  const fitting = ranked.filter(entry => fitsContextWindow(entry, context.request));
-  return fitting.length > 0 ? fitting : ranked;
 }
 
 export function getRecommendedModel(

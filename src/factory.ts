@@ -60,6 +60,7 @@ import { ResilienceContext, defaultResilienceContext } from './utils/resilience-
 import {
   MODEL_CATALOG,
   PROVIDER_FALLBACK_ORDER,
+  estimateRequestInputTokens,
   fitsContextWindow,
   getCatalogEntry,
   getProviderDefaultModel,
@@ -1344,7 +1345,10 @@ export class LLMProviderFactory {
   getRoutingInfo(request: LLMRequest): RoutingInfo {
     request = withResolvedModel(request);
     const plan = this.buildProviderPlan(request);
-    const selected = plan.chain.find(name => this.isProviderAdmissible(name));
+    const selected = plan.chain.find(name => this.providers.has(name)
+      && !this.resilienceContext.exhaustion.isExhausted(name)
+      && (!this.config.enableCircuitBreaker || !this.resilienceContext.circuitBreakers.getBreaker(name).isOpen())
+      && (!this.config.ledger || !this.isLedgerLimited(name)));
     if (!selected) throw new NoRouteError();
     const selectedRequest = this.requestForProvider(request, selected, plan.providerModels);
     return describeRouting(selectedRequest, [selected as ProviderName], {
@@ -1453,18 +1457,22 @@ export class LLMProviderFactory {
       chain.splice(0, chain.length, ...enforcing);
     }
 
-    // When a hop that can be tried right now has a planned model that holds the
-    // estimated input, drop the hops whose model can't: they would fail after a billed
-    // or rate-limited attempt, and context overflow doesn't fall back. Otherwise the
-    // chain is left as it is, since the estimate is approximate. A pinned model is always kept (its provider decides), and
-    // models outside the catalog count as fitting. Runs after the strict-reasoning
-    // filter so that filter's errors never stem from this one, and before
-    // allowFallback: false trims the chain, so an unpinned request goes to the first
-    // hop that fits.
-    if (this.chainHasContextFit(chain, providerModels, request)) {
-      const fitting = chain.filter(name => name === pinnedProvider
-        || this.plannedModelFitsContext(name, providerModels.get(name), request));
-      chain.splice(0, chain.length, ...fitting);
+    // Context windows. When a provider that can be tried right now has a planned model
+    // whose window holds the estimated input, remove the providers whose planned model
+    // can't: they would fail after a billed or rate-limited attempt, and the overflow
+    // error doesn't fall back. Hops are only removed, never reordered or re-planned, so
+    // when no available provider fits the chain is exactly what it would otherwise be.
+    // A pinned model is always kept (its provider decides); models outside the catalog
+    // count as fitting. Runs after the strict-reasoning filter, so that filter's errors
+    // never stem from this one, and before allowFallback: false trims the chain, so an
+    // unpinned request goes to the first provider whose model fits.
+    if (request.messages !== undefined) {
+      const estimatedInputTokens = estimateRequestInputTokens(request);
+      const fits = (name: string) => this.plannedModelFitsContext(name, providerModels.get(name), estimatedInputTokens);
+      if (chain.some(name => fits(name) && this.isAvailableForContextRouting(name))) {
+        const kept = chain.filter(name => name === pinnedProvider || fits(name));
+        chain.splice(0, chain.length, ...kept);
+      }
     }
 
     if (request.allowFallback === false) {
@@ -1474,28 +1482,25 @@ export class LLMProviderFactory {
     return { chain, providerModels, useCase };
   }
 
-  /** Whether the provider is configured and not quota-exhausted, circuit-open or ledger-limited right now. */
-  private isProviderAdmissible(name: string): boolean {
+  /**
+   * Whether a provider can be relied on to serve a request right now, for deciding
+   * whether smaller models may be removed from the chain: configured, not
+   * quota-exhausted or ledger-limited, and with a fully closed circuit breaker. The
+   * breaker is checked whatever `enableCircuitBreaker` says, because adapters use the
+   * same breaker by default; a degraded or recovering breaker may still reject calls.
+   * Erring towards "unavailable" only leaves the chain as it would otherwise be.
+   */
+  private isAvailableForContextRouting(name: string): boolean {
     return this.providers.has(name)
       && !this.resilienceContext.exhaustion.isExhausted(name)
-      && (!this.config.enableCircuitBreaker || !this.resilienceContext.circuitBreakers.getBreaker(name).isOpen())
+      && this.resilienceContext.circuitBreakers.getBreaker(name).isClosed()
       && (!this.config.ledger || !this.isLedgerLimited(name));
   }
 
-  /**
-   * Whether a hop that can be tried right now has a planned model that holds the input.
-   * Unavailable hops don't count: dropping smaller models in favour of a fitting
-   * provider that is down would leave nothing to serve the request.
-   */
-  private chainHasContextFit(chain: string[], providerModels: Map<string, string>, request: LLMRequest): boolean {
-    return chain.some(name => this.isProviderAdmissible(name)
-      && this.plannedModelFitsContext(name, providerModels.get(name), request));
-  }
-
   /** False only when the model is in the catalog for this provider and its window can't hold the input. */
-  private plannedModelFitsContext(provider: string, model: string | undefined, request: LLMRequest): boolean {
+  private plannedModelFitsContext(provider: string, model: string | undefined, estimatedInputTokens: number): boolean {
     const entry = model ? MODEL_CATALOG.find(candidate => candidate.provider === provider && candidate.model === model) : undefined;
-    return entry === undefined || fitsContextWindow(entry, request);
+    return entry === undefined || fitsContextWindow(entry, estimatedInputTokens);
   }
 
   /**
@@ -2242,14 +2247,6 @@ export class LLMProviderFactory {
       return;
     }
     if (isStrictReasoning(request) && !STRICT_REASONING_PROVIDERS.has(targetProvider)) {
-      return;
-    }
-    // A rule that names its model is an explicit choice, like a pin. Otherwise, as in
-    // the planned chain, a rule doesn't move a provider whose planned model can't hold
-    // the input while an available hop's model can; when none can, rules apply as before.
-    if (!decision.fallbackModel
-        && !this.plannedModelFitsContext(targetProvider, providerModels.get(targetProvider), request)
-        && this.chainHasContextFit(providerChain, providerModels, request)) {
       return;
     }
 

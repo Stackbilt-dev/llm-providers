@@ -1,7 +1,8 @@
 /**
- * #136 / #113: the context window is a routing constraint. When some candidate model
- * can hold the estimated input, models whose window can't are dropped from ranking
- * and from the fallback chain. When none can, routing is unchanged.
+ * #136 / #113: the context window is a routing constraint. When a provider that can be
+ * tried right now has a planned model that holds the estimated input, providers whose
+ * planned model can't are removed from the fallback chain. Nothing is reordered or
+ * re-planned, and catalog ranking is unchanged.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -122,7 +123,7 @@ describe('context-window estimate', () => {
     expect(estimateRequestInputTokens(toolLoopOf(150_000))).toBeGreaterThan(150_000);
   });
 
-  it('counts the larger of provider-native text and plain text plus tool calls', () => {
+  it('counts the larger of provider-native text and plain text', () => {
     const thinking = { provider: 'anthropic', blocks: [{ type: 'thinking', thinking: 'x'.repeat(400), signature: 's' }, { type: 'text', text: 'x'.repeat(40) }] };
     expect(estimateRequestInputTokens({ messages: [{ role: 'assistant', content: 'x'.repeat(40), providerContent: thinking }] })).toBe(110);
     expect(estimateRequestInputTokens({ messages: [{ role: 'assistant', content: 'x'.repeat(800), providerContent: thinking }] })).toBe(200);
@@ -136,15 +137,17 @@ describe('context-window estimate', () => {
     expect(() => getRecommendedModel('BALANCED', ['groq'], { request: malformed })).not.toThrow();
   });
 
-  it('counts every provider-native block kind: text, thinking, redacted thinking and tool-use input', () => {
+  it('counts provider-native text and thinking plus tool-call arguments, but not encrypted redacted thinking', () => {
     const blocks = [
       { type: 'thinking', thinking: 'x'.repeat(40), signature: 's' },
       { type: 'redacted_thinking', data: 'x'.repeat(40) },
       { type: 'text', text: 'x'.repeat(40) },
       { type: 'tool_use', id: 't', name: 'f', input: { q: 'x'.repeat(31) } },
     ];
-    // input serialises to {"q":"…"}: 31 + 9 characters.
-    expect(estimateRequestInputTokens({ messages: [{ role: 'assistant', content: '', providerContent: { provider: 'anthropic', blocks } }] })).toBe(40);
+    // 40 thinking + 40 text + 40 tool-call arguments; redacted data and the tool_use block are not counted again.
+    expect(estimateRequestInputTokens({ messages: [{ role: 'assistant', content: '',
+      toolCalls: [{ id: 't', type: 'function', function: { name: 'f', arguments: 'x'.repeat(40) } }],
+      providerContent: { provider: 'anthropic', blocks } }] })).toBe(30);
   });
 
   it('counts malformed containers as zero instead of throwing', () => {
@@ -171,47 +174,21 @@ describe('context-window estimate', () => {
     expect(inferUseCaseFromRequest({ messages: [{ role: 'user', content: 'x'.repeat(20_000) }] })).toBe('LONG_CONTEXT');
   });
 
-  it('checks only the input against the window, not maxTokens', () => {
+  it('compares the estimate with the window', () => {
     const groq = getCatalogEntry('llama-3.3-70b-versatile')!;
     const window = groq.capabilities.maxContextLength;
-    expect(fitsContextWindow(groq, requestOf(window))).toBe(true);
-    expect(fitsContextWindow(groq, requestOf(window + 1))).toBe(false);
-    expect(fitsContextWindow(groq, requestOf(window - 10, { maxTokens: 100_000 }))).toBe(true);
-    expect(fitsContextWindow(groq, {})).toBe(true);
+    expect(fitsContextWindow(groq, estimateRequestInputTokens(requestOf(window)))).toBe(true);
+    expect(fitsContextWindow(groq, estimateRequestInputTokens(requestOf(window + 1)))).toBe(false);
   });
 });
 
-describe('ranking prefers models that can hold the input', () => {
-  it('leaves out models whose window is too small when a larger one exists', () => {
+describe('catalog ranking is unchanged', () => {
+  it('ranks large requests as before, including models too small for them', () => {
     const request = requestOf(150_000);
     const ranked = rankModels('LONG_CONTEXT', ['cloudflare', 'groq'], { request });
-    expect(ranked.length).toBeGreaterThan(0);
-    expect(ranked.every(entry => entry.capabilities.maxContextLength >= 150_000)).toBe(true);
-    expect(ranked.some(entry => entry.provider === 'groq')).toBe(false);
-    expect(getRecommendedModel('LONG_CONTEXT', ['cloudflare', 'groq'], { request }))
-      .toBe(ranked[0].model);
-  });
-
-  it('ignores fitting models on an open-breaker provider rather than returning nothing', () => {
-    const request = requestOf(150_000);
-    const providerHealth = { cloudflare: { circuitBreaker: { state: 'OPEN' as const } } };
-    const ranked = rankModels('LONG_CONTEXT', ['cloudflare', 'groq'], { request, providerHealth });
-    expect(ranked.length).toBeGreaterThan(0);
-    expect(ranked.every(entry => entry.provider === 'groq')).toBe(true);
-    expect(getRecommendedModel('LONG_CONTEXT', ['cloudflare', 'groq'], { request, providerHealth })).toBe(ranked[0].model);
-  });
-
-  it('keeps the full ranking when no model can hold the input', () => {
-    const request = requestOf(1_100_000);
-    const ranked = rankModels('LONG_CONTEXT', ['cloudflare', 'groq'], { request });
-    expect(ranked.map(entry => entry.model)).toEqual(rankModels('LONG_CONTEXT', ['cloudflare', 'groq']).map(entry => entry.model));
-    expect(getProviderDefaultModel('groq', request)).toBe(getProviderDefaultModel('groq', requestOf(30_000)));
-  });
-
-  it('does not change rankings for requests every model can hold', () => {
-    const request = requestOf(1_000);
-    expect(rankModels('BALANCED', ['cloudflare', 'groq'], { request }).map(entry => entry.model))
-      .toEqual(rankModels('BALANCED', ['cloudflare', 'groq'], { request: { ...request, messages: [{ role: 'user', content: 'hi' }] } }).map(entry => entry.model));
+    expect(ranked.some(entry => entry.provider === 'groq')).toBe(true);
+    expect(getProviderDefaultModel('groq', request)).toBe('llama-3.3-70b-versatile');
+    expect(getRecommendedModel('LONG_CONTEXT', ['cloudflare', 'groq'], { request })).toBe(ranked[0].model);
   });
 });
 
@@ -288,6 +265,32 @@ describe('factory fallback respects context windows', () => {
     expect(llm.getRoutingInfo(requestOf(150_000)).provider).toBe('groq');
   });
 
+  it('keeps smaller models when the only fitting provider has an open breaker, with default config', async () => {
+    const resilienceContext = new ResilienceContext();
+    resilienceContext.circuitBreakers.getBreaker('cloudflare').forceOpen();
+    const { llm, run, fetchMock } = setup('ok', { resilienceContext });
+    const response = await llm.generateResponse(requestOf(150_000));
+    expect(response.provider).toBe('groq');
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes nothing when the only fitting provider is unavailable, with three providers', () => {
+    const resilienceContext = new ResilienceContext();
+    resilienceContext.exhaustion.markExhausted('cloudflare');
+    vi.stubGlobal('fetch', vi.fn());
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run: vi.fn() } as unknown as Ai, maxRetries: 0 },
+      groq: { apiKey: 'test', maxRetries: 0 },
+      openai: { apiKey: 'test', maxRetries: 0 },
+      stateScope: 'client',
+      resilienceContext,
+    });
+    const plan = (llm as unknown as { factory: { buildProviderPlan(request: LLMRequest): { chain: string[] } } })
+      .factory.buildProviderPlan(requestOf(150_000));
+    expect([...plan.chain].sort()).toEqual(['cloudflare', 'groq', 'openai']);
+  });
+
   it('keeps smaller models when the only fitting provider has an open circuit breaker', async () => {
     const resilienceContext = new ResilienceContext();
     resilienceContext.circuitBreakers.getBreaker('cloudflare').forceOpen();
@@ -358,8 +361,8 @@ describe('factory fallback respects context windows', () => {
   });
 });
 
-describe('fallback rules and context windows', () => {
-  function setupWithRule(rule: { condition: 'error'; fallbackProvider: 'groq'; fallbackModel?: string }) {
+describe('fallback rules are unchanged', () => {
+  it('a rule can still send the request to a provider whose model is too small', async () => {
     const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
     const fetchMock = vi.fn().mockImplementation(async () => groqResponse());
     vi.stubGlobal('fetch', fetchMock);
@@ -367,45 +370,9 @@ describe('fallback rules and context windows', () => {
       cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
       groq: { apiKey: 'test', maxRetries: 0 },
       stateScope: 'client',
-      fallbackRules: [rule],
-    });
-    return { llm, fetchMock };
-  }
-
-  it('does not let a rule without a model reach a provider whose model cannot hold the input', async () => {
-    const { llm, fetchMock } = setupWithRule({ condition: 'error', fallbackProvider: 'groq' });
-    await expect(llm.generateResponse(requestOf(150_000))).rejects.toThrow('binding exploded');
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('honours a rule that names its model, like a pin', async () => {
-    const { llm, fetchMock } = setupWithRule({ condition: 'error', fallbackProvider: 'groq', fallbackModel: 'llama-3.3-70b-versatile' });
-    const response = await llm.generateResponse(requestOf(150_000));
-    expect(response.provider).toBe('groq');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('applies a rule without a model as before when no configured model can hold the input', async () => {
-    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
-    const urls: string[] = [];
-    const fetchMock = vi.fn().mockImplementation(async (url: string) => { urls.push(String(url)); return groqResponse(); });
-    vi.stubGlobal('fetch', fetchMock);
-    const llm = new LLMProviders({
-      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
-      cerebras: { apiKey: 'test', maxRetries: 0 },
-      groq: { apiKey: 'test', maxRetries: 0 },
-      stateScope: 'client',
       fallbackRules: [{ condition: 'error', fallbackProvider: 'groq' }],
     });
-    // Without the rule, Cerebras would come before Groq.
-    const response = await llm.generateResponse(requestOf(1_100_000));
-    expect(response.provider).toBe('groq');
-    expect(urls[0]).toContain('groq');
-  });
-
-  it('still falls back through the planned chain when no configured model can hold the input', async () => {
-    const { llm, fetchMock } = setupWithRule({ condition: 'error', fallbackProvider: 'groq' });
-    const response = await llm.generateResponse(requestOf(1_100_000));
+    const response = await llm.generateResponse(requestOf(150_000));
     expect(response.provider).toBe('groq');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
