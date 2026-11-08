@@ -85,7 +85,9 @@ const MAPPINGS: Record<string, ModelReasoningMapping> = {
     },
   },
   '@cf/deepseek-ai/deepseek-v4-flash-0731': { ...DEEPSEEK_V4, source: page('deepseek-v4-flash-0731') },
-  '@cf/deepseek-ai/deepseek-v4.1-flash-1017': { ...DEEPSEEK_V4, source: page('deepseek-v4.1-flash-1017') },
+  '@cf/deepseek-ai/deepseek-v4.1-flash-1017': {
+    ...DEEPSEEK_V4, source: page('deepseek-v4.1-flash-1017'), verifiedAt: '2026-11-08',
+  },
   '@cf/deepseek-ai/deepseek-v4-pro-0813': { ...DEEPSEEK_V4, source: page('deepseek-v4-pro-0813') },
   // Kimi K2.6: none / high (default) only.
   '@cf/moonshotai/kimi-k2.6': {

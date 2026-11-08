@@ -617,6 +617,9 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     inputTokenCost: 0.0003,
     outputTokenCost: 0.0012,
     description: 'Workers AI DeepSeek V4.1 Flash 1017 — hosted reasoning and agentic model; 1M context and function calling'
+    // Cost score ties V4 Flash on purpose, though V4.1 is cheaper: a higher score would
+    // move it ahead of Llama 3.3 70B Fast in BALANCED fallback, a second paid-only model
+    // before one that works on Workers Free. Listed after V4 Flash, so ties keep V4 Flash first.
   }, { speed: 4, quality: 6, cost: 4 }),
   entry('cloudflare', '@cf/deepseek-ai/deepseek-v4-pro-0813', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 1048576,

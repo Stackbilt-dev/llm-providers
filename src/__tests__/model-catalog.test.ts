@@ -455,6 +455,7 @@ describe('new CF Workers AI models (v1.16.0)', () => {
 describe('current CF Workers AI models (August 2026)', () => {
   const CURRENT_MODELS = [
     '@cf/deepseek-ai/deepseek-v4-flash-0731',
+    '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
     '@cf/deepseek-ai/deepseek-v4-pro-0813',
     '@cf/qwen/qwen3.8-27b',
     '@cf/zai-org/glm-5.3',
@@ -520,6 +521,16 @@ describe('DeepSeek V4.1 Flash on Workers AI (November 2026)', () => {
     // Cloudflare lists vision, but not the image input shape.
     expect(entry?.capabilities.supportsVision).toBeUndefined();
     expect(entry?.useCases).toEqual(['BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT']);
+  });
+
+  it('records the date its reasoning mapping was checked', () => {
+    expect(getCatalogEntry(model)?.capabilities.reasoningEffort?.verifiedAt).toBe('2026-11-08');
+  });
+
+  it('ranks after DeepSeek V4 Flash and keeps Llama 3.3 70B Fast as the second balanced choice', () => {
+    const longContext = rankModels('LONG_CONTEXT', ['cloudflare']).map(entry => entry.model);
+    expect(longContext.indexOf(model)).toBe(longContext.indexOf('@cf/deepseek-ai/deepseek-v4-flash-0731') + 1);
+    expect(rankModels('BALANCED', ['cloudflare'])[1]?.model).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
   });
 
   it('is exported in MODELS', () => {

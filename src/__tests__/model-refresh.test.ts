@@ -489,7 +489,7 @@ describe('MODELS constants', () => {
   it.each([
     'GPT_6_ASTRA', 'GPT_5_6_SOL', 'GPT_5_6_TERRA', 'GPT_5_6_LUNA', 'GPT_5_5',
     'CLAUDE_FABLE_5_1', 'CLAUDE_OPUS_5_5', 'CLAUDE_SONNET_5_5', 'CLAUDE_HAIKU_5_5',
-    'CF_GLM_5_3', 'CF_GLM_5_3_FLASH', 'CF_KIMI_K2_6', 'CF_DEEPSEEK_V4_PRO', 'CF_DEEPSEEK_V4_FLASH',
+    'CF_GLM_5_3', 'CF_GLM_5_3_FLASH', 'CF_KIMI_K2_6', 'CF_DEEPSEEK_V4_PRO', 'CF_DEEPSEEK_V4_FLASH', 'CF_DEEPSEEK_V4_1_FLASH',
     'CF_GPT_OSS_120B', 'CF_GPT_OSS_20B', 'CF_GEMMA_4_26B', 'CF_QWEN_3_8_27B', 'CF_LLAMA_3_3_70B_FAST',
     'CF_LLAMA_3_1_8B_FP8', 'CF_GRANITE_4_MICRO',
   ] as const)('%s names an active catalog model', key => {
