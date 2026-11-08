@@ -56,7 +56,7 @@ const GLM_5_3: Omit<ModelReasoningMapping, 'source'> = {
   levels: { low: effort('low', true), medium: effort('high', false), high: effort('high', true) },
 };
 
-// DeepSeek V4 Flash / Pro: none / low / high (default) / max.
+// DeepSeek V4 Flash / V4.1 Flash / V4 Pro: none / low / high (default) / max.
 const DEEPSEEK_V4: Omit<ModelReasoningMapping, 'source'> = {
   verifiedAt: VERIFIED_AT,
   levels: {
@@ -85,6 +85,7 @@ const MAPPINGS: Record<string, ModelReasoningMapping> = {
     },
   },
   '@cf/deepseek-ai/deepseek-v4-flash-0731': { ...DEEPSEEK_V4, source: page('deepseek-v4-flash-0731') },
+  '@cf/deepseek-ai/deepseek-v4.1-flash-1017': { ...DEEPSEEK_V4, source: page('deepseek-v4.1-flash-1017') },
   '@cf/deepseek-ai/deepseek-v4-pro-0813': { ...DEEPSEEK_V4, source: page('deepseek-v4-pro-0813') },
   // Kimi K2.6: none / high (default) only.
   '@cf/moonshotai/kimi-k2.6': {

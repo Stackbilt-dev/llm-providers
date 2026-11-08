@@ -500,3 +500,36 @@ describe('current CF Workers AI models (August 2026)', () => {
     });
   });
 });
+
+describe('DeepSeek V4.1 Flash on Workers AI (November 2026)', () => {
+  const model = '@cf/deepseek-ai/deepseek-v4.1-flash-1017';
+
+  it('is catalogued from the Cloudflare model page', () => {
+    const entry = getCatalogEntry(model);
+    expect(entry?.provider).toBe('cloudflare');
+    expect(entry?.lifecycle).toBe('active');
+    expect(entry?.explicitOnly).toBeUndefined();
+    expect(entry?.capabilities).toMatchObject({
+      maxContextLength: 1_048_576,
+      supportsStreaming: true,
+      supportsTools: true,
+      toolCalling: true,
+      inputTokenCost: 0.0003,
+      outputTokenCost: 0.0012,
+    });
+    // Cloudflare lists vision, but not the image input shape.
+    expect(entry?.capabilities.supportsVision).toBeUndefined();
+    expect(entry?.useCases).toEqual(['BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT']);
+  });
+
+  it('is exported in MODELS', () => {
+    expect(MODELS.CF_DEEPSEEK_V4_1_FLASH).toBe(model);
+  });
+
+  it('does not change the Cloudflare default picks', () => {
+    expect(rankModels('LONG_CONTEXT', ['cloudflare'])[0]?.model).toBe('@cf/zai-org/glm-5.3-flash');
+    expect(rankModels('BALANCED', ['cloudflare'])[0]?.model).toBe('@cf/zai-org/glm-5.3-flash');
+    expect(rankModels('HIGH_PERFORMANCE', ['cloudflare'])[0]?.model).toBe('@cf/zai-org/glm-5.3');
+    expect(rankModels('TOOL_CALLING', ['cloudflare'])[0]?.model).toBe('@cf/zai-org/glm-5.3-flash');
+  });
+});

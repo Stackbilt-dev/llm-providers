@@ -203,6 +203,7 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/zai-org/glm-5.3-flash',
     'deepseek/deepseek-v4-pro',
     '@cf/deepseek-ai/deepseek-v4-flash-0731',
+    '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
     '@cf/deepseek-ai/deepseek-v4-pro-0813',
     '@cf/tinyllama/tinyllama-1.1b-chat-v1.0',
     '@cf/qwen/qwen1.5-0.5b-chat',
@@ -490,6 +491,16 @@ export class CloudflareProvider extends BaseProvider {
         inputTokenCost: 0.00044,
         outputTokenCost: 0.00132,
         description: 'DeepSeek V4 Flash 0731 — fast Cloudflare-hosted reasoning and agentic model with 1.31M context'
+      },
+      '@cf/deepseek-ai/deepseek-v4.1-flash-1017': {
+        maxContextLength: 1048576,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0.0003,
+        outputTokenCost: 0.0012,
+        description: 'DeepSeek V4.1 Flash 1017 — Cloudflare-hosted reasoning and agentic model with 1M context'
       },
       '@cf/deepseek-ai/deepseek-v4-pro-0813': {
         maxContextLength: 1048576,

@@ -81,6 +81,7 @@ describe('Workers AI catalog', () => {
     ['@cf/moonshotai/kimi-k2.6', 262_144],
     ['@cf/moonshotai/kimi-k2.7-code', 262_144],
     ['@cf/deepseek-ai/deepseek-v4-flash-0731', 1_048_576],
+    ['@cf/deepseek-ai/deepseek-v4.1-flash-1017', 1_048_576],
     ['deepseek/deepseek-v4-pro', 131_072],
   ])('%s has the documented %i-token context window', (model, context) => {
     expect(getCatalogEntry(model)?.capabilities.maxContextLength).toBe(context);

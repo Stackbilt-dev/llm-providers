@@ -606,6 +606,18 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.00132,
     description: 'Workers AI DeepSeek V4 Flash 0731 — fast hosted reasoning and agentic model; 1M context and function calling'
   }, { speed: 4, quality: 6, cost: 4 }),
+  // https://developers.cloudflare.com/workers-ai/models/deepseek-v4.1-flash-1017/ (checked 2026-11-08).
+  // The page lists vision, but not the image input shape, so vision stays off until it is verified.
+  entry('cloudflare', '@cf/deepseek-ai/deepseek-v4.1-flash-1017', 'active', ['BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 1048576,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0.0003,
+    outputTokenCost: 0.0012,
+    description: 'Workers AI DeepSeek V4.1 Flash 1017 — hosted reasoning and agentic model; 1M context and function calling'
+  }, { speed: 4, quality: 6, cost: 4 }),
   entry('cloudflare', '@cf/deepseek-ai/deepseek-v4-pro-0813', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 1048576,
     supportsStreaming: true,
