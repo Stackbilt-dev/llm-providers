@@ -94,6 +94,7 @@ describe('CloudflareProvider', () => {
       expect(provider.models).toContain('@cf/openai/gpt-oss-120b');
       expect(provider.models).toEqual(expect.arrayContaining([
         '@cf/deepseek-ai/deepseek-v4-flash-0731',
+        '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
         '@cf/deepseek-ai/deepseek-v4-pro-0813',
         '@cf/qwen/qwen3.8-27b',
         '@cf/zai-org/glm-5.3',

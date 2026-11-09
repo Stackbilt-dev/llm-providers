@@ -156,7 +156,7 @@ const llm = LLMProviders.fromEnv(env, {
 
 | Provider | Models | Streaming | Tools | Notes |
 |----------|--------|-----------|-------|-------|
-| **Cloudflare** (primary) | GLM-5.3 / 5.3 Flash / 5.2 / 4.7 Flash, Kimi K2.6 / K2.7 Code, DeepSeek V4 Flash / Pro, GPT-OSS 120B / 20B, Gemma 4 26B, Qwen 3.8 27B / 3 30B / 2.5 Coder, Llama 4 Scout / 3.3 70B Fast / 3.2 / 3.1 8B FP8, Nemotron-3 120B, Granite 4.0 Micro, Mistral Small 3.1, SEA-LION v4 (explicit requests only), DeepSeek-R1-Distill, QwQ-32B; plus `deepseek/deepseek-v4-pro` and `anthropic/claude-opus-4.8` from the AI Gateway unified catalog | Yes | Most current models (see catalog `supportsTools`) | Default is request-aware and catalog-driven; thinking models (DeepSeek-R1, QwQ, GLM-4.7 Flash) are RESEARCH-only. Kimi, GLM-5.x and DeepSeek V4 need a Workers Paid plan or AI Gateway credits. Models Cloudflare deprecated (Llama 3.1/3 8B, Llama 3.1 70B, Llama 2 7B, Mistral 7B, Phi-2, Qwen 1.5, TinyLlama, OpenChat) are still accepted when named but are never auto-routed; Kimi K2.5 and Gemma 3 12B are no longer accepted |
+| **Cloudflare** (primary) | GLM-5.3 / 5.3 Flash / 5.2 / 4.7 Flash, Kimi K2.6 / K2.7 Code, DeepSeek V4 Flash / V4.1 Flash / V4 Pro, GPT-OSS 120B / 20B, Gemma 4 26B, Qwen 3.8 27B / 3 30B / 2.5 Coder, Llama 4 Scout / 3.3 70B Fast / 3.2 / 3.1 8B FP8, Nemotron-3 120B, Granite 4.0 Micro, Mistral Small 3.1, SEA-LION v4 (explicit requests only), DeepSeek-R1-Distill, QwQ-32B; plus `deepseek/deepseek-v4-pro` and `anthropic/claude-opus-4.8` from the AI Gateway unified catalog | Yes | Most current models (see catalog `supportsTools`) | Default is request-aware and catalog-driven; thinking models (DeepSeek-R1, QwQ, GLM-4.7 Flash) are RESEARCH-only. Kimi, GLM-5.x and DeepSeek V4 / V4.1 need a Workers Paid plan or AI Gateway credits. Models Cloudflare deprecated (Llama 3.1/3 8B, Llama 3.1 70B, Llama 2 7B, Mistral 7B, Phi-2, Qwen 1.5, TinyLlama, OpenChat) are still accepted when named but are never auto-routed; Kimi K2.5 and Gemma 3 12B are no longer accepted |
 | **OpenAI** | GPT-4o Mini (shutdown 2027-01-14); GPT-6 Astra, GPT-5.6 Sol / Terra / Luna, GPT-5.5 (explicit requests only); GPT-4, GPT-4 Turbo, GPT-3.5 Turbo (shutdown 2026-10-23, no longer auto-routed) | Yes | Yes | Default: `gpt-4o-mini`. GPT-5 and later get `max_completion_tokens` (which includes reasoning tokens) and no `temperature` |
 | **Anthropic** | Opus 4.6, Sonnet 4.6, Haiku 4.5 (legacy at Anthropic); Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5 (explicit requests only); retired 4 / 3.x IDs | Yes | Yes | Default: catalog-driven by request shape: `claude-haiku-4-5-20251001` for plain requests, `claude-sonnet-4-6` for tools, JSON mode (`response_format`), vision and long context. `claude-opus-4-6` is picked only when a caller asks for the high-performance or research workload (`metadata.useCase` on factory requests, or the workload helpers). Claude 5.x requests omit `temperature` and default `max_tokens` to 16,000; a non-streaming request can exceed the 30-second default `timeout`, which is then retried (`maxRetries`, default 3), so raise `timeout` or stream for long thinking responses; Fable 5.1, Opus 5.5 and Sonnet 5.5 reject forced tool choice. JSON mode prefills `{` only on models that accept it |
 | **Cerebras** | GPT-OSS 120B, ZAI-GLM 4.7, LLaMA 3.1 8B *(deprecated 2026-05-27)*, Qwen 3 235B *(deprecated 2026-05-27)* | Yes | GLM, Qwen, GPT-OSS | ~2,200 tok/s |
@@ -187,7 +187,7 @@ const llm = LLMProviders.fromEnv(env, {
 
 ### Cloudflare Workers AI timeouts
 
-In 1.25.0, `BaseProvider` defaults `timeout` to 30,000 ms, so non-streaming Workers AI binding calls without an explicit deadline are limited to 30 seconds per attempt. The deadline applies per attempt, not to the whole operation: `TimeoutError` is retryable, and the default of three retries means one logical request can take four attempts plus backoff. Timeouts count as circuit-breaker failures; after three failures, a pinned slow model with `allowFallback: false` raises `CircuitBreakerOpenError`. The factory may also fall back to another provider after a `TIMEOUT`.
+`BaseProvider` defaults `timeout` to 30,000 ms, so non-streaming Workers AI binding calls without an explicit deadline are limited to 30 seconds per attempt. The deadline applies per attempt, not to the whole operation: `TimeoutError` is retryable, and the default of three retries means one logical request can take four attempts plus backoff. Timeouts count as circuit-breaker failures; after three failures, a pinned slow model with `allowFallback: false` raises `CircuitBreakerOpenError`. The factory may also fall back to another provider after a `TIMEOUT`.
 
 For Workers AI, `timeout: 0` or a negative value disables the deadline. HTTP providers treat `timeout: 0` as their 30-second default. The binding API documents no abort signal, so a timed-out call stops being awaited but may continue running alongside retries and may still incur charges. For long generations, raise `timeout`, lower `maxRetries`, or use streaming.
 
@@ -263,7 +263,7 @@ High reasoning effort on Workers AI can run past the 30-second default timeout; 
 | `@cf/openai/gpt-oss-20b`, `-120b` | low, medium, high | | none |
 | `@cf/zai-org/glm-5.3`, `-5.3-flash` | low, high | medium → high | none |
 | `@cf/zai-org/glm-5.2` | none, high | low, medium → high | |
-| `@cf/deepseek-ai/deepseek-v4-flash-0731`, `-pro-0813` | none, low, high | medium → high | |
+| `@cf/deepseek-ai/deepseek-v4-flash-0731`, `deepseek-v4.1-flash-1017`, `deepseek-v4-pro-0813` | none, low, high | medium → high | |
 | `@cf/moonshotai/kimi-k2.6` | none, high | low, medium → high | |
 | `@cf/qwen/qwen3.8-27b` | low, medium | high → xhigh | none |
 | `@cf/nvidia/nemotron-3-120b-a12b` | none, low (via `chat_template_kwargs`) | medium, high → normal reasoning (`enable_thinking: true`) | |
@@ -420,7 +420,7 @@ Model selection is driven by a declarative catalog rather than a hardcoded fallb
 - circuit breaker state (`CLOSED`, `DEGRADED`, `RECOVERING`, `OPEN`)
 - CreditLedger utilization and projected burn/depletion pressure
 
-The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets. Entries marked `explicitOnly` are served only when a request names them; recommendations and automatic routing skip them. In 1.25.0 these are the Claude 5.x models (until the remaining routing steps tracked on #112 are done: keeping `tools` on `toolChoice: 'none'` turns and handling a mid-loop fallback onto a thinking model), `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5` (so the OpenAI default stays `gpt-4o-mini`), and `@cf/aisingapore/gemma-sea-lion-v4-27b-it`.
+The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets. Entries marked `explicitOnly` are served only when a request names them; recommendations and automatic routing skip them. In 1.26.0 these are the Claude 5.x models (until the remaining routing steps tracked on #112 are done: keeping `tools` on `toolChoice: 'none'` turns and handling a mid-loop fallback onto a thinking model), `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5` (so the OpenAI default stays `gpt-4o-mini`), and `@cf/aisingapore/gemma-sea-lion-v4-27b-it`.
 
 ```typescript
 import {
@@ -564,11 +564,38 @@ const llm = new LLMProviders({
 
 Default provider precedence remains Cloudflare → Cerebras → Groq → NVIDIA → Anthropic → OpenAI, but actual dispatch is catalog-driven and can be reordered at runtime by request fit, circuit-breaker state, and ledger burn-rate pressure.
 
+### Context windows (opt-in)
+
+By default, a request too large for a provider's model is still sent to it. The overflow error then falls back like any other error, through the built-in catch-all fallback rule, which costs a failed call that may be billed or rate-limited. Set `contextWindowRouting: true` to skip those calls.
+
+```typescript
+const llm = new LLMProviders({ cloudflare: { ai: env.AI }, groq: { apiKey }, preferredProvider: 'groq', contextWindowRouting: true });
+const response = await llm.generateResponse({ messages: longDocument }); // ~150k tokens
+response.provider; // 'cloudflare'
+response.fallback;
+// { requestedProvider: 'groq', requestedModel: 'llama-3.3-70b-versatile',
+//   failedAttempts: [{ provider: 'groq', model: 'llama-3.3-70b-versatile', errorCode: 'CONTEXT_WINDOW' }] }
+```
+
+**How it works**
+- **The estimate:** the factory estimates the request's input as characters divided by four. It counts the system prompt and each message's text (or the text and thinking of its provider-native content, when that is larger), tool-call arguments, and tool results and errors.
+- **When providers are skipped:** a provider "can be relied on right now" if it is configured, not quota-exhausted or ledger-limited, and its circuit breaker is fully closed. When such a provider has a planned model whose context window holds the estimate, providers whose planned model can't are skipped when their turn comes.
+- **How a skip is reported:** like a quota-exhausted provider, as `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts` on the response or `StreamCompletion`.
+- **Where it applies:** on the response and streaming paths, and to each turn of `generateResponseWithTools` as tool results accumulate.
+- **What doesn't change:** the fallback chain, planned models and catalog ranking (`rankModels`, catalog `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`). When no available provider's model fits, nothing is skipped.
+
+**Trade-offs and rules**
+- **Trade-off:** a skipped provider can no longer absorb a transient failure of the provider that fits. If that provider returns a 503, the request fails instead of being sent to the smaller model, which might have held it. Because the estimate is approximate, a provider near the edge of its window may be skipped when it would have worked.
+- **Pins and rules:** a pinned model is never skipped; its provider decides whether the request fits. A provider that one of your own `fallbackRules` sends the request to is tried as usual, even if it was skipped earlier in the chain. The built-in default rules don't override a skip.
+- **`allowFallback: false`:** with `allowFallback: false` and no pinned model, if the first planned provider (for example a `preferredProvider`) is skipped, the request throws `NoRouteError` naming `CONTEXT_WINDOW`. Another provider is not substituted.
+- **Input only:** `maxTokens` is not checked, because providers differ on whether the requested output must also fit in the window.
+- **Accuracy:** the estimate leaves out tool definitions, images and redacted (encrypted) thinking. It undercounts text with more tokens per character, such as Chinese, Japanese or Korean, and overcounts text with fewer, such as heavily indented code. Models outside the catalog count as fitting. `RoutingInfo.estimatedInputTokens` reports the same estimate whether or not the option is on. The client `llm.getRoutingInfo` reports the first provider that wouldn't be skipped.
+
 ### Pinned models and `allowFallback`
 
 A pinned `model` is tried first, but by default it is not a guarantee: on an eligible failure, or when the pinned provider is skipped (quota-exhausted, circuit open, ledger-limited), another provider and model can serve the request. `fallbackRules: []` removes the rule-based fallbacks only; server errors, network errors, timeouts and schema drift still fall back.
 
-Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open or ledger-limited; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. With `reasoning.strict` and an effort, a pin on another configured provider (for example a Groq model) throws `ReasoningEffortUnsupportedError`; a pin no configured provider can serve still throws `NoRouteError`, because that check runs first. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
+Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open or ledger-limited; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. Without a pin, the same applies to the first planned provider, which with `contextWindowRouting` can also be skipped as too small for the input (`CONTEXT_WINDOW`). With `reasoning.strict` and an effort, a pin on another configured provider (for example a Groq model) throws `ReasoningEffortUnsupportedError`; a pin no configured provider can serve still throws `NoRouteError`, because that check runs first. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
 
 ```typescript
 const response = await llm.generateResponse({

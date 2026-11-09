@@ -606,6 +606,21 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     outputTokenCost: 0.00132,
     description: 'Workers AI DeepSeek V4 Flash 0731 — fast hosted reasoning and agentic model; 1M context and function calling'
   }, { speed: 4, quality: 6, cost: 4 }),
+  // https://developers.cloudflare.com/workers-ai/models/deepseek-v4.1-flash-1017/ (checked 2026-11-08).
+  // The page lists vision, but not the image input shape, so vision stays off until it is verified.
+  entry('cloudflare', '@cf/deepseek-ai/deepseek-v4.1-flash-1017', 'active', ['BALANCED', 'HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
+    maxContextLength: 1048576,
+    supportsStreaming: true,
+    supportsTools: true,
+    toolCalling: true,
+    supportsBatching: true,
+    inputTokenCost: 0.0003,
+    outputTokenCost: 0.0012,
+    description: 'Workers AI DeepSeek V4.1 Flash 1017 — hosted reasoning and agentic model; 1M context and function calling'
+    // Cost score ties V4 Flash on purpose, though V4.1 is cheaper: a higher score would
+    // move it ahead of Llama 3.3 70B Fast in BALANCED fallback, a second paid-only model
+    // before one that works on Workers Free. Listed after V4 Flash, so ties keep V4 Flash first.
+  }, { speed: 4, quality: 6, cost: 4 }),
   entry('cloudflare', '@cf/deepseek-ai/deepseek-v4-pro-0813', 'active', ['HIGH_PERFORMANCE', 'TOOL_CALLING', 'LONG_CONTEXT'], {
     maxContextLength: 1048576,
     supportsStreaming: true,
@@ -1011,8 +1026,73 @@ function usesVision(request: Partial<LLMRequest> | undefined): boolean {
   return (request?.images?.length ?? 0) > 0;
 }
 
+function stringLength(value: unknown): number {
+  return typeof value === 'string' ? value.length : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/** Sum `measure` over `items` when it is an array of objects; anything else counts as zero. */
+function sumOver(items: unknown, measure: (item: Record<string, unknown>) => number): number {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((sum: number, item) => sum + (isRecord(item) ? measure(item) : 0), 0);
+}
+
+/**
+ * Characters of the text and thinking blocks in provider-native content. Tool-use
+ * blocks carry the same input as the message's `toolCalls`, which are counted
+ * instead (no serialisation needed). Redacted thinking is encrypted, so its length
+ * says little about tokens; it is left out rather than risk overcounting.
+ */
+function providerTextLength(message: Record<string, unknown>): number {
+  const providerContent = message.providerContent;
+  return isRecord(providerContent)
+    ? sumOver(providerContent.blocks, block => stringLength(block.text) + stringLength(block.thinking))
+    : 0;
+}
+
+/**
+ * Characters a message sends: its text (or, when larger, the text and thinking of its
+ * provider-native content, which replaces the text for its own provider), tool-call
+ * arguments and tool results. Malformed values count as zero.
+ */
+function messageLength(message: Record<string, unknown>): number {
+  const toolCalls = sumOver(message.toolCalls, call =>
+    isRecord(call.function) ? stringLength(call.function.arguments) : 0);
+  const toolResults = sumOver(message.toolResults, result =>
+    stringLength(result.output) + stringLength(result.error));
+  return Math.max(stringLength(message.content), providerTextLength(message)) + toolCalls + toolResults;
+}
+
+/** Everything the messages send, for context-window checks. */
 function totalMessageLength(request: Partial<LLMRequest> | undefined): number {
-  return (request?.messages ?? []).reduce((sum, message) => sum + message.content.length, 0);
+  return sumOver(request?.messages, messageLength);
+}
+
+/** Message text only, for use-case inference (unchanged by context-window routing). */
+function totalMessageTextLength(request: Partial<LLMRequest> | undefined): number {
+  return sumOver(request?.messages, message => stringLength(message.content));
+}
+
+/**
+ * Rough input size for routing: characters of the messages (text, tool-call arguments,
+ * tool results and errors, provider-native content) and system prompt, divided by
+ * four. Tool definitions and images are not counted.
+ */
+export function estimateRequestInputTokens(request: Partial<LLMRequest> | undefined): number {
+  const charCount = totalMessageLength(request) + stringLength(request?.systemPrompt);
+  return Math.max(1, Math.ceil(charCount / 4));
+}
+
+/**
+ * Whether a model's context window can hold an estimated input (from
+ * `estimateRequestInputTokens`). Only the input is counted: providers differ on
+ * whether `maxTokens` must also fit.
+ */
+export function fitsContextWindow(entry: ModelCatalogEntry, estimatedInputTokens: number): boolean {
+  return estimatedInputTokens <= entry.capabilities.maxContextLength;
 }
 
 function providerRank(provider: ProviderName): number {
@@ -1115,7 +1195,7 @@ export function inferUseCaseFromRequest(request: Partial<LLMRequest>): ModelReco
   if (usesVision(request)) return 'VISION';
   if (usesTools(request) || isStructuredRequest(request)) return 'TOOL_CALLING';
 
-  const messageLength = totalMessageLength(request);
+  const messageLength = totalMessageTextLength(request);
   if ((request.maxTokens ?? 0) >= 4000 || messageLength >= 20_000) {
     return 'LONG_CONTEXT';
   }
@@ -1378,8 +1458,7 @@ function resolveRoutingInfo(
   const requestsStreaming = request.stream === true;
   const useCase = inferUseCaseFromRequest(request);
 
-  const charCount = totalMessageLength(request) + (request.systemPrompt?.length ?? 0);
-  const estimatedInputTokens = Math.max(1, Math.ceil(charCount / 4));
+  const estimatedInputTokens = estimateRequestInputTokens(request);
 
   // When a specific model is pinned, report on that model rather than recommending.
   if (request.model) {
