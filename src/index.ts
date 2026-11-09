@@ -186,6 +186,7 @@ export {
   ContentFilterError,
   TokenLimitError,
   ConfigurationError,
+  StructuredOutputUnsupportedError,
   NoRouteError,
   CfGatewayInvalidConfigError,
   CircuitBreakerOpenError,

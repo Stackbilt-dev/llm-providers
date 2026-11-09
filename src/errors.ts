@@ -125,6 +125,13 @@ export class ConfigurationError extends LLMProviderError {
   }
 }
 
+export class StructuredOutputUnsupportedError extends ConfigurationError {
+  constructor(provider: string, message: string) {
+    super(provider, message);
+    this.code = 'STRUCTURED_OUTPUT_UNSUPPORTED';
+  }
+}
+
 export class NoRouteError extends ConfigurationError {
   constructor(message: string = 'No configured provider can serve this request') {
     super('factory', message);

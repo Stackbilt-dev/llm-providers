@@ -1613,6 +1613,9 @@ export class LLMProviderFactory {
 
     // Don't fallback for configuration errors
     if (error instanceof ConfigurationError) {
+      if (error.code === 'STRUCTURED_OUTPUT_UNSUPPORTED') {
+        return { shouldFallback: true };
+      }
       return { shouldFallback: false };
     }
 

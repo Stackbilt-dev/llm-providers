@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- Native JSON Schema output on Cloudflare Workers AI (#127, #129). Models on Cloudflare's JSON mode list get the schema as `response_format.json_schema`; `@cf/zai-org/glm-5.3` and `@cf/zai-org/glm-5.3-flash` get `{ name, schema, strict? }`.
+- `StructuredOutputUnsupportedError` (code `STRUCTURED_OUTPUT_UNSUPPORTED`, a `ConfigurationError`), thrown before any Workers AI call when a Cloudflare model can't serve a `json_schema` request. The factory falls back on it, even with `fallbackRules: []`, unless `allowFallback: false`, and it doesn't count against the circuit breaker.
+- `ModelCapabilities.supportsStructuredOutput`, set for Cloudflare models in `getModelCapabilities()` and the catalog.
+- Route plan fields: `GatewayRouteCapabilityReport.supportsStructuredOutput` and `GatewayRouteRequirements.structuredOutputKind` and `allowStructuredOutputEmulation` (all optional).
+- `allowStructuredOutputEmulation` on `LLMRequest`, or `providerOptions.cloudflare.allowStructuredOutputEmulation` on a canonical request, to allow prompt-only JSON Schema emulation on Cloudflare models without native support. Emulation doesn't enforce the schema.
+
+### Changed
+- Cloudflare `json_schema` requests used to drop the schema silently. Direct `CloudflareProvider` calls on models without native support now throw `StructuredOutputUnsupportedError` unless emulation is allowed, and streaming `json_schema` requests always throw (#129).
+- For an unpinned `json_schema` request, model selection now picks only Cloudflare models with native support, unless emulation is allowed (#129). This applies to factory routing, `rankModels`, `getRecommendedModel`, `getProviderDefaultModel` and unpinned `CloudflareProvider` calls, which now pick a native model such as `@cf/zai-org/glm-5.3-flash` instead of throwing.
+- `getGatewayRoutePlan` for Cloudflare now reports `json_object` as `emulated` on every model, and a `json_schema` request a model can't serve as `failed` with `executable: false` (or `emulated` when emulation is allowed). Other providers' plans leave `supportsStructuredOutput` unset (#129).
+
 ## [1.27.0] — 2026-11-08
 
 Upgrade note: non-streaming Workers AI binding calls with no `timeout` set now stop after 30 seconds per attempt; before, they had no limit (see Fixed). With the default `maxRetries` of 3, a slow call can run up to four times, and a timed-out call isn't cancelled, so each attempt may be billed. For long generations, such as high reasoning effort, raise `timeout`, set `timeout: 0` to disable the deadline, lower `maxRetries`, or stream.

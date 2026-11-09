@@ -2,6 +2,7 @@ import type { CreditLedger } from './utils/credit-ledger.js';
 import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
 import { NoRouteError } from './errors.js';
 import { cloudflareReasoningEffortCapability } from './providers/cloudflare-reasoning.js';
+import { cloudflareStructuredOutputFormat } from './providers/cloudflare-structured-output.js';
 
 export type ProviderName = 'openai' | 'anthropic' | 'cloudflare' | 'cerebras' | 'groq' | 'nvidia';
 export type ModelLifecycle = 'active' | 'compatibility' | 'retired';
@@ -115,7 +116,9 @@ function entry(
     model,
     lifecycle,
     useCases,
-    capabilities: reasoningEffort ? { ...capabilities, reasoningEffort } : capabilities,
+    capabilities: provider === 'cloudflare'
+      ? { ...capabilities, ...(reasoningEffort ? { reasoningEffort } : {}), supportsStructuredOutput: !!cloudflareStructuredOutputFormat(model) }
+      : capabilities,
     speedScore: scores.speed,
     qualityScore: scores.quality,
     costScore: scores.cost,
@@ -1185,6 +1188,17 @@ function isCompatible(entry: ModelCatalogEntry, context: ModelSelectionContext, 
   if (usesTools(request) && !entry.capabilities.supportsTools) return false;
 
   if (isStructuredRequest(request) && !entry.capabilities.supportsTools && entry.provider === 'cloudflare') {
+    return false;
+  }
+
+  // The Cloudflare adapter rejects json_schema on models without native support
+  // unless the caller allows prompt emulation, so don't plan those models.
+  if (
+    entry.provider === 'cloudflare' &&
+    request.response_format?.type === 'json_schema' &&
+    !entry.capabilities.supportsStructuredOutput &&
+    request.allowStructuredOutputEmulation !== true
+  ) {
     return false;
   }
 

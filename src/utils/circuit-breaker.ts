@@ -140,7 +140,8 @@ export class CircuitBreaker {
         settled = true;
         if (!(error instanceof LLMProviderError) || ![
           'AUTHENTICATION_ERROR', 'INVALID_REQUEST', 'CONTENT_FILTER', 'TOKEN_LIMIT',
-          'MODEL_NOT_FOUND', 'CONFIGURATION_ERROR', 'QUOTA_DENIED', 'QUOTA_EXCEEDED',
+          'MODEL_NOT_FOUND', 'CONFIGURATION_ERROR', 'STRUCTURED_OUTPUT_UNSUPPORTED',
+          'QUOTA_DENIED', 'QUOTA_EXCEEDED',
           'TOOL_LOOP_ABORTED', 'TOOL_LOOP_LIMIT',
         ].includes(error.code)) this.onFailure();
       },
