@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.28.0] — 2026-11-09
+
+Upgrade note: Cloudflare `json_schema` requests used to drop the schema silently. Models with native support now enforce it; on other Cloudflare models a direct `CloudflareProvider` call throws `StructuredOutputUnsupportedError` unless you set `allowStructuredOutputEmulation: true`, and the factory falls back to another provider. Streaming `json_schema` requests on Cloudflare always throw (see Changed).
+
 ### Added
 - Native JSON Schema output on Cloudflare Workers AI (#127, #129). Models on Cloudflare's JSON mode list get the schema as `response_format.json_schema`; `@cf/zai-org/glm-5.3` and `@cf/zai-org/glm-5.3-flash` get `{ name, schema, strict? }`.
 - `StructuredOutputUnsupportedError` (code `STRUCTURED_OUTPUT_UNSUPPORTED`, a `ConfigurationError`), thrown before any Workers AI call when a Cloudflare model can't serve a `json_schema` request. The factory falls back on it, even with `fallbackRules: []`, unless `allowFallback: false`, and it doesn't count against the circuit breaker.
