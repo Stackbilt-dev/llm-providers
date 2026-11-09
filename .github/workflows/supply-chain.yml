@@ -9,7 +9,11 @@ name: Supply Chain
 # The SBOM generator (@cyclonedx/cdxgen) is installed from the committed
 # lockfile in .github/sbom/ with `npm ci`, so it and every transitive
 # dependency are pinned with integrity hashes. Its package.json overrides
-# undici to a patched release (cdxgen 12.8.5 pins a vulnerable 7.28.0).
+# undici to 7.30.2: cdxgen 12.8.5 pins 7.28.0, and undici through 7.30.0 is
+# affected by GHSA-2m5v-pch6-74hx and other advisories, several of them high
+# (all fixed in 7.30.1). The files match Stackbilt-dev/charter's after #425.
+# Dependabot (.github/dependabot.yml) proposes updates to the tool and to the
+# actions pinned here.
 
 on:
   push:
@@ -20,15 +24,22 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -80,7 +91,17 @@ jobs:
           for (const name of ['typescript', 'vitest', 'esbuild', '@cloudflare/workers-types']) {
             if (!names.has(name)) problems.push(`${name} not found`);
           }
-          if (names.has('sbom-tool') || names.has('@cyclonedx/cdxgen')) problems.push('SBOM includes the generator itself');
+          // Packages that only the generator's own lockfile contains must not
+          // appear: that would mean its install was scanned into the SBOM.
+          const lockNames = (file) => new Set(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).packages || {})
+            .filter((p) => p.includes('node_modules/'))
+            .map((p) => p.slice(p.lastIndexOf('node_modules/') + 'node_modules/'.length)));
+          const projectPackages = lockNames('package-lock.json');
+          const toolOnly = [...lockNames('.github/sbom/package-lock.json')].filter((n) => !projectPackages.has(n));
+          const leaked = toolOnly.filter((n) => names.has(n));
+          if (names.has('sbom-tool') || leaked.length) {
+            problems.push(`SBOM includes the generator's own packages: ${['sbom-tool', ...leaked].filter((n) => names.has(n)).slice(0, 10).join(', ')}`);
+          }
           if (problems.length) {
             console.error(`SBOM looks incomplete: ${problems.join('; ')}`);
             process.exit(1);
@@ -103,10 +124,12 @@ jobs:
     name: Dependency Review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      # The action compares the base and head dependency graphs through the
+      # API, so no checkout is needed.
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high

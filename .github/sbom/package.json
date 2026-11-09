@@ -6,6 +6,6 @@
     "@cyclonedx/cdxgen": "12.8.5"
   },
   "overrides": {
-    "undici": "7.29.1"
+    "undici": "7.30.2"
   }
 }
