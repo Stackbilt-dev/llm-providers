@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.27.0] — 2026-11-08
+
 ### Added
 - `contextWindowRouting` factory option, off by default (#113, #136). When it's on and a provider that can be relied on right now has a planned model whose context window can hold the request's estimated input, the factory skips providers whose planned model can't. "Relied on" means not quota-exhausted or ledger-limited, with a fully closed circuit breaker. Skips are recorded as `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts`. This saves the failed, possibly billed call that an overflow costs before it falls back.
   - It applies on the response, streaming and tool-loop paths.
