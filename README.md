@@ -187,7 +187,7 @@ const llm = LLMProviders.fromEnv(env, {
 
 ### Cloudflare Workers AI timeouts
 
-`BaseProvider` defaults `timeout` to 30,000 ms, so non-streaming Workers AI binding calls without an explicit deadline are limited to 30 seconds per attempt. The deadline applies per attempt, not to the whole operation: `TimeoutError` is retryable, and the default of three retries means one logical request can take four attempts plus backoff. Timeouts count as circuit-breaker failures; after three failures, a pinned slow model with `allowFallback: false` raises `CircuitBreakerOpenError`. The factory may also fall back to another provider after a `TIMEOUT`.
+Since 1.27.0, non-streaming Workers AI binding calls also use `BaseProvider`'s default `timeout` of 30,000 ms, so calls without an explicit deadline are limited to 30 seconds per attempt (before 1.27.0 they had no limit). The deadline applies per attempt, not to the whole operation: `TimeoutError` is retryable, and the default of three retries means one logical request can take four attempts plus backoff. Timeouts count as circuit-breaker failures; after three failures, a pinned slow model with `allowFallback: false` raises `CircuitBreakerOpenError`. The factory may also fall back to another provider after a `TIMEOUT`.
 
 For Workers AI, `timeout: 0` or a negative value disables the deadline. HTTP providers treat `timeout: 0` as their 30-second default. The binding API documents no abort signal, so a timed-out call stops being awaited but may continue running alongside retries and may still incur charges. For long generations, raise `timeout`, lower `maxRetries`, or use streaming.
 
@@ -420,7 +420,7 @@ Model selection is driven by a declarative catalog rather than a hardcoded fallb
 - circuit breaker state (`CLOSED`, `DEGRADED`, `RECOVERING`, `OPEN`)
 - CreditLedger utilization and projected burn/depletion pressure
 
-The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets. Entries marked `explicitOnly` are served only when a request names them; recommendations and automatic routing skip them. In 1.26.0 these are the Claude 5.x models (until the remaining routing steps tracked on #112 are done: keeping `tools` on `toolChoice: 'none'` turns and handling a mid-loop fallback onto a thinking model), `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5` (so the OpenAI default stays `gpt-4o-mini`), and `@cf/aisingapore/gemma-sea-lion-v4-27b-it`.
+The catalog also distinguishes active, compatibility, and retired models. Retired IDs can remain exported for compatibility, but they are not recommendation targets. Entries marked `explicitOnly` are served only when a request names them; recommendations and automatic routing skip them. In 1.27.0 these are the Claude 5.x models (until the remaining routing steps tracked on #112 are done: keeping `tools` on `toolChoice: 'none'` turns and handling a mid-loop fallback onto a thinking model), `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5` (so the OpenAI default stays `gpt-4o-mini`), and `@cf/aisingapore/gemma-sea-lion-v4-27b-it`.
 
 ```typescript
 import {
