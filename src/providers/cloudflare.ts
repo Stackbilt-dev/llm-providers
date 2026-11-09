@@ -1067,7 +1067,6 @@ export class CloudflareProvider extends BaseProvider {
 
     const responseFormat = request.response_format;
     const allowEmulation = request.allowStructuredOutputEmulation === true;
-    const schemaInstruction = this.structuredOutputInstruction(responseFormat, model, allowEmulation);
     if (responseFormat?.type === 'json_schema' && streaming) {
       throw new StructuredOutputUnsupportedError(this.name, 'Cloudflare Workers AI JSON Schema mode does not support streaming');
     }
@@ -1077,6 +1076,7 @@ export class CloudflareProvider extends BaseProvider {
         `Model '${model}' does not support native JSON Schema output; set allowStructuredOutputEmulation=true to allow prompt emulation.`
       );
     }
+    const schemaInstruction = this.structuredOutputInstruction(responseFormat, model, allowEmulation);
 
     // Anthropic format: system is a top-level field, not a role in messages.
     const messages: CloudflareMessage[] = request.messages

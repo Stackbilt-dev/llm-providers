@@ -437,6 +437,15 @@ describe('Cloudflare response_format', () => {
     })).rejects.toThrow('does not support native JSON Schema output');
   });
 
+  it('includes the emulation hint for Anthropic models on Cloudflare', async () => {
+    await expect(provider.generateResponse({
+      messages: [{ role: 'user', content: 'Return JSON.' }],
+      model: 'anthropic/claude-opus-4.8',
+      response_format: { type: 'json_schema', json_schema: { name: 'status', schema: { type: 'object' } } },
+    })).rejects.toThrow('allowStructuredOutputEmulation=true');
+    expect(mockAiRun).not.toHaveBeenCalled();
+  });
+
   it('should emulate json_schema only when explicitly enabled', async () => {
     mockAiRun.mockResolvedValueOnce({ response: '{"ok":true}' });
 
