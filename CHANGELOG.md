@@ -17,6 +17,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ### Changed
 - The input estimate (characters ÷ 4) now counts tool-call arguments, tool results and errors, and provider-native text and thinking, as well as message text and the system prompt. So `RoutingInfo.estimatedInputTokens` and the `getGatewayRoutePlan` context-length warning are higher for tool-loop requests. Malformed fields inside a message (non-string content, tool calls, tool results or provider-native content) count as zero in the estimate and in use-case inference, which used to throw on them. A `messages` value that isn't an array, or a `null` message, still throws in catalog `getRoutingInfo`, as before.
 
+### Fixed
+- Cloudflare Workers AI non-streaming binding calls now honor the provider timeout (#132). Calls with no timeout set are now cut off at 30 seconds per attempt and retried; a timed-out call is abandoned rather than cancelled, so it may keep running and be billed, and repeated timeouts count toward the circuit breaker. A timeout remains retryable and can trigger provider fallback.
+
 ## [1.26.0] — 2026-11-08
 
 ### Added
