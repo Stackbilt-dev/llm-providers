@@ -1,5 +1,23 @@
 name: Supply Chain
 
+# Ported from the organization's shared supply-chain workflows and inlined
+# here so the jobs run on this public repo (#137): a public repository can't
+# call reusable workflows stored in a private one. Follows the same port in
+# Stackbilt-dev/charter (#362). checkout and setup-node use the same pins as
+# ci.yml; upload-artifact and dependency-review-action use charter's pins.
+#
+# The SBOM generator (@cyclonedx/cdxgen) is installed from the committed
+# lockfile in .github/sbom/ with `npm ci`, so it and every transitive
+# dependency are pinned with integrity hashes. Its package.json overrides
+# undici to 7.30.2: cdxgen 12.8.5 pins 7.28.0, and undici through 7.30.0 is
+# affected by GHSA-2m5v-pch6-74hx and other advisories, several of them high
+# (all fixed in 7.30.1). It also overrides body-parser, an optional cdxgen
+# dependency that `npm ci --omit=optional` doesn't install but dependency
+# review still checks, to 2.4.0: cdxgen pins 2.3.0 (GHSA-27r3-jxmh-p828, high).
+# Otherwise the files match Stackbilt-dev/charter's after #425.
+# Dependabot (.github/dependabot.yml) proposes updates to the tool and to the
+# actions pinned here.
+
 on:
   push:
     branches: [main]
@@ -8,16 +26,113 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   sbom:
-    uses: Stackbilt-dev/stackbilt_llc/.github/workflows/supply-chain-sbom.yml@fe2f8dc7de1e0404dee1634d47c6e54a9b46c020
-    with:
-      node-version: '22'
-      package-manager: 'npm'
-    secrets: inherit
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install pinned SBOM generator
+        # Installed outside the checkout so the tool's own dependencies are
+        # not scanned into the SBOM.
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbom-tool"
+          cp .github/sbom/package.json .github/sbom/package-lock.json "$RUNNER_TEMP/sbom-tool/"
+          npm ci --prefix "$RUNNER_TEMP/sbom-tool" --ignore-scripts --omit=optional --no-audit --no-fund
+
+      - name: Generate CycloneDX SBOM
+        # Reads package-lock.json. .github/ is excluded so the generator's
+        # lockfile is skipped.
+        run: >-
+          "$RUNNER_TEMP/sbom-tool/node_modules/.bin/cdxgen"
+          --type js
+          --no-install-deps
+          --exclude '.github/**'
+          --output sbom.json
+          .
+
+      - name: Verify SBOM
+        run: |
+          node - <<'EOF'
+          const fs = require('fs');
+          let bom;
+          try {
+            bom = JSON.parse(fs.readFileSync('sbom.json', 'utf8'));
+          } catch (err) {
+            console.error(`sbom.json is missing or not valid JSON: ${err.message}`);
+            process.exit(1);
+          }
+          const fullName = (c) => (c.group ? `${c.group}/` : '') + c.name;
+          const components = bom.components || [];
+          const names = new Set(components.map(fullName));
+          const root = bom.metadata?.component ? fullName(bom.metadata.component) : '(none)';
+          console.log(`bomFormat: ${bom.bomFormat} ${bom.specVersion}`);
+          console.log(`Root component: ${root}`);
+          console.log(`SBOM components: ${components.length}`);
+          const problems = [];
+          if (bom.bomFormat !== 'CycloneDX') problems.push('bomFormat is not CycloneDX');
+          if (root !== '@stackbilt/llm-providers') problems.push(`root component is ${root}`);
+          if (components.length < 100) problems.push(`only ${components.length} components (expected >= 100)`);
+          for (const name of ['typescript', 'vitest', 'esbuild', '@cloudflare/workers-types']) {
+            if (!names.has(name)) problems.push(`${name} not found`);
+          }
+          // Packages that only the generator's own lockfile contains must not
+          // appear: that would mean its install was scanned into the SBOM.
+          const lockNames = (file) => new Set(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).packages || {})
+            .filter((p) => p.includes('node_modules/'))
+            .map((p) => p.slice(p.lastIndexOf('node_modules/') + 'node_modules/'.length)));
+          const projectPackages = lockNames('package-lock.json');
+          const toolOnly = [...lockNames('.github/sbom/package-lock.json')].filter((n) => !projectPackages.has(n));
+          const leaked = toolOnly.filter((n) => names.has(n));
+          if (names.has('sbom-tool') || leaked.length) {
+            problems.push(`SBOM includes the generator's own packages: ${['sbom-tool', ...leaked].filter((n) => names.has(n)).slice(0, 10).join(', ')}`);
+          }
+          if (problems.length) {
+            console.error(`SBOM looks incomplete: ${problems.join('; ')}`);
+            process.exit(1);
+          }
+          EOF
+
+      - name: Hash SBOM artifact
+        run: |
+          SBOM_SHA=$(sha256sum sbom.json | awk '{print $1}')
+          echo "SBOM SHA-256: ${SBOM_SHA}"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.json
+          retention-days: 90
 
   dep-review:
+    name: Dependency Review
     if: github.event_name == 'pull_request'
-    uses: Stackbilt-dev/stackbilt_llc/.github/workflows/supply-chain-dep-review.yml@fe2f8dc7de1e0404dee1634d47c6e54a9b46c020
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # The action compares the base and head dependency graphs through the
+      # API, so no checkout is needed.
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
