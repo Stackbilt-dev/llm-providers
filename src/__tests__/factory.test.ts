@@ -114,15 +114,15 @@ const mockCloudflareProvider = {
 
 // Mock the provider classes
 vi.mock('../providers/openai', () => ({
-  OpenAIProvider: vi.fn().mockImplementation(() => mockOpenAIProvider)
+  OpenAIProvider: vi.fn().mockImplementation(function () { return mockOpenAIProvider; })
 }));
 
 vi.mock('../providers/anthropic', () => ({
-  AnthropicProvider: vi.fn().mockImplementation(() => mockAnthropicProvider)
+  AnthropicProvider: vi.fn().mockImplementation(function () { return mockAnthropicProvider; })
 }));
 
 vi.mock('../providers/cloudflare', () => ({
-  CloudflareProvider: vi.fn().mockImplementation(() => mockCloudflareProvider)
+  CloudflareProvider: vi.fn().mockImplementation(function () { return mockCloudflareProvider; })
 }));
 
 describe('LLMProviderFactory', () => {

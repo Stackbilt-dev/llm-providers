@@ -13,13 +13,13 @@ const fallback = vi.hoisted(() => ({
 }));
 
 vi.mock('../providers/openai', () => ({
-  OpenAIProvider: vi.fn().mockImplementation(() => ({
+  OpenAIProvider: vi.fn().mockImplementation(function () { return {
     name: 'openai', models: ['gpt-4o-mini'], supportsStreaming: true,
     validateConfig: () => true,
     estimateCost: () => 0,
     getMetrics: () => ({ requestCount: 0, successCount: 0, errorCount: 0, averageLatency: 0, totalCost: 0, rateLimitHits: 0, lastUsed: 0 }),
     ...fallback,
-  })),
+  }; }),
 }));
 
 describe('factory fallback from the Cloudflare adapter', () => {
