@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+## [1.28.0] — 2026-11-09
+
+Upgrade note: Cloudflare `json_schema` requests used to drop the schema silently. Models with native support now enforce it; on other Cloudflare models a direct `CloudflareProvider` call throws `StructuredOutputUnsupportedError` unless you set `allowStructuredOutputEmulation: true`, and the factory falls back to another provider. Streaming `json_schema` requests on Cloudflare always throw (see Changed).
+
 ### Added
 - Native JSON Schema output on Cloudflare Workers AI (#127, #129). Models on Cloudflare's JSON mode list get the schema as `response_format.json_schema`; `@cf/zai-org/glm-5.3` and `@cf/zai-org/glm-5.3-flash` get `{ name, schema, strict? }`.
 - `StructuredOutputUnsupportedError` (code `STRUCTURED_OUTPUT_UNSUPPORTED`, a `ConfigurationError`), thrown before any Workers AI call when a Cloudflare model can't serve a `json_schema` request. The factory falls back on it, even with `fallbackRules: []`, unless `allowFallback: false`, and it doesn't count against the circuit breaker.
@@ -15,7 +19,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ### Changed
 - Cloudflare `json_schema` requests used to drop the schema silently. Direct `CloudflareProvider` calls on models without native support now throw `StructuredOutputUnsupportedError` unless emulation is allowed, and streaming `json_schema` requests always throw (#129).
 - For an unpinned `json_schema` request, model selection now picks only Cloudflare models with native support, unless emulation is allowed (#129). This applies to factory routing, `rankModels`, `getRecommendedModel`, `getProviderDefaultModel` and unpinned `CloudflareProvider` calls, which now pick a native model such as `@cf/zai-org/glm-5.3-flash` instead of throwing.
-- `getGatewayRoutePlan` for Cloudflare now reports `json_object` as `emulated` on every model, and a `json_schema` request a model can't serve as `failed` with `executable: false` (or `emulated` when emulation is allowed). Other providers' plans leave `supportsStructuredOutput` unset (#129).
+- `getGatewayRoutePlan` for Cloudflare now reports `json_object` as `emulated` on every model, and a `json_schema` request a model can't serve as `failed` with `executable: false` (or `emulated` when emulation is allowed, except for streaming requests, which are always `failed`). Other providers' plans leave `supportsStructuredOutput` unset (#129).
 
 ## [1.27.0] — 2026-11-08
 
