@@ -4,6 +4,8 @@ Contributions are welcome. Here is how to get started.
 
 ## Setup
 
+The dev tools (vitest 4 and vite 8) need Node 20.19 or later, or 22.12 or later. The published package still supports Node 20.0 and later.
+
 ```bash
 git clone https://github.com/Stackbilt-dev/llm-providers.git
 cd llm-providers

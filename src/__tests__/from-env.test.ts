@@ -11,7 +11,7 @@ import { ConfigurationError } from '../errors';
 const mockValidateConfig = vi.fn().mockReturnValue(true);
 
 vi.mock('../providers/openai', () => ({
-  OpenAIProvider: vi.fn().mockImplementation(() => ({
+  OpenAIProvider: vi.fn().mockImplementation(function () { return {
     name: 'openai',
     models: ['gpt-4o-mini'],
     supportsStreaming: true,
@@ -27,11 +27,11 @@ vi.mock('../providers/openai', () => ({
       averageLatency: 0, totalCost: 0, rateLimitHits: 0, lastUsed: 0
     }),
     resetMetrics: vi.fn()
-  }))
+  }; })
 }));
 
 vi.mock('../providers/anthropic', () => ({
-  AnthropicProvider: vi.fn().mockImplementation(() => ({
+  AnthropicProvider: vi.fn().mockImplementation(function () { return {
     name: 'anthropic',
     models: ['claude-haiku-4-5-20251001'],
     supportsStreaming: true,
@@ -47,11 +47,11 @@ vi.mock('../providers/anthropic', () => ({
       averageLatency: 0, totalCost: 0, rateLimitHits: 0, lastUsed: 0
     }),
     resetMetrics: vi.fn()
-  }))
+  }; })
 }));
 
 vi.mock('../providers/cloudflare', () => ({
-  CloudflareProvider: vi.fn().mockImplementation(() => ({
+  CloudflareProvider: vi.fn().mockImplementation(function () { return {
     name: 'cloudflare',
     models: ['@cf/meta/llama-3.1-8b-instruct'],
     supportsStreaming: true,
@@ -67,11 +67,11 @@ vi.mock('../providers/cloudflare', () => ({
       averageLatency: 0, totalCost: 0, rateLimitHits: 0, lastUsed: 0
     }),
     resetMetrics: vi.fn()
-  }))
+  }; })
 }));
 
 vi.mock('../providers/cerebras', () => ({
-  CerebrasProvider: vi.fn().mockImplementation(() => ({
+  CerebrasProvider: vi.fn().mockImplementation(function () { return {
     name: 'cerebras',
     models: ['llama-3.1-8b'],
     supportsStreaming: true,
@@ -87,11 +87,11 @@ vi.mock('../providers/cerebras', () => ({
       averageLatency: 0, totalCost: 0, rateLimitHits: 0, lastUsed: 0
     }),
     resetMetrics: vi.fn()
-  }))
+  }; })
 }));
 
 vi.mock('../providers/groq', () => ({
-  GroqProvider: vi.fn().mockImplementation(() => ({
+  GroqProvider: vi.fn().mockImplementation(function () { return {
     name: 'groq',
     models: ['llama-3.3-70b-versatile'],
     supportsStreaming: true,
@@ -107,7 +107,7 @@ vi.mock('../providers/groq', () => ({
       averageLatency: 0, totalCost: 0, rateLimitHits: 0, lastUsed: 0
     }),
     resetMetrics: vi.fn()
-  }))
+  }; })
 }));
 
 describe('LLMProviders.fromEnv', () => {

@@ -50,10 +50,10 @@ const mockCerebras = makeMock('cerebras', ['openai/gpt-oss-120b']);
 const mockGroq = makeMock('groq', ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b']);
 
 vi.mock('../providers/cerebras', () => ({
-  CerebrasProvider: vi.fn().mockImplementation(() => mockCerebras),
+  CerebrasProvider: vi.fn().mockImplementation(function () { return mockCerebras; }),
 }));
 vi.mock('../providers/groq', () => ({
-  GroqProvider: vi.fn().mockImplementation(() => mockGroq),
+  GroqProvider: vi.fn().mockImplementation(function () { return mockGroq; }),
 }));
 
 describe('built-in-tools routing — gpt-oss-120b collision', () => {
