@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LLMProviderFactory } from '../factory';
+import { getCatalogEntry, rankModels } from '../model-catalog';
 import { StructuredOutputUnsupportedError } from '../errors';
 import { CloudflareProvider } from '../providers/cloudflare';
 import type { LLMRequest } from '../types';
@@ -73,5 +74,48 @@ describe('factory fallback from the Cloudflare adapter', () => {
     expect(adapter).toHaveBeenCalledOnce();
     expect(fallback.generateResponse).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('does not count rejected schema requests against the Cloudflare circuit breaker', async () => {
+    run.mockResolvedValue({ response: 'plain' });
+    const cloudflareOnly = new LLMProviderFactory({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      enableCircuitBreaker: true,
+    });
+    for (let i = 0; i < 8; i++) {
+      await expect(cloudflareOnly.generateResponse({ ...request, allowFallback: false }))
+        .rejects.toBeInstanceOf(StructuredOutputUnsupportedError);
+    }
+    expect(run).not.toHaveBeenCalled();
+    expect((await cloudflareOnly.getProviderHealth()).cloudflare.circuitBreaker?.state).toBe('CLOSED');
+
+    for (let i = 0; i < 10; i++) {
+      const response = await cloudflareOnly.generateResponse({
+        messages: [{ role: 'user', content: 'plain' }],
+        allowFallback: false,
+      });
+      expect(response.provider).toBe('cloudflare');
+    }
+  });
+
+  it('plans only Cloudflare models with native JSON Schema support for unpinned schema requests', async () => {
+    const { model: _model, ...unpinned } = request;
+    const research: LLMRequest = { ...unpinned, metadata: { useCase: 'research' } };
+    run.mockResolvedValue({ response: '{}' });
+    const cloudflareOnly = new LLMProviderFactory({ cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 } });
+
+    const response = await cloudflareOnly.generateResponse(research);
+    expect(response.provider).toBe('cloudflare');
+    expect(getCatalogEntry(response.model)?.capabilities.supportsStructuredOutput).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
+
+    const ranked = rankModels('RESEARCH', ['cloudflare'], { request: research });
+    expect(ranked.length).toBeGreaterThan(0);
+    expect(ranked.every(entry => entry.capabilities.supportsStructuredOutput)).toBe(true);
+
+    const emulated = rankModels('RESEARCH', ['cloudflare'], {
+      request: { ...research, allowStructuredOutputEmulation: true },
+    });
+    expect(emulated.some(entry => !entry.capabilities.supportsStructuredOutput)).toBe(true);
   });
 });

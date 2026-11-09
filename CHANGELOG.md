@@ -6,13 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ## [Unreleased]
 
 ### Added
-- `StructuredOutputUnsupportedError`, `ModelCapabilities.supportsStructuredOutput`, structured-output route reports and requirements, and the Cloudflare `allowStructuredOutputEmulation` request option.
+- Native JSON Schema output on Cloudflare Workers AI (#127, #129). Models on Cloudflare's JSON mode list get the schema as `response_format.json_schema`; `@cf/zai-org/glm-5.3` and `@cf/zai-org/glm-5.3-flash` get `{ name, schema, strict? }`.
+- `StructuredOutputUnsupportedError` (code `STRUCTURED_OUTPUT_UNSUPPORTED`, a `ConfigurationError`), thrown before any Workers AI call when a Cloudflare model can't serve a `json_schema` request. The factory falls back on it, even with `fallbackRules: []`, unless `allowFallback: false`, and it doesn't count against the circuit breaker.
+- `ModelCapabilities.supportsStructuredOutput`, set for Cloudflare models in `getModelCapabilities()` and the catalog.
+- Route plan fields: `GatewayRouteCapabilityReport.supportsStructuredOutput` and `GatewayRouteRequirements.structuredOutputKind` and `allowStructuredOutputEmulation` (all optional).
+- `allowStructuredOutputEmulation` on `LLMRequest`, or `providerOptions.cloudflare.allowStructuredOutputEmulation` on a canonical request, to allow prompt-only JSON Schema emulation on Cloudflare models without native support. Emulation doesn't enforce the schema.
 
 ### Changed
-- Direct Cloudflare JSON Schema calls on models without documented native support now throw unless prompt emulation is explicitly enabled. Cloudflare JSON Schema streaming requests also throw.
-
-### Fixed
-- Cloudflare structured-output routing now matches adapter behavior: native JSON Schema is gated by model capability, unsupported requests fail or explicitly emulate, streaming requests reject consistently, and factory fallback remains available.
+- Cloudflare `json_schema` requests used to drop the schema silently. Direct `CloudflareProvider` calls on models without native support now throw `StructuredOutputUnsupportedError` unless emulation is allowed, and streaming `json_schema` requests always throw (#129).
+- For an unpinned `json_schema` request, the factory now plans only Cloudflare models with native support, unless emulation is allowed (#129).
+- `getGatewayRoutePlan` for Cloudflare now reports `json_object` as `emulated` on every model, and a `json_schema` request a model can't serve as `failed` with `executable: false` (or `emulated` when emulation is allowed). Other providers' plans leave `supportsStructuredOutput` unset (#129).
 
 ## [1.27.0] — 2026-11-08
 

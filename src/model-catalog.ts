@@ -1191,6 +1191,17 @@ function isCompatible(entry: ModelCatalogEntry, context: ModelSelectionContext, 
     return false;
   }
 
+  // The Cloudflare adapter rejects json_schema on models without native support
+  // unless the caller allows prompt emulation, so don't plan those models.
+  if (
+    entry.provider === 'cloudflare' &&
+    request.response_format?.type === 'json_schema' &&
+    !entry.capabilities.supportsStructuredOutput &&
+    request.allowStructuredOutputEmulation !== true
+  ) {
+    return false;
+  }
+
   return true;
 }
 

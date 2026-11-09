@@ -1,6 +1,7 @@
 // https://developers.cloudflare.com/workers-ai/features/json-mode/#supported-models
 // GLM schemas: https://developers.cloudflare.com/workers-ai/models/glm-5.3/
 // and https://developers.cloudflare.com/workers-ai/models/glm-5.3-flash/
+// Mirrors Cloudflare's list, so it can name models this package's catalog doesn't carry.
 const formats: Record<string, 'raw' | 'wrapped'> = {
   '@cf/meta/llama-3.3-70b-instruct-fp8-fast': 'raw',
   '@cf/meta/llama-3-8b-instruct': 'raw',
