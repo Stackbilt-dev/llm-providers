@@ -22,7 +22,8 @@ import {
   ReasoningEffortUnsupportedError,
   ModelNotFoundError,
   SchemaDriftError,
-  StructuredOutputUnsupportedError
+  StructuredOutputUnsupportedError,
+  TimeoutError
 } from '../errors.js';
 import { getProviderDefaultModel } from '../model-catalog.js';
 import { cloudflareStructuredOutputFormat } from './cloudflare-structured-output.js';
@@ -208,6 +209,7 @@ export class CloudflareProvider extends BaseProvider {
     '@cf/zai-org/glm-5.3-flash',
     'deepseek/deepseek-v4-pro',
     '@cf/deepseek-ai/deepseek-v4-flash-0731',
+    '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
     '@cf/deepseek-ai/deepseek-v4-pro-0813',
     '@cf/tinyllama/tinyllama-1.1b-chat-v1.0',
     '@cf/qwen/qwen1.5-0.5b-chat',
@@ -495,6 +497,16 @@ export class CloudflareProvider extends BaseProvider {
         inputTokenCost: 0.00044,
         outputTokenCost: 0.00132,
         description: 'DeepSeek V4 Flash 0731 — fast Cloudflare-hosted reasoning and agentic model with 1.31M context'
+      },
+      '@cf/deepseek-ai/deepseek-v4.1-flash-1017': {
+        maxContextLength: 1048576,
+        supportsStreaming: true,
+        supportsTools: true,
+        toolCalling: true,
+        supportsBatching: true,
+        inputTokenCost: 0.0003,
+        outputTokenCost: 0.0012,
+        description: 'DeepSeek V4.1 Flash 1017 — Cloudflare-hosted reasoning and agentic model with 1M context'
       },
       '@cf/deepseek-ai/deepseek-v4-pro-0813': {
         maxContextLength: 1048576,
@@ -795,13 +807,43 @@ export class CloudflareProvider extends BaseProvider {
     }, request) as Promise<WorkersAIResult>;
   }
 
-  private runModel(model: string, input: unknown, request: LLMRequest): Promise<unknown> {
-    const options = this.buildRunOptions(request);
+  private runModel(
+    model: string,
+    input: unknown,
+    request: LLMRequest,
+    executionOptions: { enforceTimeout?: boolean } = {}
+  ): Promise<unknown> {
+    const runOptions = this.buildRunOptions(request);
     const ai = this.ai as {
       run(model: string, input: unknown, options?: CloudflareRunOptions): Promise<unknown>;
     };
 
-    return options ? ai.run(model, input, options) : ai.run(model, input);
+    const operation = runOptions ? ai.run(model, input, runOptions) : ai.run(model, input);
+    const timeoutMs = this.config.timeout;
+    const maxTimeout = 2_147_483_647;
+    if (
+      executionOptions.enforceTimeout === false ||
+      timeoutMs === undefined ||
+      !Number.isFinite(timeoutMs) ||
+      timeoutMs <= 0 ||
+      timeoutMs > maxTimeout
+    ) {
+      return operation;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new TimeoutError(
+        this.name,
+        `Request timeout after ${timeoutMs}ms`
+      )), timeoutMs);
+    });
+
+    // The binding API documents no abort signal, so a timeout abandons the wait
+    // but cannot cancel the underlying call, which may continue running.
+    return Promise.race([operation, timeoutPromise]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
   }
 
   private buildRunOptions(request: LLMRequest): CloudflareRunOptions | undefined {
@@ -1555,7 +1597,7 @@ export class CloudflareProvider extends BaseProvider {
     return this.createStream({
       provider: this.name,
       timeoutMs: this.config.timeout,
-      open: () => this.runModel(model, cloudflareRequest, request),
+      open: () => this.runModel(model, cloudflareRequest, request, { enforceTimeout: false }),
       event: value => {
         let text: string | undefined;
         if (typeof value === 'string') text = value;

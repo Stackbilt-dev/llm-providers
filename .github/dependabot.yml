@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Pinned SBOM generator used by the Supply Chain workflow (#137). Version
+  # updates cover @cyclonedx/cdxgen only: Dependabot does not update the
+  # `overrides` entries for undici and body-parser in .github/sbom/package.json.
+  # When a cdxgen bump lands, check whether its own versions are fixed and bump
+  # or drop each override by hand (the exact pins would otherwise hold undici at
+  # 7.30.2 and body-parser at 2.4.0).
+  - package-ecosystem: "npm"
+    directory: "/.github/sbom"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci):"
+    groups:
+      sbom-tooling:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci):"

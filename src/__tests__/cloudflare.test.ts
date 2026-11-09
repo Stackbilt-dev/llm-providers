@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CloudflareProvider } from '../providers/cloudflare';
 import { LLMProviderFactory } from '../factory';
-import { ConfigurationError } from '../errors';
+import { ConfigurationError, TimeoutError } from '../errors';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { getStreamUsage } from '../utils/stream-usage';
 import type { LLMRequest } from '../types';
@@ -85,6 +85,7 @@ describe('CloudflareProvider', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   describe('Constructor', () => {
@@ -93,6 +94,7 @@ describe('CloudflareProvider', () => {
       expect(provider.models).toContain('@cf/openai/gpt-oss-120b');
       expect(provider.models).toEqual(expect.arrayContaining([
         '@cf/deepseek-ai/deepseek-v4-flash-0731',
+        '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
         '@cf/deepseek-ai/deepseek-v4-pro-0813',
         '@cf/qwen/qwen3.8-27b',
         '@cf/zai-org/glm-5.3',
@@ -160,6 +162,72 @@ describe('CloudflareProvider', () => {
       expect(response.finishReason).toBe('stop');
       expect(response.usage.inputTokens).toBeGreaterThan(0);
       expect(response.usage.outputTokens).toBeGreaterThan(0);
+    });
+
+    it('enforces the configured timeout for non-streaming binding calls', async () => {
+      vi.useFakeTimers();
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        timeout: 20,
+        maxRetries: 0
+      });
+      mockAiRun.mockReturnValueOnce(new Promise(() => {}));
+
+      const responsePromise = provider.generateResponse(testRequest);
+      responsePromise.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(responsePromise).rejects.toBeInstanceOf(TimeoutError);
+      await expect(responsePromise).rejects.toMatchObject({
+        code: 'TIMEOUT',
+        message: 'Request timeout after 20ms'
+      });
+      vi.useRealTimers();
+    });
+
+    it.each([Infinity, 2 ** 31])('does not schedule a deadline for non-finite or oversized timeout %s', async timeout => {
+      vi.useFakeTimers();
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        timeout
+      });
+      const baselineTimerCount = vi.getTimerCount();
+      mockAiRun.mockResolvedValueOnce({ response: 'No deadline' });
+
+      await expect(provider.generateResponse(testRequest)).resolves.toMatchObject({
+        message: 'No deadline'
+      });
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    });
+
+    it('clears the non-streaming timeout after a binding response', async () => {
+      vi.useFakeTimers();
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        timeout: 20
+      });
+      const baselineTimerCount = vi.getTimerCount();
+      mockAiRun.mockResolvedValueOnce({ response: 'Fast response' });
+
+      await expect(provider.generateResponse(testRequest)).resolves.toMatchObject({
+        message: 'Fast response'
+      });
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    });
+
+    it('clears the non-streaming timeout when a binding call rejects', async () => {
+      vi.useFakeTimers();
+      provider = new TestableCloudflareProvider({
+        ai: { run: mockAiRun } as unknown as Ai,
+        timeout: 20,
+        maxRetries: 0
+      });
+      const baselineTimerCount = vi.getTimerCount();
+      const originalError = new Error('binding failed');
+      mockAiRun.mockRejectedValueOnce(originalError);
+
+      await expect(provider.generateResponse(testRequest)).rejects.toBe(originalError);
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
     });
 
     it('stringifies numeric response field — CF returns bare numbers for short numeric answers', async () => {

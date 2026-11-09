@@ -595,6 +595,7 @@ export const MODELS = {
   CF_KIMI_K2_6: '@cf/moonshotai/kimi-k2.6',
   CF_DEEPSEEK_V4_PRO: '@cf/deepseek-ai/deepseek-v4-pro-0813',
   CF_DEEPSEEK_V4_FLASH: '@cf/deepseek-ai/deepseek-v4-flash-0731',
+  CF_DEEPSEEK_V4_1_FLASH: '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
   CF_GPT_OSS_120B: '@cf/openai/gpt-oss-120b',
   CF_GPT_OSS_20B: '@cf/openai/gpt-oss-20b',
   CF_GEMMA_4_26B: '@cf/google/gemma-4-26b-a4b-it',

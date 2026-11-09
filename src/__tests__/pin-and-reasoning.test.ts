@@ -172,6 +172,20 @@ describe('Workers AI reasoning effort (#135)', () => {
     expect(sent()).toMatchObject({ stream: true, reasoning_effort: 'low' });
   });
 
+  it.each([
+    ['none', 'none', true],
+    ['low', 'low', true],
+    ['medium', 'high', false],
+    ['high', 'high', true],
+  ] as const)('maps %s effort on DeepSeek V4.1 Flash to %s', async (requested, applied, exact) => {
+    run.mockResolvedValue({ response: 'ok' });
+    const response = await provider.generateResponse({
+      model: '@cf/deepseek-ai/deepseek-v4.1-flash-1017', messages, reasoning: { effort: requested },
+    });
+    expect(sent().reasoning_effort).toBe(applied);
+    expect(response.reasoningEffort).toEqual({ requested, applied, exact });
+  });
+
   it('ignores prototype keys as effort values', () => {
     expect(resolveCloudflareReasoningEffort('@cf/openai/gpt-oss-20b', 'constructor' as never)?.report)
       .toEqual({ requested: 'constructor', applied: null, exact: false });
@@ -184,6 +198,7 @@ describe('Workers AI reasoning effort (#135)', () => {
     expect(mapped.sort()).toEqual([
       '@cf/deepseek-ai/deepseek-v4-flash-0731',
       '@cf/deepseek-ai/deepseek-v4-pro-0813',
+      '@cf/deepseek-ai/deepseek-v4.1-flash-1017',
       '@cf/moonshotai/kimi-k2.6',
       '@cf/nvidia/nemotron-3-120b-a12b',
       '@cf/openai/gpt-oss-120b',

@@ -431,7 +431,11 @@ export interface ProviderConfig {
   enableCircuitBreaker?: boolean;
   apiKey?: string;
   baseUrl?: string;
-  /** Request timeout in ms. For streams it covers opening the stream (headers), not the body. */
+  /**
+   * Request timeout in ms. For streams it covers opening the stream (headers), not the body.
+   * On Workers AI, 0 or a negative value disables the deadline; HTTP providers
+   * use their 30-second default when the value is 0.
+   */
   timeout?: number;
   /** Opt-in total deadline in ms for a streaming response, including its body. Unset means none. */
   streamBodyTimeout?: number;

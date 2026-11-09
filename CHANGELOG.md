@@ -14,6 +14,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ### Fixed
 - Cloudflare structured-output routing now matches adapter behavior: native JSON Schema is gated by model capability, unsupported requests fail or explicitly emulate, streaming requests reject consistently, and factory fallback remains available.
 
+## [1.27.0] — 2026-11-08
+
+Upgrade note: non-streaming Workers AI binding calls with no `timeout` set now stop after 30 seconds per attempt; before, they had no limit (see Fixed). With the default `maxRetries` of 3, a slow call can run up to four times, and a timed-out call isn't cancelled, so each attempt may be billed. For long generations, such as high reasoning effort, raise `timeout`, set `timeout: 0` to disable the deadline, lower `maxRetries`, or stream.
+
+### Added
+- `contextWindowRouting` factory option, off by default (#113, #136, #147). When it's on and a provider that can be relied on right now has a planned model whose context window can hold the request's estimated input, the factory skips providers whose planned model can't. "Relied on" means not quota-exhausted or ledger-limited, with a fully closed circuit breaker. Skips are recorded as `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts`. This saves the failed, possibly billed call that an overflow costs before it falls back.
+  - It applies on the response, streaming and tool-loop paths.
+  - Trade-off: a skipped provider can't absorb a transient failure of the provider that fits.
+  - With `allowFallback: false` and no pinned model, a skipped first provider throws `NoRouteError`.
+  - Pinned models and providers chosen by your own `fallbackRules` are never skipped (a rule target skipped earlier in the chain is tried after the provider that failed); the built-in default rules don't override a skip.
+  - Only the input is checked, not `maxTokens`.
+  - The option is part of the response cache key when on, so default cache keys don't change.
+  - With it on, the client `llm.getRoutingInfo` reports the first provider that wouldn't be skipped.
+
+### Changed
+- The input estimate (characters ÷ 4) now counts tool-call arguments, tool results and errors, and provider-native text and thinking, as well as message text and the system prompt (#147). So `RoutingInfo.estimatedInputTokens` and the `getGatewayRoutePlan` context-length warning are higher for tool-loop requests. Malformed fields inside a message (non-string content, tool calls, tool results or provider-native content) count as zero in the estimate and in use-case inference, which used to throw on them. A `messages` value that isn't an array, or a `null` message, still throws in catalog `getRoutingInfo`, as before.
+
+### Fixed
+- Cloudflare Workers AI non-streaming binding calls now honor the provider timeout (#132). Calls with no timeout set are now cut off at 30 seconds per attempt and retried; a timed-out call is abandoned rather than cancelled, so it may keep running and be billed, and repeated timeouts count toward the circuit breaker. A timeout remains retryable and can trigger provider fallback.
+
+## [1.26.0] — 2026-11-08
+
+### Added
+- Workers AI model `@cf/deepseek-ai/deepseek-v4.1-flash-1017` (DeepSeek V4.1 Flash, #112, #144): 1,048,576-token context, tools, streaming and reasoning effort none / low / high, at $0.30 / $1.20 per million input / output tokens; exported as `MODELS.CF_DEEPSEEK_V4_1_FLASH`. Like DeepSeek V4, it needs a Workers Paid plan or AI Gateway credits. Default model choices don't change; it ranks right after DeepSeek V4 Flash (fourth among Cloudflare long-context models). Cloudflare lists vision for it, but image input isn't enabled until the request shape is verified.
+
 ## [1.25.0] — 2026-11-06
 
 Upgrade note: response cache keys change from `llmp:v2:` to `llmp:v3:`, so the factory response cache starts cold after upgrading (see Changed).
