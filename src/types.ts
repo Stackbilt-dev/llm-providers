@@ -157,6 +157,17 @@ export interface LLMRequest {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * The caller's count of this request's input tokens (messages, system prompt and
+   * tools), for example from the target model's tokenizer. When set, it replaces the
+   * package's character-based estimate (about 4 characters per token) for
+   * context-window routing (`contextWindowRouting`), route plans, model
+   * recommendations and pre-call cost estimates. It is never sent to a provider and
+   * doesn't change reported `usage`. Must be a positive integer. The tool loop
+   * (`generateResponseWithTools`) uses it for the first call only, since later calls
+   * add tool results.
+   */
+  inputTokenCount?: number;
   stream?: boolean;
   systemPrompt?: string;
   images?: LLMImageInput[];

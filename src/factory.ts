@@ -75,6 +75,7 @@ import {
   type ProviderName,
   type ModelRecommendationUseCase,
 } from './model-catalog.js';
+import { assertInputTokenCount } from './utils/input-token-count.js';
 import {
   LLMProviderError,
   ConfigurationError,
@@ -361,6 +362,8 @@ function cacheObservabilityForResponse(
  * previously published invalid ID is checked and recorded under the same model (#112).
  */
 function withResolvedModel(request: LLMRequest): LLMRequest {
+  // Checked at entry so a bad value fails before the cache or any provider.
+  assertInputTokenCount(request.inputTokenCount);
   if (!request.model) return request;
   const model = resolveModelId(request.model);
   return model === request.model ? request : { ...request, model };
@@ -1100,7 +1103,11 @@ export class LLMProviderFactory {
         }
       }
 
-      const response = await this.generateResponse({ ...request, messages });
+      // inputTokenCount describes the caller's original messages; later
+      // iterations add tool results, so they fall back to the estimate.
+      const iterationRequest: LLMRequest = { ...request, messages };
+      if (iteration > 0) delete iterationRequest.inputTokenCount;
+      const response = await this.generateResponse(iterationRequest);
       lastResponseCost = response.usage.cost;
       cumulativeCost += lastResponseCost;
 
@@ -1384,6 +1391,7 @@ export class LLMProviderFactory {
    * Build provider chain and provider-specific default models from the catalog.
    */
   private buildProviderPlan(request: LLMRequest): ProviderSelectionPlan {
+    assertInputTokenCount(request.inputTokenCount);
     const chain: string[] = [];
     const providerModels = new Map<string, string>();
     const selectionHealth = this.getSelectionHealth();

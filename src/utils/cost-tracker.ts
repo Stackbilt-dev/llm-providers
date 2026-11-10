@@ -6,6 +6,7 @@
 import type { LLMRequest, LLMResponse, CostConfig, ModelCapabilities } from '../types.js';
 import type { Logger } from './logger.js';
 import { noopLogger } from './logger.js';
+import { isValidInputTokenCount } from './input-token-count.js';
 import type { CreditLedger } from './credit-ledger.js';
 
 export interface ProviderCostEntry {
@@ -245,6 +246,9 @@ export class CostTracker {
    * Estimate input tokens from request
    */
   private estimateInputTokens(request: LLMRequest): number {
+    // A caller-supplied count (LLMRequest.inputTokenCount) replaces the estimate.
+    if (isValidInputTokenCount(request.inputTokenCount)) return request.inputTokenCount;
+
     // Rough estimation: 1 token ≈ 0.75 words ≈ 4 characters
     let totalChars = 0;
 

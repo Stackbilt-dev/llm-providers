@@ -92,6 +92,8 @@ export interface CanonicalLLMRequest {
   model?: string;
   stream?: boolean;
   sampling?: CanonicalSamplingOptions;
+  /** See `LLMRequest.inputTokenCount`. */
+  inputTokenCount?: number;
   tools?: CanonicalTool[];
   toolMode?: CanonicalToolMode;
   builtInTools?: BuiltInTool[];
@@ -174,7 +176,7 @@ export function normalizeLegacyRequest(request: LLMRequest): CanonicalLLMRequest
   const workload = normalizeWorkload(legacyMetadata?.useCase);
   const requirements = normalizeRequirements(request, output, media, workload);
 
-  return {
+  const canonical: CanonicalLLMRequest = {
     messages: request.messages
       .filter(message => message.role !== 'system')
       .map(copyMessage),
@@ -202,6 +204,9 @@ export function normalizeLegacyRequest(request: LLMRequest): CanonicalLLMRequest
       custom: legacyMetadata,
     },
   };
+  // Set only when present, so existing canonical requests keep their shape.
+  if (request.inputTokenCount !== undefined) canonical.inputTokenCount = request.inputTokenCount;
+  return canonical;
 }
 
 export function canonicalToLLMRequest(request: CanonicalLLMRequest): LLMRequest {
@@ -229,6 +234,7 @@ export function canonicalToLLMRequest(request: CanonicalLLMRequest): LLMRequest 
     cache: request.metadata?.cache,
     metadata: Object.keys(customMetadata).length > 0 ? customMetadata : undefined,
   };
+  if (request.inputTokenCount !== undefined) legacy.inputTokenCount = request.inputTokenCount;
 
   const cloudflare = request.providerOptions?.cloudflare;
   if (cloudflare) {

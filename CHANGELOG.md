@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- `inputTokenCount` on `LLMRequest` and `CanonicalLLMRequest`: the caller's own count of the request's input tokens (#136). When set, it replaces the characters ÷ 4 estimate for `contextWindowRouting`, `getRoutingInfo`, `getGatewayRoutePlan`, model recommendations and pre-call cost estimates. It is never sent to a provider and doesn't change the reported `usage`. A value that isn't a positive integer throws `ConfigurationError` from the factory (before the response cache or any provider) and from a provider called directly; catalog helpers ignore it and use the estimate. `generateResponseWithTools` uses it for the first call only.
+
 ## [1.28.0] — 2026-11-09
 
 Upgrade note: Cloudflare `json_schema` requests used to drop the schema silently. Models with native support now enforce it; on other Cloudflare models a direct `CloudflareProvider` call throws `StructuredOutputUnsupportedError` unless you set `allowStructuredOutputEmulation: true`, and the factory falls back to another provider. Streaming `json_schema` requests on Cloudflare always throw (see Changed).
