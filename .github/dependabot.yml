@@ -1,4 +1,6 @@
 version: 2
+# Every entry has a 7-day cooldown: version-update PRs skip releases less than
+# a week old. Security updates aren't delayed by it.
 updates:
   # Pinned SBOM generator used by the Supply Chain workflow (#137). Version
   # updates cover @cyclonedx/cdxgen only: Dependabot does not update the
@@ -12,6 +14,8 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(ci):"
     groups:
@@ -22,13 +26,14 @@ updates:
   # Root dev dependencies (vitest, esbuild, typescript, workers-types). The
   # package has no runtime dependencies, so these only affect tests and builds.
   # Minor and patch updates are grouped into one PR; majors come separately.
-  # The cooldown skips releases less than a week old.
+  # `increase` raises the ranges in package.json as well as the lockfile.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    versioning-strategy: increase
     cooldown:
       default-days: 7
     commit-message:
@@ -46,5 +51,7 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(ci):"
