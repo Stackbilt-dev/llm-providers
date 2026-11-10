@@ -164,11 +164,13 @@ export interface LLMRequest {
    * differ, so a count from the largest-counting tokenizer is the safe choice.
    * When set, it replaces the package's character-based estimate (about 4
    * characters per token) for context-window routing (`contextWindowRouting`),
-   * route plans, model recommendations and pre-call cost estimates (each provider's
+   * route plans and pre-call cost estimates (each provider's
    * `estimateCost`, which is what `quotaHook.check` receives as `estimatedCost`, and
    * `CostTracker.calculateRequestCost`). It is never sent to a provider. Where usage
    * has to be estimated because the provider reported none (Workers AI responses
-   * without usage, and streams), the estimate uses it too.
+   * without usage, and streams), the estimate uses it too. It doesn't change model
+   * selection: the use case (`LONG_CONTEXT` included) and default models are still
+   * chosen from message length and `maxTokens`.
    *
    * Must be a positive safe integer. `generateResponse`, `generateResponseStream`,
    * `generateManagedResponseStream`, `generateResponseWithTools`, `classify` and

@@ -1,7 +1,7 @@
 /**
  * #136: a caller-supplied input token count (LLMRequest.inputTokenCount) replaces
- * the character estimate for context-window routing, route plans, recommendations
- * and pre-call cost estimates (provider estimateCost, so the quota hook, and
+ * the character estimate for context-window routing, route plans and pre-call cost
+ * estimates (it doesn't change model selection) (provider estimateCost, so the quota hook, and
  * CostTracker). It is validated on entry and never sent to a provider.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,7 @@ import {
   getProviderDefaultModel,
   getRecommendedModel,
   getRoutingInfo,
+  inferUseCaseFromRequest,
   rankModels,
 } from '../model-catalog';
 import {
@@ -106,6 +107,19 @@ describe('estimate', () => {
     expect(new CostTracker().calculateRequestCost(request, capabilities)).toBeCloseTo(0.002);
     const groq = new GroqProvider({ apiKey: 'test' });
     expect(groq.estimateCost(request)).toBe(groq.estimateCost(small()));
+  });
+
+  it('does not change model selection: use case, rankings and default models', () => {
+    const plain = small();
+    const counted = small({ inputTokenCount: 900_000 });
+    expect(inferUseCaseFromRequest(counted)).toBe(inferUseCaseFromRequest(plain));
+    expect(rankModels('BALANCED', ['cloudflare', 'groq'], { request: counted }).map(entry => entry.model))
+      .toEqual(rankModels('BALANCED', ['cloudflare', 'groq'], { request: plain }).map(entry => entry.model));
+    for (const provider of ['cloudflare', 'groq', 'openai', 'anthropic'] as const) {
+      expect(getProviderDefaultModel(provider, counted)).toBe(getProviderDefaultModel(provider, plain));
+    }
+    expect(getRecommendedModel('BALANCED', ['cloudflare', 'groq'], { request: counted }))
+      .toBe(getRecommendedModel('BALANCED', ['cloudflare', 'groq'], { request: plain }));
   });
 
   it('feeds the gateway route plan, from legacy and canonical requests', () => {

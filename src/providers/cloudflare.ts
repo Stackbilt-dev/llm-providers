@@ -1501,7 +1501,8 @@ export class CloudflareProvider extends BaseProvider {
     }
 
     // No usage from Workers AI: use the caller's input token count when set, so the
-    // recorded cost matches the pre-call estimate (estimateCost) that priced it.
+    // input side of the recorded cost matches the pre-call estimate (estimateCost).
+    // Output differs: estimateCost prices maxTokens (or 1000), this the response.
     const estimatedInputTokens = isValidInputTokenCount(request.inputTokenCount)
       ? request.inputTokenCount
       : (request.systemPrompt ? Math.ceil(request.systemPrompt.length / 4) : 0) +
