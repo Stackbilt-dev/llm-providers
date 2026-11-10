@@ -71,6 +71,7 @@ export type {
   ReasoningEffortReport,
   FallbackHop,
   FallbackReport,
+  ContextWindowSwitch,
   ProviderContent
 } from './types.js';
 

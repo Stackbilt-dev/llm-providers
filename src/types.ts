@@ -168,9 +168,10 @@ export interface LLMRequest {
    * `estimateCost`, which is what `quotaHook.check` receives as `estimatedCost`, and
    * `CostTracker.calculateRequestCost`). It is never sent to a provider. Where usage
    * has to be estimated because the provider reported none (Workers AI responses
-   * without usage, and streams), the estimate uses it too. It doesn't change model
-   * selection: the use case (`LONG_CONTEXT` included) and default models are still
-   * chosen from message length and `maxTokens`.
+   * without usage, and streams), the estimate uses it too. It doesn't change the use
+   * case (`LONG_CONTEXT` included) or default models, which still come from message
+   * length and `maxTokens`; only `contextWindowModelSwitch`, when on, can move a
+   * provider to a larger model because of it.
    *
    * Must be a positive safe integer. `generateResponse`, `generateResponseStream`,
    * `generateManagedResponseStream`, `generateResponseWithTools`, `classify` and
@@ -285,6 +286,17 @@ export interface FallbackHop {
   errorCode?: string;
 }
 
+/**
+ * Set when `contextWindowModelSwitch` sent the request to a larger model of the
+ * serving provider because its planned model's context window couldn't hold the input.
+ */
+export interface ContextWindowSwitch {
+  /** The model the provider was planned with. */
+  from: string;
+  /** The larger model the request was sent to. */
+  to: string;
+}
+
 /** Present on a response served by a provider other than the first one tried. */
 export interface FallbackReport {
   /** Provider and model the request was planned for first. */
@@ -364,6 +376,8 @@ export interface LLMResponse {
   reasoningEffort?: ReasoningEffortReport;
   /** Present when a provider other than the first one tried served this response. */
   fallback?: FallbackReport;
+  /** Present when `contextWindowModelSwitch` sent this request to a larger model. */
+  contextWindowSwitch?: ContextWindowSwitch;
   toolCalls?: ToolCall[];
   /**
    * Provider-native content of this turn, set by the Anthropic provider when the
@@ -663,6 +677,8 @@ export interface StreamCompletion {
   model?: string;
   /** Present when a provider other than the first one tried served the stream. */
   fallback?: FallbackReport;
+  /** Present when `contextWindowModelSwitch` sent this stream to a larger model. */
+  contextWindowSwitch?: ContextWindowSwitch;
 }
 
 export interface ManagedTextStream {

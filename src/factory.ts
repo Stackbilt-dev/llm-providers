@@ -32,7 +32,7 @@ import type {
   CacheObservability,
   ProviderAttemptResult
 } from './types.js';
-import type { FallbackHop, FallbackReport, ManagedTextStream, StreamCompletion, TokenUsage } from './types.js';
+import type { ContextWindowSwitch, FallbackHop, FallbackReport, ManagedTextStream, StreamCompletion, TokenUsage } from './types.js';
 import { lengthCauseFor } from './utils/reasoning.js';
 import type { CostProvenance, TokenProvenance } from './types.js';
 
@@ -75,7 +75,7 @@ import {
   type ProviderName,
   type ModelRecommendationUseCase,
 } from './model-catalog.js';
-import { largerOwnModel } from './utils/context-window.js';
+import { largerOwnModel, requestedOutputTokens } from './utils/context-window.js';
 import { addToInputTokenCount, assertInputTokenCount, isValidInputTokenCount } from './utils/input-token-count.js';
 import {
   LLMProviderError,
@@ -111,12 +111,16 @@ export interface ProviderFactoryConfig {
   contextWindowRouting?: boolean;
   /**
    * Opt in to switching a provider whose planned model's context window can't hold the
-   * request's estimated input to the highest-ranked model of its own that can, when it
-   * has one (default false). The new model must pass the same compatibility checks
-   * and suit the request's use case or be tagged `LONG_CONTEXT`. A pinned model is
-   * never switched. It works with or without `contextWindowRouting`; with both, the
-   * switch comes first, so a provider that switched is no longer skipped. A switched
-   * model may cost more per token.
+   * request's estimated input to the highest-ranked model of its own that can hold
+   * the input plus `maxTokens`, when it has one (default false). The new model must
+   * be active, pass the same compatibility checks, and suit the use case the planned
+   * model was chosen for or be tagged `LONG_CONTEXT`. A pinned model is never
+   * switched. It works with or without `contextWindowRouting`; with both, the switch
+   * comes first, so a provider that switched is no longer skipped, except that no
+   * switch is made when a provider that can be relied on right now has a fitting
+   * planned model with at least twice the switch target's window. A switch is
+   * reported as `contextWindowSwitch` on the response or stream completion. A
+   * switched model may cost more per token.
    */
   contextWindowModelSwitch?: boolean;
   fallbackRules?: FallbackRule[];
@@ -170,6 +174,8 @@ interface ProviderSelectionPlan {
   useCase: ModelRecommendationUseCase;
   /** Providers to skip with CONTEXT_WINDOW: their planned model can't hold the input. */
   contextSkips: Set<string>;
+  /** Providers whose planned model contextWindowModelSwitch replaced. */
+  modelSwitches: Map<string, ContextWindowSwitch>;
 }
 
 interface ImageAnalysisTotals {
@@ -432,6 +438,19 @@ function fallbackReport(
     ...(requestedModel ? { requestedModel } : {}),
     failedAttempts: failedAttempts.map(hop => ({ ...hop })),
   };
+}
+
+/**
+ * The contextWindowModelSwitch switch for the serving provider, when the model sent is
+ * still the switched one (a caller's fallback rule may have set another).
+ */
+function switchFor(
+  switches: Map<string, ContextWindowSwitch>,
+  providerName: string,
+  model: string | undefined
+): ContextWindowSwitch | undefined {
+  const switched = switches.get(providerName);
+  return switched && switched.to === model ? { ...switched } : undefined;
 }
 
 export class LLMProviderFactory {
@@ -727,6 +746,7 @@ export class LLMProviderFactory {
             thinkingModel: getCatalogEntry(response.model)?.capabilities.thinkingModel === true,
           });
         const fallback = fallbackReport(providerChain[0], requestedModel, failedAttempts);
+        const contextWindowSwitch = switchFor(selectionPlan.modelSwitches, providerName, providerRequest.model);
         response = {
           ...response,
           usage: {
@@ -736,6 +756,7 @@ export class LLMProviderFactory {
           },
           ...(lengthCause ? { lengthCause } : {}),
           ...(fallback ? { fallback } : {}),
+          ...(contextWindowSwitch ? { contextWindowSwitch } : {}),
         };
         if (imageContext && providerStartedAt !== undefined && imageContext.totals.attempts === attemptsBeforeProvider) {
           const usage = response.usage;
@@ -1041,7 +1062,8 @@ export class LLMProviderFactory {
           startTime,
           estimatedCost,
           opened.usage,
-          fallbackReport(providerChain[0], requestedModel, failedAttempts)
+          fallbackReport(providerChain[0], requestedModel, failedAttempts),
+          switchFor(selectionPlan.modelSwitches, providerName, providerRequest.model)
         );
       } catch (error) {
         const err = error as Error;
@@ -1431,6 +1453,9 @@ export class LLMProviderFactory {
     };
 
     let pinnedProvider: string | undefined;
+    // Providers whose planned model came from getProviderDefaultModel, which uses the
+    // inferred use case rather than resolveUseCase (metadata.useCase, costOptimization).
+    const inferredPlans = new Set<string>();
 
     // If specific provider requested, try it first
     if (request.model) {
@@ -1454,6 +1479,7 @@ export class LLMProviderFactory {
         chain.push(defaultProvider);
         if (!request.model) {
           providerModels.set(defaultProvider, getProviderDefaultModel(defaultProvider, request));
+          inferredPlans.add(defaultProvider);
         }
       }
     }
@@ -1482,6 +1508,7 @@ export class LLMProviderFactory {
       }
       if (!providerModels.has(provider)) {
         providerModels.set(provider, getProviderDefaultModel(provider, request));
+        inferredPlans.add(provider);
       }
     }
 
@@ -1519,20 +1546,46 @@ export class LLMProviderFactory {
     }
 
     // Larger models (opt-in, contextWindowModelSwitch: true). A provider whose planned
-    // model can't hold the estimated input switches to the highest-ranked model of its
-    // own that can, if it has one (see largerOwnModel). Pinned models are never
-    // switched, and models outside the catalog count as fitting. Runs before the
-    // skip check below, so a provider that switched isn't skipped.
+    // model can't hold the estimated input switches to the highest-ranked active model
+    // of its own that can hold the input plus maxTokens (see largerOwnModel), ranked
+    // for the use case its planned model was chosen for. Pinned models are never
+    // switched, and models outside the catalog count as fitting. Runs before the skip
+    // check below, so a provider that switched isn't skipped. With
+    // contextWindowRouting on, no switch is made when a provider that can be relied on
+    // right now already has a fitting planned model with at least twice the target's
+    // window: the skip then sends the request there instead.
+    const modelSwitches = new Map<string, ContextWindowSwitch>();
     if (this.config.contextWindowModelSwitch === true && request.messages !== undefined) {
       const estimatedInputTokens = estimateRequestInputTokens(request);
+      const requiredTokens = estimatedInputTokens + requestedOutputTokens(request.maxTokens);
+      const inferredUseCase = inferUseCaseFromRequest(request);
+      const largestReliableWindow = (except: string): number => {
+        let largest = 0;
+        for (const other of chain) {
+          if (other === except || !this.isAvailableForContextRouting(other)) continue;
+          const model = providerModels.get(other);
+          const entry = model ? MODEL_CATALOG.find(candidate => candidate.provider === other && candidate.model === model) : undefined;
+          if (entry && fitsContextWindow(entry, estimatedInputTokens)) {
+            largest = Math.max(largest, entry.capabilities.maxContextLength);
+          }
+        }
+        return largest;
+      };
       for (const name of chain) {
         if (name === pinnedProvider) continue;
-        if (this.plannedModelFitsContext(name, providerModels.get(name), estimatedInputTokens)) continue;
-        const larger = largerOwnModel(rankedModels, name, useCase, estimatedInputTokens, request);
-        if (larger) {
-          this.logger.debug(`[LLMProviderFactory] ${name}: planned model can't hold the estimated input, planning ${larger}`);
-          providerModels.set(name, larger);
-        }
+        const planned = providerModels.get(name);
+        if (planned === undefined || this.plannedModelFitsContext(name, planned, estimatedInputTokens)) continue;
+        const plannedUseCase = inferredPlans.has(name) ? inferredUseCase : useCase;
+        const ranked = rankModels(plannedUseCase, [name], { request });
+        const larger = largerOwnModel(ranked, name, plannedUseCase, requiredTokens, request);
+        if (!larger) continue;
+        if (
+          this.config.contextWindowRouting === true &&
+          largestReliableWindow(name) >= 2 * larger.capabilities.maxContextLength
+        ) continue;
+        this.logger.debug(`[LLMProviderFactory] ${name}: planned model can't hold the estimated input, planning ${larger.model}`);
+        providerModels.set(name, larger.model);
+        modelSwitches.set(name, { from: planned, to: larger.model });
       }
     }
 
@@ -1559,7 +1612,7 @@ export class LLMProviderFactory {
       chain.splice(1);
     }
 
-    return { chain, providerModels, useCase, contextSkips };
+    return { chain, providerModels, useCase, contextSkips, modelSwitches };
   }
 
   /**
@@ -1976,7 +2029,8 @@ export class LLMProviderFactory {
     startTime: number,
     estimatedCost: number,
     streamUsage?: Promise<LLMResponse['usage'] | undefined>,
-    fallback?: FallbackReport
+    fallback?: FallbackReport,
+    contextWindowSwitch?: ContextWindowSwitch
   ): ManagedTextStream {
     let emittedChars = 0;
     let firstPending = !firstDone;
@@ -2003,6 +2057,7 @@ export class LLMProviderFactory {
         const result: StreamCompletion = {
           outcome, emittedChars, usage, provider: providerName, model,
           ...(fallback ? { fallback } : {}),
+          ...(contextWindowSwitch ? { contextWindowSwitch } : {}),
         };
         try {
           await this.settleStreamUsage(providerName, model, request, startTime, usage, outcome);
