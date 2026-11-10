@@ -75,6 +75,7 @@ import {
   type ProviderName,
   type ModelRecommendationUseCase,
 } from './model-catalog.js';
+import { largerOwnModel } from './utils/context-window.js';
 import { addToInputTokenCount, assertInputTokenCount, isValidInputTokenCount } from './utils/input-token-count.js';
 import {
   LLMProviderError,
@@ -108,6 +109,16 @@ export interface ProviderFactoryConfig {
    * failure of the provider that fits.
    */
   contextWindowRouting?: boolean;
+  /**
+   * Opt in to switching a provider whose planned model's context window can't hold the
+   * request's estimated input to the highest-ranked model of its own that can, when it
+   * has one (default false). The new model must pass the same compatibility checks
+   * and suit the request's use case or be tagged `LONG_CONTEXT`. A pinned model is
+   * never switched. It works with or without `contextWindowRouting`; with both, the
+   * switch comes first, so a provider that switched is no longer skipped. A switched
+   * model may cost more per token.
+   */
+  contextWindowModelSwitch?: boolean;
   fallbackRules?: FallbackRule[];
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
@@ -526,6 +537,7 @@ export class LLMProviderFactory {
         fallbackRules: this.fallbackRules,
         // Undefined when off, so keys for the default config are unchanged.
         contextWindowRouting: this.config.contextWindowRouting === true ? true : undefined,
+        contextWindowModelSwitch: this.config.contextWindowModelSwitch === true ? true : undefined,
       }
     ) : undefined;
 
@@ -1504,6 +1516,24 @@ export class LLMProviderFactory {
         );
       }
       chain.splice(0, chain.length, ...enforcing);
+    }
+
+    // Larger models (opt-in, contextWindowModelSwitch: true). A provider whose planned
+    // model can't hold the estimated input switches to the highest-ranked model of its
+    // own that can, if it has one (see largerOwnModel). Pinned models are never
+    // switched, and models outside the catalog count as fitting. Runs before the
+    // skip check below, so a provider that switched isn't skipped.
+    if (this.config.contextWindowModelSwitch === true && request.messages !== undefined) {
+      const estimatedInputTokens = estimateRequestInputTokens(request);
+      for (const name of chain) {
+        if (name === pinnedProvider) continue;
+        if (this.plannedModelFitsContext(name, providerModels.get(name), estimatedInputTokens)) continue;
+        const larger = largerOwnModel(rankedModels, name, useCase, estimatedInputTokens, request);
+        if (larger) {
+          this.logger.debug(`[LLMProviderFactory] ${name}: planned model can't hold the estimated input, planning ${larger}`);
+          providerModels.set(name, larger);
+        }
+      }
     }
 
     // Context windows (opt-in, contextWindowRouting: true). When a provider that can be

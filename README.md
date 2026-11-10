@@ -585,7 +585,7 @@ response.fallback;
 - **When providers are skipped:** a provider "can be relied on right now" if it is configured, not quota-exhausted or ledger-limited, and its circuit breaker is fully closed. When such a provider has a planned model whose context window holds the estimate, providers whose planned model can't are skipped when their turn comes.
 - **How a skip is reported:** like a quota-exhausted provider, as `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts` on the response or `StreamCompletion`.
 - **Where it applies:** on the response and streaming paths, and to each turn of `generateResponseWithTools` as tool results accumulate.
-- **What doesn't change:** the fallback chain, planned models and catalog ranking (`rankModels`, catalog `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`). When no available provider's model fits, nothing is skipped.
+- **What doesn't change:** the fallback chain, planned models (unless `contextWindowModelSwitch` is also on, below) and catalog ranking (`rankModels`, catalog `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`). When no available provider's model fits, nothing is skipped.
 
 **Trade-offs and rules**
 - **Trade-off:** a skipped provider can no longer absorb a transient failure of the provider that fits. If that provider returns a 503, the request fails instead of being sent to the smaller model, which might have held it. Because the estimate is approximate, a provider near the edge of its window may be skipped when it would have worked.
@@ -593,6 +593,24 @@ response.fallback;
 - **`allowFallback: false`:** with `allowFallback: false` and no pinned model, if the first planned provider (for example a `preferredProvider`) is skipped, the request throws `NoRouteError` naming `CONTEXT_WINDOW`. Another provider is not substituted.
 - **Input only:** `maxTokens` is not checked, because providers differ on whether the requested output must also fit in the window.
 - **Accuracy:** the estimate leaves out tool definitions, images and redacted (encrypted) thinking. It undercounts text with more tokens per character, such as Chinese, Japanese or Korean, and overcounts text with fewer, such as heavily indented code. Models outside the catalog count as fitting. `RoutingInfo.estimatedInputTokens` reports the same estimate whether or not the option is on. The client `llm.getRoutingInfo` reports the first provider that wouldn't be skipped.
+
+**Switching to a larger model of the same provider**
+
+Set `contextWindowModelSwitch: true` to keep a provider whose planned model is too small, by sending the request to a larger model of its own instead. It is off by default, and it works with or without `contextWindowRouting`.
+
+```typescript
+const llm = new LLMProviders({ cloudflare: { ai: env.AI }, nvidia: { apiKey }, preferredProvider: 'nvidia', contextWindowModelSwitch: true });
+const response = await llm.generateResponse({ messages, inputTokenCount: 300_000 });
+response.provider; // 'nvidia'
+response.model;    // 'meta/llama-4-maverick-17b-128e-instruct' (1M), not 'deepseek-ai/deepseek-v4-flash' (64k)
+```
+
+- **Which model:** the provider's highest-ranked catalog model whose context window holds the same estimate (or your `inputTokenCount`). It must pass the same checks as any planned model (vision, tools, structured output; no retired, thinking-only or explicit-only models) and be suited to the request's use case or tagged `LONG_CONTEXT`, so a plain request isn't moved onto a research-only model such as `groq/compound`. For a `reasoning.strict` request it must accept the effort exactly.
+- **When nothing changes:** the planned model already fits; the model is pinned (its provider decides); the planned model isn't in the catalog; or none of the provider's models fits. With `contextWindowRouting` also on, the skip check then runs as before.
+- **With `contextWindowRouting`:** the switch comes first, so a provider that switched isn't skipped and isn't reported as `CONTEXT_WINDOW`. `response.model` and the client `llm.getRoutingInfo` show the switched model.
+- **Where it applies:** the response and streaming paths, and each turn of `generateResponseWithTools`, so a later turn can move to a larger model when tool results grow.
+- **Cost:** the larger model may cost more per token. The option is part of the response cache key when on.
+- **Which providers it changes today:** Workers AI already plans a 1M-token model for every use case, so it mainly changes NVIDIA (DeepSeek V4 Flash, 64k, to Llama 4 Maverick, 1M) and Cerebras (`gpt-oss-120b`, 128k, to a 131k model). Groq has no larger model suited to general requests.
 
 ### Pinned models and `allowFallback`
 
