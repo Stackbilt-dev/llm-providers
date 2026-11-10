@@ -1,6 +1,7 @@
 import type { CreditLedger } from './utils/credit-ledger.js';
 import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
 import { NoRouteError } from './errors.js';
+import { isValidInputTokenCount } from './utils/input-token-count.js';
 import { cloudflareReasoningEffortCapability } from './providers/cloudflare-reasoning.js';
 import { cloudflareStructuredOutputFormat } from './providers/cloudflare-structured-output.js';
 
@@ -1080,11 +1081,16 @@ function totalMessageTextLength(request: Partial<LLMRequest> | undefined): numbe
 }
 
 /**
- * Rough input size for routing: characters of the messages (text, tool-call arguments,
- * tool results and errors, provider-native content) and system prompt, divided by
- * four. Tool definitions and images are not counted.
+ * Input size for routing. Returns `LLMRequest.inputTokenCount` when it is a valid
+ * count (the caller's own count, which can include tool definitions). Otherwise a
+ * rough estimate: characters of the messages (text, tool-call arguments, tool
+ * results and errors, provider-native content) and system prompt, divided by four;
+ * tool definitions and images are not counted.
  */
 export function estimateRequestInputTokens(request: Partial<LLMRequest> | undefined): number {
+  // A caller-supplied count replaces the estimate. An unusable value is ignored
+  // here, so catalog helpers don't throw; the factory rejects it on entry.
+  if (isValidInputTokenCount(request?.inputTokenCount)) return request.inputTokenCount;
   const charCount = totalMessageLength(request) + stringLength(request?.systemPrompt);
   return Math.max(1, Math.ceil(charCount / 4));
 }
@@ -1399,7 +1405,10 @@ export interface RoutingInfo {
   model: string;
   /** Full catalog entry for the selected model, or undefined if not in catalog */
   catalogEntry: ModelCatalogEntry | undefined;
-  /** Heuristic input token estimate (~4 chars/token for English text) */
+  /**
+   * Heuristic input token estimate (~4 chars/token for English text), or
+   * `LLMRequest.inputTokenCount` when the caller set a valid one.
+   */
   estimatedInputTokens: number;
   /** True if the request has tools attached or tool history in messages */
   requiresTools: boolean;

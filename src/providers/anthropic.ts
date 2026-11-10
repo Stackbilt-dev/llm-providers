@@ -310,10 +310,7 @@ export class AnthropicProvider extends BaseProvider {
 
     if (!capabilities) return 0;
 
-    // Estimate input tokens (rough approximation)
-    const inputTokens = request.messages.reduce((sum, msg) =>
-      sum + Math.ceil(msg.content.length / 4), 0
-    );
+    const inputTokens = this.estimateCostInputTokens(request);
     const outputTokens = request.maxTokens || defaultMaxTokens(model);
 
     return this.calculateCost(inputTokens, outputTokens, model);

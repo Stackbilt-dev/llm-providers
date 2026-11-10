@@ -75,6 +75,7 @@ import {
   type ProviderName,
   type ModelRecommendationUseCase,
 } from './model-catalog.js';
+import { addToInputTokenCount, assertInputTokenCount, isValidInputTokenCount } from './utils/input-token-count.js';
 import {
   LLMProviderError,
   ConfigurationError,
@@ -361,6 +362,8 @@ function cacheObservabilityForResponse(
  * previously published invalid ID is checked and recorded under the same model (#112).
  */
 function withResolvedModel(request: LLMRequest): LLMRequest {
+  // Checked at entry so a bad value fails before the cache or any provider.
+  assertInputTokenCount(request.inputTokenCount);
   if (!request.model) return request;
   const model = resolveModelId(request.model);
   return model === request.model ? request : { ...request, model };
@@ -1100,7 +1103,19 @@ export class LLMProviderFactory {
         }
       }
 
-      const response = await this.generateResponse({ ...request, messages });
+      // inputTokenCount covers the caller's original messages. Later iterations
+      // append the assistant turn and tool results, so they send the caller's
+      // count plus an estimate of only the appended messages.
+      // A sum past the safe-integer range drops the count rather than throwing
+      // after earlier iterations were billed.
+      const iterationRequest: LLMRequest = { ...request, messages };
+      if (iteration > 0 && request.inputTokenCount !== undefined) {
+        const appended = messages.slice(request.messages.length);
+        const count = addToInputTokenCount(request.inputTokenCount, estimateRequestInputTokens({ messages: appended }));
+        if (count === undefined) delete iterationRequest.inputTokenCount;
+        else iterationRequest.inputTokenCount = count;
+      }
+      const response = await this.generateResponse(iterationRequest);
       lastResponseCost = response.usage.cost;
       cumulativeCost += lastResponseCost;
 
@@ -1242,6 +1257,15 @@ export class LLMProviderFactory {
           systemPrompt: options.systemPrompt ?? input.systemPrompt ?? systemPrompt,
           seed: options.seed ?? input.seed
         };
+    // The caller's count can't include a system prompt classify supplies (it may
+    // hold the whole JSON schema), so add an estimate of it. Replacing the
+    // caller's own prompt still adds, which can only overcount.
+    if (typeof input !== 'string' && request.inputTokenCount !== undefined && request.systemPrompt !== input.systemPrompt) {
+      assertInputTokenCount(input.inputTokenCount);
+      const count = addToInputTokenCount(input.inputTokenCount, Math.ceil((request.systemPrompt ?? '').length / 4));
+      if (count === undefined) delete request.inputTokenCount;
+      else request.inputTokenCount = count;
+    }
 
     const response = await this.generateResponse(request);
     const parsed = this.parseJsonResponse(response.message);
@@ -1384,6 +1408,7 @@ export class LLMProviderFactory {
    * Build provider chain and provider-specific default models from the catalog.
    */
   private buildProviderPlan(request: LLMRequest): ProviderSelectionPlan {
+    assertInputTokenCount(request.inputTokenCount);
     const chain: string[] = [];
     const providerModels = new Map<string, string>();
     const selectionHealth = this.getSelectionHealth();
@@ -1938,8 +1963,11 @@ export class LLMProviderFactory {
     const finish = (outcome: StreamCompletion['outcome']): Promise<StreamCompletion> => {
       if (terminal) return terminal;
       terminal = (async () => {
+        // With no provider usage, the cost is the pre-call estimate, so report the
+        // caller's input token count (which that estimate priced) when there is one.
+        const countedInput = isValidInputTokenCount(request.inputTokenCount) ? request.inputTokenCount : 0;
         const usage = await streamUsage?.catch(() => undefined) ?? {
-          inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: estimatedCost,
+          inputTokens: countedInput, outputTokens: 0, totalTokens: countedInput, cost: estimatedCost,
           costProvenance: 'catalog_estimate' as const, tokenProvenance: 'estimated' as const,
         };
         const result: StreamCompletion = {
