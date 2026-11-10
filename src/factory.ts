@@ -76,7 +76,14 @@ import {
   type ModelRecommendationUseCase,
 } from './model-catalog.js';
 import { largerOwnModel, requestedOutputTokens } from './utils/context-window.js';
-import { addToInputTokenCount, assertInputTokenCount, isValidInputTokenCount } from './utils/input-token-count.js';
+import {
+  addToInputTokenCount,
+  assertInputTokenCount,
+  inputTokenCountSource,
+  isValidInputTokenCount,
+  carryInputTokenCountMark,
+  markInputTokenCountPartlyEstimated,
+} from './utils/input-token-count.js';
 import {
   LLMProviderError,
   ConfigurationError,
@@ -128,10 +135,12 @@ export interface ProviderFactoryConfig {
    * Opt in to checking a pinned model (`request.model`) against its catalog context
    * window before any call (default false). When the request's input (the caller's
    * `inputTokenCount`, else the estimate) doesn't fit, the request throws
-   * `ContextWindowExceededError` if `allowFallback` is false; otherwise the pinned
-   * provider is skipped as `CONTEXT_WINDOW` and the request falls back as usual.
-   * Models outside the catalog aren't checked. Independent of `contextWindowRouting`,
-   * which never skips a pinned model.
+   * `ContextWindowExceededError` if `allowFallback` is false or no other provider in
+   * the plan can serve it; otherwise the pinned provider is skipped as
+   * `CONTEXT_WINDOW` and the request falls back as usual. One of your `fallbackRules`
+   * brings the provider back only with a different `fallbackModel`. Models outside
+   * the catalog aren't checked. Independent of `contextWindowRouting`, which never
+   * skips a pinned model.
    */
   contextWindowPinCheck?: boolean;
   fallbackRules?: FallbackRule[];
@@ -185,6 +194,8 @@ interface ProviderSelectionPlan {
   useCase: ModelRecommendationUseCase;
   /** Providers to skip with CONTEXT_WINDOW: their planned model can't hold the input. */
   contextSkips: Set<string>;
+  /** The pinned provider, when contextWindowPinCheck skipped it (also in contextSkips). */
+  pinContextSkip?: string;
   /** Providers whose planned model contextWindowModelSwitch replaced. */
   modelSwitches: Map<string, ContextWindowSwitch>;
 }
@@ -394,7 +405,10 @@ function withResolvedModel(request: LLMRequest): LLMRequest {
   assertInputTokenCount(request.inputTokenCount);
   if (!request.model) return request;
   const model = resolveModelId(request.model);
-  return model === request.model ? request : { ...request, model };
+  if (model === request.model) return request;
+  const resolved = { ...request, model };
+  carryInputTokenCountMark(request, resolved);
+  return resolved;
 }
 
 /**
@@ -994,7 +1008,8 @@ export class LLMProviderFactory {
           index,
           providerModels,
           request,
-          selectionPlan.contextSkips
+          selectionPlan.contextSkips,
+          selectionPlan.pinContextSkip
         );
       }
     }
@@ -1111,7 +1126,7 @@ export class LLMProviderFactory {
           throw error;
         }
 
-        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels, request, selectionPlan.contextSkips);
+        this.applyFallbackDecision(fallbackDecision, providerName, providerChain, index, providerModels, request, selectionPlan.contextSkips, selectionPlan.pinContextSkip);
       }
     }
 
@@ -1159,7 +1174,10 @@ export class LLMProviderFactory {
         const appended = messages.slice(request.messages.length);
         const count = addToInputTokenCount(request.inputTokenCount, estimateRequestInputTokens({ messages: appended }));
         if (count === undefined) delete iterationRequest.inputTokenCount;
-        else iterationRequest.inputTokenCount = count;
+        else {
+          iterationRequest.inputTokenCount = count;
+          markInputTokenCountPartlyEstimated(iterationRequest);
+        }
       }
       const response = await this.generateResponse(iterationRequest);
       lastResponseCost = response.usage.cost;
@@ -1310,7 +1328,10 @@ export class LLMProviderFactory {
       assertInputTokenCount(input.inputTokenCount);
       const count = addToInputTokenCount(input.inputTokenCount, Math.ceil((request.systemPrompt ?? '').length / 4));
       if (count === undefined) delete request.inputTokenCount;
-      else request.inputTokenCount = count;
+      else {
+        request.inputTokenCount = count;
+        markInputTokenCountPartlyEstimated(request);
+      }
     }
 
     const response = await this.generateResponse(request);
@@ -1627,9 +1648,12 @@ export class LLMProviderFactory {
     }
 
     // Pinned models (opt-in, contextWindowPinCheck: true). A pinned model in the catalog
-    // whose window can't hold the input is never called: with allowFallback: false the
-    // request throws ContextWindowExceededError, otherwise its provider is skipped as
-    // CONTEXT_WINDOW and the request falls back as usual.
+    // whose window can't hold the input is never called. With allowFallback: false, or
+    // when no other provider is left in the chain (after the strict-reasoning and
+    // vision filters), the request throws ContextWindowExceededError. Otherwise its
+    // provider is skipped as CONTEXT_WINDOW and the request falls back as usual; a
+    // caller's fallback rule revives it only with a different model.
+    let pinContextSkip: string | undefined;
     if (this.config.contextWindowPinCheck === true && pinnedProvider !== undefined && request.messages !== undefined) {
       const pinned = providerModels.get(pinnedProvider);
       const inputTokens = estimateRequestInputTokens(request);
@@ -1637,17 +1661,20 @@ export class LLMProviderFactory {
         ? undefined
         : MODEL_CATALOG.find(candidate => candidate.provider === pinnedProvider && candidate.model === pinned);
       if (entry !== undefined && !fitsContextWindow(entry, inputTokens)) {
-        if (request.allowFallback === false) {
+        const noOtherProvider = !chain.some(name => name !== pinnedProvider);
+        if (request.allowFallback === false || noOtherProvider) {
           throw new ContextWindowExceededError({
             modelProvider: pinnedProvider,
             model: entry.model,
             contextWindow: entry.capabilities.maxContextLength,
             inputTokens,
-            inputTokensSource: isValidInputTokenCount(request.inputTokenCount) ? 'caller' : 'estimate',
+            inputTokensSource: inputTokenCountSource(request),
+            reason: request.allowFallback === false ? 'allowFallback-false' : 'no-other-provider',
           });
         }
-        this.logger.debug(`[LLMProviderFactory] Pinned model ${entry.model} can't hold the estimated input, skipping ${pinnedProvider}`);
+        this.logger.debug(`[LLMProviderFactory] Pinned model ${entry.model} can't hold the request's input, skipping ${pinnedProvider}`);
         contextSkips.add(pinnedProvider);
+        pinContextSkip = pinnedProvider;
       }
     }
 
@@ -1655,7 +1682,7 @@ export class LLMProviderFactory {
       chain.splice(1);
     }
 
-    return { chain, providerModels, useCase, contextSkips, modelSwitches };
+    return { chain, providerModels, useCase, contextSkips, pinContextSkip, modelSwitches };
   }
 
   /**
@@ -2428,13 +2455,23 @@ export class LLMProviderFactory {
     currentIndex: number,
     providerModels: Map<string, string>,
     request: LLMRequest,
-    contextSkips: Set<string>
+    contextSkips: Set<string>,
+    pinContextSkip?: string
   ): void {
     const targetProvider = decision.fallbackProvider;
     if (!targetProvider || targetProvider === failedProvider || !this.providers.has(targetProvider)) {
       return;
     }
     if (isStrictReasoning(request) && !STRICT_REASONING_PROVIDERS.has(targetProvider)) {
+      return;
+    }
+    // contextWindowPinCheck skipped this provider because its pinned model can't hold
+    // the input; a rule may bring the provider back only with a different model.
+    if (
+      targetProvider === pinContextSkip
+      && contextSkips.has(targetProvider)
+      && (decision.fallbackModel === undefined || decision.fallbackModel === providerModels.get(targetProvider))
+    ) {
       return;
     }
 

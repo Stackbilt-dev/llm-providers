@@ -106,7 +106,7 @@ Since 1.28.0, Cloudflare JSON Schema requests use native structured output on su
 
 Use `normalizeCanonicalRequest()` when the input is canonical, especially when it contains only `messages` and `metadata`. Use `normalizeLegacyRequest()` when converting `LLMRequest`. The compatibility helper `normalizeLLMRequest()` detects canonical input from canonical-specific fields; ambiguous shapes default to legacy, so nested identity in a metadata-only canonical request requires the explicit canonical boundary. Legacy system messages are joined in order with blank lines; an explicit `systemPrompt` takes precedence. Canonical conversion remains a compatibility helper: it does not enforce every canonical requirement at execution.
 
-`llm.getRoutingInfo(request)` uses the client's dispatch planner and current provider admission state. It resolves shared model IDs against configured hosts and throws `NoRouteError` when no route is available (`ReasoningEffortUnsupportedError` for a `reasoning.strict` request no Cloudflare provider can serve; with `allowFallback: false`, a pin no configured provider can serve still throws `NoRouteError`). The exported catalog-level `getRoutingInfo(request, availableProviders)` prefers configured hosts for pinned models and never throws: when no configured provider matches it describes the catalog host, as in 1.21. These are preflight snapshots; health, quota and capacity can change before dispatch. Full hard-requirement enforcement across every fallback remains future work.
+`llm.getRoutingInfo(request)` uses the client's dispatch planner and current provider admission state. It resolves shared model IDs against configured hosts and throws `NoRouteError` when no route is available (`ReasoningEffortUnsupportedError` for a `reasoning.strict` request no Cloudflare provider can serve; with `allowFallback: false`, a pin no configured provider can serve still throws `NoRouteError`; with `contextWindowPinCheck`, a pin too small for the input throws `ContextWindowExceededError`, a `NoRouteError`, when nothing else may serve the request). The exported catalog-level `getRoutingInfo(request, availableProviders)` prefers configured hosts for pinned models and never throws: when no configured provider matches it describes the catalog host, as in 1.21. These are preflight snapshots; health, quota and capacity can change before dispatch. Full hard-requirement enforcement across every fallback remains future work.
 
 ### Image Analysis Observability
 
@@ -637,13 +637,16 @@ try {
   if (error instanceof ContextWindowExceededError) {
     error.contextWindow;     // 24000
     error.inputTokens;       // 30000
-    error.inputTokensSource; // 'caller' (your inputTokenCount) or 'estimate'
+    error.inputTokensSource; // 'caller' (your inputTokenCount), 'mixed' or 'estimate'
+    error.reason;            // 'allowFallback-false' or 'no-other-provider'
   }
 }
 ```
 
-- **When the pin doesn't fit:** with `allowFallback: false`, the request throws `ContextWindowExceededError` and no call is made. It is a `NoRouteError` (code `NO_ROUTE`), so existing handling still catches it; its message names the model, window and token count but never the prompt. Otherwise the pinned provider is skipped as `CONTEXT_WINDOW` in `fallback.failedAttempts`, and the request falls back as it would after a failed call. If no other provider is configured, it ends without a call, naming the skip.
-- **What counts:** the input only, as for `contextWindowRouting`: your `inputTokenCount` when set, else the estimate. Pass `inputTokenCount` if a rejection based on the estimate would be a problem, since the estimate can be off near the edge of the window.
+- **When the pin doesn't fit and nothing else may serve the request:** the request throws `ContextWindowExceededError` and no call is made. That happens with `allowFallback: false` (`reason: 'allowFallback-false'`), and when no other provider is left in the plan (`reason: 'no-other-provider'`): only one provider is configured, or `reasoning.strict` or an image request removed the rest. It is a `NoRouteError` (code `NO_ROUTE`), so existing handling still catches it; its message names the model, window and token count but never the prompt.
+- **Otherwise:** the pinned provider is skipped as `CONTEXT_WINDOW` in `fallback.failedAttempts`, and the request falls back to the next provider. One of your own `fallbackRules` that targets the pinned provider brings it back only when it names a different `fallbackModel`, which is then sent as is; a rule without one, or naming the pinned model, is ignored, so the pinned model is never called.
+- **What counts:** the input only, as for `contextWindowRouting`: your `inputTokenCount` when set, else the estimate. Pass `inputTokenCount` if a rejection based on the estimate would be a problem, since the estimate can be off near the edge of the window. `inputTokensSource` is `'mixed'` when your count was combined with the package's estimate of what it added: the assistant turns and tool results of `generateResponseWithTools`, or a system prompt `classify` supplies.
+- **Tool loops:** each turn is checked, so a loop whose tool results outgrow the pinned model stops at the turn that would overflow, after the tools of earlier turns have already run.
 - **What isn't checked:** pinned models outside the catalog, and unpinned requests.
 - **Where it applies:** the response and streaming paths, each turn of `generateResponseWithTools`, and the client `getRoutingInfo`. The option is part of the response cache key when on.
 
@@ -1019,6 +1022,7 @@ fs.writeFileSync('fixtures/openai.json', JSON.stringify(shape, null, 2));
 | `BaseProvider` | Abstract base with shared resiliency, metrics, and cost calculation |
 | `QuotaDeniedError` | Terminal local-policy denial; no fallback or provider exhaustion. Extends `QuotaExceededError` (code `QUOTA_EXCEEDED`) for 1.x compatibility; check `instanceof QuotaDeniedError` or `localPolicy` to tell it apart from vendor exhaustion |
 | `NoRouteError` | No configured route available; a nonretryable configuration error |
+| `ContextWindowExceededError` | With `contextWindowPinCheck`, a pinned model too small for the input when nothing else may serve the request. Extends `NoRouteError` (code `NO_ROUTE`); carries `modelProvider`, `model`, `contextWindow`, `inputTokens`, `inputTokensSource` and `reason` |
 | `ReasoningEffortUnsupportedError` | `reasoning.strict` can't be honoured: the model can't take the effort exactly, or no Cloudflare provider can serve the request. Extends `InvalidRequestError`; never triggers fallback |
 
 ### Utilities
