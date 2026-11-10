@@ -162,10 +162,12 @@ export interface LLMRequest {
    * tools), for example from the target model's tokenizer. When set, it replaces the
    * package's character-based estimate (about 4 characters per token) for
    * context-window routing (`contextWindowRouting`), route plans, model
-   * recommendations and pre-call cost estimates. It is never sent to a provider and
-   * doesn't change reported `usage`. Must be a positive integer. The tool loop
-   * (`generateResponseWithTools`) uses it for the first call only, since later calls
-   * add tool results.
+   * recommendations and pre-call cost estimates (each provider's `estimateCost`,
+   * which is what `quotaHook.check` receives as `estimatedCost`, and
+   * `CostTracker.calculateRequestCost`). It is never sent to a provider and doesn't
+   * change reported `usage`. Must be a positive integer. In the tool loop
+   * (`generateResponseWithTools`), later calls use this count plus an estimate of
+   * the assistant turns and tool results the loop has added.
    */
   inputTokenCount?: number;
   stream?: boolean;

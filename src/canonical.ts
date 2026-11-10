@@ -92,7 +92,11 @@ export interface CanonicalLLMRequest {
   model?: string;
   stream?: boolean;
   sampling?: CanonicalSamplingOptions;
-  /** See `LLMRequest.inputTokenCount`. */
+  /**
+   * See `LLMRequest.inputTokenCount`. Copied as-is by `normalizeLLMRequest` and
+   * `canonicalToLLMRequest`, without validation: the factory and providers reject a
+   * value that isn't a positive integer, and catalog helpers ignore it.
+   */
   inputTokenCount?: number;
   tools?: CanonicalTool[];
   toolMode?: CanonicalToolMode;

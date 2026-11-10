@@ -75,7 +75,7 @@ import {
   type ProviderName,
   type ModelRecommendationUseCase,
 } from './model-catalog.js';
-import { assertInputTokenCount } from './utils/input-token-count.js';
+import { assertInputTokenCount, isValidInputTokenCount } from './utils/input-token-count.js';
 import {
   LLMProviderError,
   ConfigurationError,
@@ -1103,10 +1103,14 @@ export class LLMProviderFactory {
         }
       }
 
-      // inputTokenCount describes the caller's original messages; later
-      // iterations add tool results, so they fall back to the estimate.
+      // inputTokenCount covers the caller's original messages. Later iterations
+      // append the assistant turn and tool results, so they send the caller's
+      // count plus an estimate of only the appended messages.
       const iterationRequest: LLMRequest = { ...request, messages };
-      if (iteration > 0) delete iterationRequest.inputTokenCount;
+      if (iteration > 0 && isValidInputTokenCount(request.inputTokenCount)) {
+        const appended = messages.slice(request.messages.length);
+        iterationRequest.inputTokenCount = request.inputTokenCount + estimateRequestInputTokens({ messages: appended });
+      }
       const response = await this.generateResponse(iterationRequest);
       lastResponseCost = response.usage.cost;
       cumulativeCost += lastResponseCost;

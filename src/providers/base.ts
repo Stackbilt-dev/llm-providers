@@ -25,7 +25,7 @@ import { CostTracker } from '../utils/cost-tracker.js';
 import { createProviderStream, type ProviderStreamOptions } from '../utils/provider-stream.js';
 import { defaultResilienceContext } from '../utils/resilience-context.js';
 import { ConfigurationError, TimeoutError, InvalidRequestError, CfGatewayInvalidConfigError } from '../errors.js';
-import { assertInputTokenCount } from '../utils/input-token-count.js';
+import { assertInputTokenCount, isValidInputTokenCount } from '../utils/input-token-count.js';
 
 /** Per-provider path suffix on the Cloudflare AI Gateway base URL. */
 export type CfGatewayProviderSuffix =
@@ -147,6 +147,15 @@ export abstract class BaseProvider implements LLMProvider {
    * Abstract method to estimate cost
    */
   abstract estimateCost(request: LLMRequest): number;
+
+  /**
+   * Input tokens for `estimateCost`: `LLMRequest.inputTokenCount` when it is a
+   * valid count, otherwise message characters divided by four.
+   */
+  protected estimateCostInputTokens(request: LLMRequest): number {
+    if (isValidInputTokenCount(request.inputTokenCount)) return request.inputTokenCount;
+    return request.messages.reduce((sum, msg) => sum + Math.ceil(msg.content.length / 4), 0);
+  }
 
   /**
    * Abstract method for health check

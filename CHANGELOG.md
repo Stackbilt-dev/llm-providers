@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ## [Unreleased]
 
 ### Added
-- `inputTokenCount` on `LLMRequest` and `CanonicalLLMRequest`: the caller's own count of the request's input tokens (#136). When set, it replaces the characters ÷ 4 estimate for `contextWindowRouting`, `getRoutingInfo`, `getGatewayRoutePlan`, model recommendations and pre-call cost estimates. It is never sent to a provider and doesn't change the reported `usage`. A value that isn't a positive integer throws `ConfigurationError` from the factory (before the response cache or any provider) and from a provider called directly; catalog helpers ignore it and use the estimate. `generateResponseWithTools` uses it for the first call only.
+- `inputTokenCount` on `LLMRequest` and `CanonicalLLMRequest`: the caller's own count of the request's input tokens (#136). When set, it replaces the characters ÷ 4 estimate for `contextWindowRouting`, `getRoutingInfo`, `getGatewayRoutePlan`, model recommendations and pre-call cost estimates. The cost estimates are each provider's `estimateCost`, and so the `estimatedCost` passed to `quotaHook.check` (and the fallback cost of a stream that reports no usage), plus `CostTracker.calculateRequestCost`. It is never sent to a provider and doesn't change the reported `usage`. A value that isn't a positive integer throws `ConfigurationError` from the factory (before the response cache or any provider) and from a provider called directly; catalog helpers and cost estimates ignore it and use the estimate. In `generateResponseWithTools`, calls after the first use the count plus an estimate of the messages the loop has appended.
 
 ## [1.28.0] — 2026-11-09
 

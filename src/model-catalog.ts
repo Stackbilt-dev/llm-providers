@@ -1081,9 +1081,11 @@ function totalMessageTextLength(request: Partial<LLMRequest> | undefined): numbe
 }
 
 /**
- * Rough input size for routing: characters of the messages (text, tool-call arguments,
- * tool results and errors, provider-native content) and system prompt, divided by
- * four. Tool definitions and images are not counted.
+ * Input size for routing. Returns `LLMRequest.inputTokenCount` when it is a valid
+ * count (the caller's own count, which can include tool definitions). Otherwise a
+ * rough estimate: characters of the messages (text, tool-call arguments, tool
+ * results and errors, provider-native content) and system prompt, divided by four;
+ * tool definitions and images are not counted.
  */
 export function estimateRequestInputTokens(request: Partial<LLMRequest> | undefined): number {
   // A caller-supplied count replaces the estimate. An unusable value is ignored
