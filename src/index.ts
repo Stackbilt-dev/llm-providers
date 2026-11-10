@@ -189,6 +189,7 @@ export {
   ConfigurationError,
   StructuredOutputUnsupportedError,
   NoRouteError,
+  ContextWindowExceededError,
   CfGatewayInvalidConfigError,
   CircuitBreakerOpenError,
   SchemaDriftError,

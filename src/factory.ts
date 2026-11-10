@@ -81,6 +81,7 @@ import {
   LLMProviderError,
   ConfigurationError,
   NoRouteError,
+  ContextWindowExceededError,
   ReasoningEffortUnsupportedError,
   CircuitBreakerOpenError,
   AuthenticationError,
@@ -123,6 +124,16 @@ export interface ProviderFactoryConfig {
    * switched model may cost more per token.
    */
   contextWindowModelSwitch?: boolean;
+  /**
+   * Opt in to checking a pinned model (`request.model`) against its catalog context
+   * window before any call (default false). When the request's input (the caller's
+   * `inputTokenCount`, else the estimate) doesn't fit, the request throws
+   * `ContextWindowExceededError` if `allowFallback` is false; otherwise the pinned
+   * provider is skipped as `CONTEXT_WINDOW` and the request falls back as usual.
+   * Models outside the catalog aren't checked. Independent of `contextWindowRouting`,
+   * which never skips a pinned model.
+   */
+  contextWindowPinCheck?: boolean;
   fallbackRules?: FallbackRule[];
   costOptimization?: boolean;
   enableCircuitBreaker?: boolean;
@@ -557,6 +568,7 @@ export class LLMProviderFactory {
         // Undefined when off, so keys for the default config are unchanged.
         contextWindowRouting: this.config.contextWindowRouting === true ? true : undefined,
         contextWindowModelSwitch: this.config.contextWindowModelSwitch === true ? true : undefined,
+        contextWindowPinCheck: this.config.contextWindowPinCheck === true ? true : undefined,
       }
     ) : undefined;
 
@@ -1611,6 +1623,31 @@ export class LLMProviderFactory {
         for (const name of chain) {
           if (name !== pinnedProvider && !fits(name)) contextSkips.add(name);
         }
+      }
+    }
+
+    // Pinned models (opt-in, contextWindowPinCheck: true). A pinned model in the catalog
+    // whose window can't hold the input is never called: with allowFallback: false the
+    // request throws ContextWindowExceededError, otherwise its provider is skipped as
+    // CONTEXT_WINDOW and the request falls back as usual.
+    if (this.config.contextWindowPinCheck === true && pinnedProvider !== undefined && request.messages !== undefined) {
+      const pinned = providerModels.get(pinnedProvider);
+      const inputTokens = estimateRequestInputTokens(request);
+      const entry = pinned === undefined
+        ? undefined
+        : MODEL_CATALOG.find(candidate => candidate.provider === pinnedProvider && candidate.model === pinned);
+      if (entry !== undefined && !fitsContextWindow(entry, inputTokens)) {
+        if (request.allowFallback === false) {
+          throw new ContextWindowExceededError({
+            modelProvider: pinnedProvider,
+            model: entry.model,
+            contextWindow: entry.capabilities.maxContextLength,
+            inputTokens,
+            inputTokensSource: isValidInputTokenCount(request.inputTokenCount) ? 'caller' : 'estimate',
+          });
+        }
+        this.logger.debug(`[LLMProviderFactory] Pinned model ${entry.model} can't hold the estimated input, skipping ${pinnedProvider}`);
+        contextSkips.add(pinnedProvider);
       }
     }
 

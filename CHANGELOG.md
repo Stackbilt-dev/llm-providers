@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 ## [Unreleased]
 
 ### Added
+- `contextWindowPinCheck` factory option, off by default (#136). It checks a pinned catalog model against its context window before any call, using `inputTokenCount` when set, else the estimate (input only, as for `contextWindowRouting`).
+  - With `allowFallback: false`, a pin too small for the input throws the new `ContextWindowExceededError`, with `modelProvider`, `model`, `contextWindow`, `inputTokens` and `inputTokensSource` (`'caller'` or `'estimate'`). It is a `NoRouteError` (code `NO_ROUTE`), and its message never includes the prompt.
+  - Otherwise the pinned provider is skipped as `CONTEXT_WINDOW` in `fallback.failedAttempts`, and the request falls back as usual.
+  - Pinned models outside the catalog and unpinned requests aren't checked. It applies on the response, streaming and tool-loop paths and to the client `getRoutingInfo`, and is part of the response cache key when on.
 - `contextWindowModelSwitch` factory option, off by default (#136). When it's on and a provider's planned model can't hold the request's estimated input (or `inputTokenCount`), the provider switches to its highest-ranked catalog model that can hold the input plus `maxTokens`, instead of being skipped or overflowing.
   - The model must be `active`, pass the same compatibility checks, suit the use case the planned model was chosen for or be tagged `LONG_CONTEXT`, and for `reasoning.strict` accept the effort exactly.
   - Pinned models, planned models outside the catalog and providers with no model that fits are left alone.

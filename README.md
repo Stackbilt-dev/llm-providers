@@ -589,7 +589,7 @@ response.fallback;
 
 **Trade-offs and rules**
 - **Trade-off:** a skipped provider can no longer absorb a transient failure of the provider that fits. If that provider returns a 503, the request fails instead of being sent to the smaller model, which might have held it. Because the estimate is approximate, a provider near the edge of its window may be skipped when it would have worked.
-- **Pins and rules:** a pinned model is never skipped; its provider decides whether the request fits. A provider that one of your own `fallbackRules` sends the request to is tried as usual, even if it was skipped earlier in the chain. The built-in default rules don't override a skip.
+- **Pins and rules:** a pinned model is never skipped; its provider decides whether the request fits (see `contextWindowPinCheck` below to check pins too). A provider that one of your own `fallbackRules` sends the request to is tried as usual, even if it was skipped earlier in the chain. The built-in default rules don't override a skip.
 - **`allowFallback: false`:** with `allowFallback: false` and no pinned model, if the first planned provider (for example a `preferredProvider`) is skipped, the request throws `NoRouteError` naming `CONTEXT_WINDOW`. Another provider is not substituted.
 - **Input only:** `maxTokens` is not checked, because providers differ on whether the requested output must also fit in the window.
 - **Accuracy:** the estimate leaves out tool definitions, images and redacted (encrypted) thinking. It undercounts text with more tokens per character, such as Chinese, Japanese or Korean, and overcounts text with fewer, such as heavily indented code. Models outside the catalog count as fitting. `RoutingInfo.estimatedInputTokens` reports the same estimate whether or not the option is on. The client `llm.getRoutingInfo` reports the first provider that wouldn't be skipped.
@@ -625,11 +625,33 @@ response.contextWindowSwitch; // { from: 'deepseek-ai/deepseek-v4-flash', to: 'm
   - **Cerebras:** `gpt-oss-120b` (128k), or `llama-3.1-8b` for cost-effective requests, moves to `zai-glm-4.7` (131k) for inputs that fit it.
   - **Groq:** has no larger model suited to general requests.
 
+**Checking pinned models**
+
+Set `contextWindowPinCheck: true` to check a pinned model (`request.model`) against its catalog context window before any call. It is off by default and independent of the two options above.
+
+```typescript
+const llm = new LLMProviders({ cloudflare: { ai: env.AI }, contextWindowPinCheck: true });
+try {
+  await llm.generateResponse({ model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', messages, inputTokenCount: 30_000, allowFallback: false });
+} catch (error) {
+  if (error instanceof ContextWindowExceededError) {
+    error.contextWindow;     // 24000
+    error.inputTokens;       // 30000
+    error.inputTokensSource; // 'caller' (your inputTokenCount) or 'estimate'
+  }
+}
+```
+
+- **When the pin doesn't fit:** with `allowFallback: false`, the request throws `ContextWindowExceededError` and no call is made. It is a `NoRouteError` (code `NO_ROUTE`), so existing handling still catches it; its message names the model, window and token count but never the prompt. Otherwise the pinned provider is skipped as `CONTEXT_WINDOW` in `fallback.failedAttempts`, and the request falls back as it would after a failed call. If no other provider is configured, it ends without a call, naming the skip.
+- **What counts:** the input only, as for `contextWindowRouting`: your `inputTokenCount` when set, else the estimate. Pass `inputTokenCount` if a rejection based on the estimate would be a problem, since the estimate can be off near the edge of the window.
+- **What isn't checked:** pinned models outside the catalog, and unpinned requests.
+- **Where it applies:** the response and streaming paths, each turn of `generateResponseWithTools`, and the client `getRoutingInfo`. The option is part of the response cache key when on.
+
 ### Pinned models and `allowFallback`
 
 A pinned `model` is tried first, but by default it is not a guarantee: on an eligible failure, or when the pinned provider is skipped (quota-exhausted, circuit open, ledger-limited), another provider and model can serve the request. `fallbackRules: []` removes the rule-based fallbacks only; server errors, network errors, timeouts, schema drift and `StructuredOutputUnsupportedError` still fall back.
 
-Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open or ledger-limited; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. Without a pin, the same applies to the first planned provider, which with `contextWindowRouting` can also be skipped as too small for the input (`CONTEXT_WINDOW`). With `reasoning.strict` and an effort, a pin on another configured provider (for example a Groq model) throws `ReasoningEffortUnsupportedError`; a pin no configured provider can serve still throws `NoRouteError`, because that check runs first. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
+Set `allowFallback: false` on the request to forbid substitution entirely. Only the first planned provider is tried (the pinned model's provider) and its error is rethrown. `NoRouteError` is thrown if no configured provider can serve the pinned model, or if the pinned provider is skipped as quota-exhausted, circuit-open or ledger-limited; the message names the skip, for example `cloudflare: QUOTA_EXHAUSTED`. Without a pin, the same applies to the first planned provider, which with `contextWindowRouting` can also be skipped as too small for the input (`CONTEXT_WINDOW`). With `contextWindowPinCheck`, a pinned model too small for the input throws `ContextWindowExceededError`, a `NoRouteError`, before any call. With `reasoning.strict` and an effort, a pin on another configured provider (for example a Groq model) throws `ReasoningEffortUnsupportedError`; a pin no configured provider can serve still throws `NoRouteError`, because that check runs first. It applies to `generateResponse`, `generateResponseWithTools` and `generateManagedResponseStream`.
 
 ```typescript
 const response = await llm.generateResponse({

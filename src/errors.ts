@@ -139,6 +139,44 @@ export class NoRouteError extends ConfigurationError {
   }
 }
 
+/**
+ * A pinned model whose catalog context window can't hold the request's input, with
+ * `contextWindowPinCheck` on and `allowFallback: false`. Thrown before any call. A
+ * `NoRouteError` (code `NO_ROUTE`), so existing handling still applies.
+ */
+export class ContextWindowExceededError extends NoRouteError {
+  /** The provider that serves the pinned model. */
+  modelProvider: string;
+  /** The pinned model. */
+  model: string;
+  /** The model's context window, from the catalog. */
+  contextWindow: number;
+  /** The request's input tokens: the caller's `inputTokenCount`, else the estimate. */
+  inputTokens: number;
+  /** Whether `inputTokens` is the caller's `inputTokenCount` or the package's estimate. */
+  inputTokensSource: 'caller' | 'estimate';
+
+  constructor(details: {
+    modelProvider: string;
+    model: string;
+    contextWindow: number;
+    inputTokens: number;
+    inputTokensSource: 'caller' | 'estimate';
+  }) {
+    const estimated = details.inputTokensSource === 'caller' ? '' : ' (estimated)';
+    super(
+      `Pinned model '${details.model}' (${details.modelProvider}) has a ${details.contextWindow}-token context window, `
+      + `which can't hold the request's ${details.inputTokens} input tokens${estimated}, and allowFallback is false`
+    );
+    this.name = 'ContextWindowExceededError';
+    this.modelProvider = details.modelProvider;
+    this.model = details.model;
+    this.contextWindow = details.contextWindow;
+    this.inputTokens = details.inputTokens;
+    this.inputTokensSource = details.inputTokensSource;
+  }
+}
+
 export class CfGatewayInvalidConfigError extends LLMProviderError {
   /** The specific cfGateway field that was empty or missing. */
   field: 'accountId' | 'gatewayId';
