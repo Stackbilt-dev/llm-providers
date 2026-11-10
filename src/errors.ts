@@ -142,7 +142,7 @@ export class NoRouteError extends ConfigurationError {
 /**
  * A pinned model whose catalog context window can't hold the request's input, with
  * `contextWindowPinCheck` on, when nothing else may serve the request: `allowFallback`
- * is false, or no other provider in the plan can serve it. Thrown before any call. A
+ * is false, or no other provider can be called. Thrown before any call. A
  * `NoRouteError` (code `NO_ROUTE`), so existing handling still applies.
  */
 export class ContextWindowExceededError extends NoRouteError {
@@ -163,8 +163,8 @@ export class ContextWindowExceededError extends NoRouteError {
   inputTokensSource: 'caller' | 'mixed' | 'estimate';
   /**
    * Why nothing else was tried: `'allowFallback-false'`, or `'no-other-provider'` when
-   * no other provider in the plan can serve the request (none configured, or the rest
-   * removed by `reasoning.strict` or image support).
+   * no other provider can be called (none configured, the rest removed by
+   * `reasoning.strict` or image support, or the rest unavailable).
    */
   reason: 'allowFallback-false' | 'no-other-provider';
 

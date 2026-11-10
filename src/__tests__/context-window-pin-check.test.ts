@@ -13,6 +13,7 @@ import { ContextWindowExceededError, LLMProviders, NoRouteError, TokenLimitError
 import type { ProviderFactoryConfig } from '../factory';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
+import { markInputTokenCountPartlyEstimated } from '../utils/input-token-count';
 import type { LLMRequest, Tool } from '../types';
 
 const PINNED = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
@@ -279,6 +280,64 @@ describe('factory with contextWindowPinCheck', () => {
 
     await expect(llm.generateManagedResponseStream(counted(30_000, { stream: true, allowFallback: false })))
       .rejects.toBeInstanceOf(ContextWindowExceededError);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('ignores a fallback rule naming the pinned model by an outdated ID', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => compatibleResponse(init));
+    vi.stubGlobal('fetch', fetchMock);
+    const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
+    const pinned = 'claude-opus-4-20250514';
+    const window = MODEL_CATALOG.find(entry => entry.provider === 'anthropic' && entry.model === pinned)!.capabilities.maxContextLength;
+    const llm = new LLMProviders({
+      anthropic: { apiKey: 'test', maxRetries: 0 },
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      stateScope: 'client',
+      contextWindowPinCheck: true,
+      fallbackRules: [{ condition: 'error', fallbackProvider: 'anthropic', fallbackModel: 'claude-opus-4-20250618' }],
+    });
+    await caught(llm.generateResponse({ messages: [{ role: 'user', content: 'Summarise.' }], model: pinned, inputTokenCount: window + 1 }));
+    expect(run).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(call => String(call[0]).includes('anthropic'))).toEqual([]);
+  });
+
+  it('built-in fallback rules leave a skipped pin and its planned model untouched', () => {
+    const { llm } = setup({ contextWindowPinCheck: true });
+    const factory = (llm as unknown as { factory: {
+      applyFallbackDecision(...args: unknown[]): void;
+    } }).factory;
+    const plan = planOf(llm, counted(30_000));
+    const chain = [...plan.chain];
+    factory.applyFallbackDecision(
+      { shouldFallback: true, fallbackProvider: 'cloudflare', fallbackModel: '@cf/zai-org/glm-5.3-flash' },
+      'nvidia', chain, chain.indexOf('nvidia'), plan.providerModels, counted(30_000), plan.contextSkips, plan.pinContextSkip,
+    );
+    expect(plan.providerModels.get('cloudflare')).toBe(PINNED);
+    expect(plan.contextSkips.has('cloudflare')).toBe(true);
+    expect(chain).toEqual(plan.chain);
+  });
+
+  it('throws ContextWindowExceededError when every other provider is unavailable', async () => {
+    const { llm, run, fetchMock } = setup({ contextWindowPinCheck: true });
+    const factory = (llm as unknown as { factory: { resilienceContext: { exhaustion: { markExhausted(provider: string): void } } } }).factory;
+    factory.resilienceContext.exhaustion.markExhausted('nvidia');
+    const response = await caught(llm.generateResponse(counted(30_000)));
+    expect(response).toBeInstanceOf(ContextWindowExceededError);
+    expect(response).toMatchObject({ reason: 'no-other-provider', model: PINNED, inputTokensSource: 'caller' });
+    const stream = await caught(llm.generateManagedResponseStream(counted(30_000, { stream: true })));
+    expect(stream).toBeInstanceOf(ContextWindowExceededError);
+    expect(() => llm.getRoutingInfo(counted(30_000))).toThrow(ContextWindowExceededError);
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the partly estimated mark on the streaming path', async () => {
+    const { llm, run } = setup({ contextWindowPinCheck: true });
+    const request = counted(30_000, { stream: true, allowFallback: false });
+    markInputTokenCountPartlyEstimated(request);
+    const error = await caught(llm.generateManagedResponseStream(request));
+    expect(error).toBeInstanceOf(ContextWindowExceededError);
+    expect(error).toMatchObject({ inputTokensSource: 'mixed' });
     expect(run).not.toHaveBeenCalled();
   });
 

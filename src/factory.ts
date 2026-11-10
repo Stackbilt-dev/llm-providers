@@ -135,8 +135,8 @@ export interface ProviderFactoryConfig {
    * Opt in to checking a pinned model (`request.model`) against its catalog context
    * window before any call (default false). When the request's input (the caller's
    * `inputTokenCount`, else the estimate) doesn't fit, the request throws
-   * `ContextWindowExceededError` if `allowFallback` is false or no other provider in
-   * the plan can serve it; otherwise the pinned provider is skipped as
+   * `ContextWindowExceededError` if `allowFallback` is false or no other provider can
+   * be called; otherwise the pinned provider is skipped as
    * `CONTEXT_WINDOW` and the request falls back as usual. One of your `fallbackRules`
    * brings the provider back only with a different `fallbackModel`. Models outside
    * the catalog aren't checked. Independent of `contextWindowRouting`, which never
@@ -196,6 +196,8 @@ interface ProviderSelectionPlan {
   contextSkips: Set<string>;
   /** The pinned provider, when contextWindowPinCheck skipped it (also in contextSkips). */
   pinContextSkip?: string;
+  /** Details for ContextWindowExceededError if the pin skip leaves nothing to call. */
+  pinOverflow?: PinOverflow;
   /** Providers whose planned model contextWindowModelSwitch replaced. */
   modelSwitches: Map<string, ContextWindowSwitch>;
 }
@@ -421,16 +423,25 @@ function isStrictReasoning(request: LLMRequest): boolean {
 
 const STRICT_REASONING_PROVIDERS: ReadonlySet<string> = new Set(['cloudflare']);
 
+/** ContextWindowExceededError details for a pinned model contextWindowPinCheck skipped. */
+type PinOverflow = Omit<ConstructorParameters<typeof ContextWindowExceededError>[0], 'reason'>;
+
 /**
  * Error for a chain that ended without any provider being called, naming why each
  * planned provider was skipped. With `allowFallback: false` this is a NoRouteError,
- * as `getRoutingInfo` throws when every planned provider is skipped.
+ * as `getRoutingInfo` throws when every planned provider is skipped. When
+ * contextWindowPinCheck skipped the pinned model and nothing else could be called
+ * (the other providers were unavailable), it is ContextWindowExceededError.
  */
 function noProviderAttemptedError(
   request: LLMRequest,
   failedAttempts: FallbackHop[],
-  label: string
+  label: string,
+  plan?: Pick<ProviderSelectionPlan, 'pinOverflow' | 'pinContextSkip' | 'contextSkips'>
 ): Error {
+  if (plan?.pinOverflow && plan.pinContextSkip && plan.contextSkips.has(plan.pinContextSkip)) {
+    return new ContextWindowExceededError({ ...plan.pinOverflow, reason: 'no-other-provider' });
+  }
   const reasons = failedAttempts.map(hop => `${hop.provider}: ${hop.errorCode}`).join(', ');
   if (request.allowFallback === false) {
     return new NoRouteError(
@@ -1015,7 +1026,7 @@ export class LLMProviderFactory {
     }
 
     // All providers failed
-    throw lastError || noProviderAttemptedError(request, failedAttempts, 'All providers failed');
+    throw lastError || noProviderAttemptedError(request, failedAttempts, 'All providers failed', selectionPlan);
   }
 
   async generateResponseStream(request: LLMRequest): Promise<ReadableStream<string>> {
@@ -1024,7 +1035,9 @@ export class LLMProviderFactory {
 
   async generateManagedResponseStream(request: LLMRequest): Promise<ManagedTextStream> {
     request = withResolvedModel(request);
-    const selectionPlan = this.buildProviderPlan({ ...request, stream: true });
+    const planRequest: LLMRequest = { ...request, stream: true };
+    carryInputTokenCountMark(request, planRequest);
+    const selectionPlan = this.buildProviderPlan(planRequest);
     const providerChain = selectionPlan.chain;
     const providerModels = selectionPlan.providerModels;
     const requestedModel = providerChain[0] ? providerModels.get(providerChain[0]) : undefined;
@@ -1130,7 +1143,7 @@ export class LLMProviderFactory {
       }
     }
 
-    throw lastError || noProviderAttemptedError(request, failedAttempts, 'All streaming providers failed');
+    throw lastError || noProviderAttemptedError(request, failedAttempts, 'All streaming providers failed', selectionPlan);
   }
 
   async generateResponseWithTools(
@@ -1464,7 +1477,12 @@ export class LLMProviderFactory {
       && !this.resilienceContext.exhaustion.isExhausted(name)
       && (!this.config.enableCircuitBreaker || !this.resilienceContext.circuitBreakers.getBreaker(name).isOpen())
       && (!this.config.ledger || !this.isLedgerLimited(name)));
-    if (!selected) throw new NoRouteError();
+    if (!selected) {
+      if (plan.pinOverflow && plan.pinContextSkip) {
+        throw new ContextWindowExceededError({ ...plan.pinOverflow, reason: 'no-other-provider' });
+      }
+      throw new NoRouteError();
+    }
     const selectedRequest = this.requestForProvider(request, selected, plan.providerModels);
     return describeRouting(selectedRequest, [selected as ProviderName], {
       providerHealth: this.getSelectionHealth(), ledger: this.config.ledger,
@@ -1652,8 +1670,10 @@ export class LLMProviderFactory {
     // when no other provider is left in the chain (after the strict-reasoning and
     // vision filters), the request throws ContextWindowExceededError. Otherwise its
     // provider is skipped as CONTEXT_WINDOW and the request falls back as usual; a
-    // caller's fallback rule revives it only with a different model.
+    // caller's fallback rule revives it only with a different model. If the others
+    // then can't be called either (unavailable), dispatch throws the same error.
     let pinContextSkip: string | undefined;
+    let pinOverflow: PinOverflow | undefined;
     if (this.config.contextWindowPinCheck === true && pinnedProvider !== undefined && request.messages !== undefined) {
       const pinned = providerModels.get(pinnedProvider);
       const inputTokens = estimateRequestInputTokens(request);
@@ -1661,17 +1681,21 @@ export class LLMProviderFactory {
         ? undefined
         : MODEL_CATALOG.find(candidate => candidate.provider === pinnedProvider && candidate.model === pinned);
       if (entry !== undefined && !fitsContextWindow(entry, inputTokens)) {
+        const overflow: PinOverflow = {
+          modelProvider: pinnedProvider,
+          model: entry.model,
+          contextWindow: entry.capabilities.maxContextLength,
+          inputTokens,
+          inputTokensSource: inputTokenCountSource(request),
+        };
         const noOtherProvider = !chain.some(name => name !== pinnedProvider);
         if (request.allowFallback === false || noOtherProvider) {
           throw new ContextWindowExceededError({
-            modelProvider: pinnedProvider,
-            model: entry.model,
-            contextWindow: entry.capabilities.maxContextLength,
-            inputTokens,
-            inputTokensSource: inputTokenCountSource(request),
+            ...overflow,
             reason: request.allowFallback === false ? 'allowFallback-false' : 'no-other-provider',
           });
         }
+        pinOverflow = overflow;
         this.logger.debug(`[LLMProviderFactory] Pinned model ${entry.model} can't hold the request's input, skipping ${pinnedProvider}`);
         contextSkips.add(pinnedProvider);
         pinContextSkip = pinnedProvider;
@@ -1682,7 +1706,7 @@ export class LLMProviderFactory {
       chain.splice(1);
     }
 
-    return { chain, providerModels, useCase, contextSkips, pinContextSkip, modelSwitches };
+    return { chain, providerModels, useCase, contextSkips, pinContextSkip, pinOverflow, modelSwitches };
   }
 
   /**
@@ -2466,11 +2490,17 @@ export class LLMProviderFactory {
       return;
     }
     // contextWindowPinCheck skipped this provider because its pinned model can't hold
-    // the input; a rule may bring the provider back only with a different model.
+    // the input. Only a caller's own rule naming a different model (compared after ID
+    // correction, as the adapters send it) may bring it back; anything else leaves the
+    // plan untouched.
     if (
       targetProvider === pinContextSkip
       && contextSkips.has(targetProvider)
-      && (decision.fallbackModel === undefined || decision.fallbackModel === providerModels.get(targetProvider))
+      && (
+        !this.fallbackRulesAreUserSupplied
+        || decision.fallbackModel === undefined
+        || resolveModelId(decision.fallbackModel) === providerModels.get(targetProvider)
+      )
     ) {
       return;
     }
