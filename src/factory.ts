@@ -1552,18 +1552,24 @@ export class LLMProviderFactory {
     // switched, and models outside the catalog count as fitting. Runs before the skip
     // check below, so a provider that switched isn't skipped. With
     // contextWindowRouting on, no switch is made when a provider that can be relied on
-    // right now already has a fitting planned model with at least twice the target's
-    // window: the skip then sends the request there instead.
+    // right now, and that allowFallback: false doesn't trim away, already has a fitting
+    // planned model with at least twice the target's window: the skip then sends the
+    // request there instead.
     const modelSwitches = new Map<string, ContextWindowSwitch>();
     if (this.config.contextWindowModelSwitch === true && request.messages !== undefined) {
       const estimatedInputTokens = estimateRequestInputTokens(request);
       const requiredTokens = estimatedInputTokens + requestedOutputTokens(request.maxTokens);
       const inferredUseCase = inferUseCaseFromRequest(request);
+      // Only providers that stay in the chain count (allowFallback: false keeps the
+      // first alone), and each counts with its model as planned before any switch, so
+      // the result doesn't depend on chain order.
+      const remaining = request.allowFallback === false ? chain.slice(0, 1) : [...chain];
+      const plannedBeforeSwitch = new Map(providerModels);
       const largestReliableWindow = (except: string): number => {
         let largest = 0;
-        for (const other of chain) {
+        for (const other of remaining) {
           if (other === except || !this.isAvailableForContextRouting(other)) continue;
-          const model = providerModels.get(other);
+          const model = plannedBeforeSwitch.get(other);
           const entry = model ? MODEL_CATALOG.find(candidate => candidate.provider === other && candidate.model === model) : undefined;
           if (entry && fitsContextWindow(entry, estimatedInputTokens)) {
             largest = Math.max(largest, entry.capabilities.maxContextLength);

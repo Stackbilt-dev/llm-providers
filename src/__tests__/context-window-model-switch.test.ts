@@ -13,6 +13,7 @@ import type { ProviderFactoryConfig } from '../factory';
 import { cloudflareReasoningEffortCapability } from '../providers/cloudflare-reasoning';
 import { largerOwnModel, requestedOutputTokens } from '../utils/context-window';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
+import { isCachedResponse } from '../utils/response-cache';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
 import type { LLMRequest, Tool } from '../types';
 
@@ -278,6 +279,43 @@ describe('factory with contextWindowModelSwitch', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it('with contextWindowRouting and allowFallback: false, switches at 100k instead of ending in NoRouteError', async () => {
+    // Workers AI's 1M model would suppress the switch, but allowFallback: false trims
+    // it from the chain, so it mustn't count.
+    const { llm, run, fetchMock } = setup({ contextWindowModelSwitch: true, contextWindowRouting: true });
+    const plan = planOf(llm, counted(100_000, { allowFallback: false }));
+    expect(plan.chain).toEqual(['nvidia']);
+    expect(plan.providerModels.get('nvidia')).toBe(NVIDIA_128K);
+    expect(plan.contextSkips.has('nvidia')).toBe(false);
+    const response = await llm.generateResponse(counted(100_000, { allowFallback: false }));
+    expect(response.provider).toBe('nvidia');
+    expect(response.contextWindowSwitch).toEqual({ from: NVIDIA_DEFAULT, to: NVIDIA_128K });
+    expect(sentModels(fetchMock)).toEqual([NVIDIA_128K]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('compares each provider with its model as planned before any switch', () => {
+    // Cerebras plans gpt-oss-120b (128k), which already holds 100k, so it stays; the
+    // 2x rule reads that planned model, not anything a switch set.
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => compatibleResponse(init));
+    vi.stubGlobal('fetch', fetchMock);
+    const plans = (['nvidia', 'cerebras'] as const).map(preferredProvider => planOf(new LLMProviders({
+      nvidia: { apiKey: 'test', maxRetries: 0 },
+      cerebras: { apiKey: 'test', maxRetries: 0 },
+      preferredProvider,
+      stateScope: 'client',
+      contextWindowModelSwitch: true,
+      contextWindowRouting: true,
+    }), counted(129_000)));
+    for (const plan of plans) {
+      expect(Object.fromEntries(plan.modelSwitches)).toEqual({
+        nvidia: { from: NVIDIA_DEFAULT, to: 'mistralai/mistral-large-2-instruct' },
+        cerebras: { from: 'openai/gpt-oss-120b', to: 'zai-glm-4.7' },
+      });
+      expect(plan.contextSkips.size).toBe(0);
+    }
+  });
+
   it("doesn't report a switch when a caller's fallback rule sent another model", async () => {
     const run = vi.fn().mockRejectedValue(new Error('binding exploded'));
     const { llm, fetchMock } = setup({
@@ -402,6 +440,34 @@ describe('factory with contextWindowModelSwitch', () => {
     }
     expect(keys.unset).toBe(keys.false);
     expect(keys.true).not.toBe(keys.unset);
+  });
+
+  it('a response-cache hit returns the switch stored with the original response', async () => {
+    const store = new Map<string, string>();
+    const cache = {
+      get: vi.fn(async (key: string) => store.get(key) ?? null),
+      put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
+    };
+    const { llm, fetchMock } = setup({ contextWindowModelSwitch: true, responseCache: cache });
+    const first = await llm.generateResponse(counted(300_000));
+    await vi.waitFor(() => expect(store.size).toBe(1));
+    const second = await llm.generateResponse(counted(300_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second.cache?.factory?.status).toBe('hit');
+    expect(second.model).toBe(NVIDIA_LARGE);
+    expect(second.contextWindowSwitch).toEqual(first.contextWindowSwitch);
+    expect(second.contextWindowSwitch).toEqual({ from: NVIDIA_DEFAULT, to: NVIDIA_LARGE });
+  });
+
+  it('rejects a cached envelope with a malformed contextWindowSwitch', () => {
+    const base = {
+      message: 'x', model: NVIDIA_LARGE, provider: 'nvidia', responseTime: 1,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cost: 0 },
+    };
+    expect(isCachedResponse({ ...base, contextWindowSwitch: { from: NVIDIA_DEFAULT, to: NVIDIA_LARGE } })).toBe(true);
+    for (const contextWindowSwitch of [null, 'x', [], { from: NVIDIA_DEFAULT }, { from: 1, to: NVIDIA_LARGE }]) {
+      expect(isCachedResponse({ ...base, contextWindowSwitch })).toBe(false);
+    }
   });
 
   it('turning it on with updateConfig takes effect', async () => {
