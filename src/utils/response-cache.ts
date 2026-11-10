@@ -74,6 +74,12 @@ function isFallbackReport(value: unknown): boolean {
       && isOptionalString(hop.model) && isOptionalString(hop.errorCode));
 }
 
+function isContextWindowSwitch(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const report = value as Record<string, unknown>;
+  return typeof report.from === 'string' && typeof report.to === 'string';
+}
+
 export function isCachedResponse(value: unknown): value is LLMResponse {
   if (!value || typeof value !== 'object') return false;
   const response = value as Partial<LLMResponse>;
@@ -83,6 +89,7 @@ export function isCachedResponse(value: unknown): value is LLMResponse {
     && (response.reasoningEffort === undefined || isReasoningEffortReport(response.reasoningEffort))
     && (response.fallback === undefined || isFallbackReport(response.fallback))
     && (response.providerContent === undefined || isValidProviderContent(response.providerContent))
+    && (response.contextWindowSwitch === undefined || isContextWindowSwitch(response.contextWindowSwitch))
     && [response.id, response.reasoning, response.content]
       .every(field => field === undefined || typeof field === 'string')
     && [response.metadata, response.cache]

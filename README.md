@@ -581,11 +581,11 @@ response.fallback;
 
 **How it works**
 - **The estimate:** the factory estimates the request's input as characters divided by four. It counts the system prompt and each message's text (or the text and thinking of its provider-native content, when that is larger), tool-call arguments, and tool results and errors.
-- **Your own count:** if you have a count, for example from a tokenizer, set `inputTokenCount` on the request and it replaces the estimate. It also feeds `getRoutingInfo`, `getGatewayRoutePlan` and pre-call cost estimates: each provider's `estimateCost`, which is the `estimatedCost` a `quotaHook` sees, and `CostTracker.calculateRequestCost`. It is never sent to a provider. When usage has to be estimated because the provider reported none (a Workers AI response without usage, or a stream), the estimate uses your count too. It doesn't change which model is picked: the use case (including `LONG_CONTEXT`) and default models still come from message length and `maxTokens`. The same count is used for every provider in the fallback chain, although their tokenizers differ, so use the largest count you have. It must be a positive safe integer: otherwise the factory's `generateResponse`, streaming, tool-loop, `classify` and `getRoutingInfo` methods, and every provider's `generateResponse` and `streamResponse`, throw `ConfigurationError` before any call, while catalog helpers, route plans, `getRecommendedModel` and cost estimates ignore it. In `generateResponseWithTools`, later calls use your count plus an estimate of the assistant turns and tool results the loop has added (or drop the count if the sum would pass `Number.MAX_SAFE_INTEGER`), and `classify` adds an estimate of any system prompt it supplies.
+- **Your own count:** if you have a count, for example from a tokenizer, set `inputTokenCount` on the request and it replaces the estimate. It also feeds `getRoutingInfo`, `getGatewayRoutePlan` and pre-call cost estimates: each provider's `estimateCost`, which is the `estimatedCost` a `quotaHook` sees, and `CostTracker.calculateRequestCost`. It is never sent to a provider. When usage has to be estimated because the provider reported none (a Workers AI response without usage, or a stream), the estimate uses your count too. It doesn't change the use case (including `LONG_CONTEXT`) or the default models, which still come from message length and `maxTokens`; only `contextWindowModelSwitch`, when on, can move a provider to a larger model because of it. The same count is used for every provider in the fallback chain, although their tokenizers differ, so use the largest count you have. It must be a positive safe integer: otherwise the factory's `generateResponse`, streaming, tool-loop, `classify` and `getRoutingInfo` methods, and every provider's `generateResponse` and `streamResponse`, throw `ConfigurationError` before any call, while catalog helpers, route plans, `getRecommendedModel` and cost estimates ignore it. In `generateResponseWithTools`, later calls use your count plus an estimate of the assistant turns and tool results the loop has added (or drop the count if the sum would pass `Number.MAX_SAFE_INTEGER`), and `classify` adds an estimate of any system prompt it supplies.
 - **When providers are skipped:** a provider "can be relied on right now" if it is configured, not quota-exhausted or ledger-limited, and its circuit breaker is fully closed. When such a provider has a planned model whose context window holds the estimate, providers whose planned model can't are skipped when their turn comes.
 - **How a skip is reported:** like a quota-exhausted provider, as `errorCode: 'CONTEXT_WINDOW'` in `fallback.failedAttempts` on the response or `StreamCompletion`.
 - **Where it applies:** on the response and streaming paths, and to each turn of `generateResponseWithTools` as tool results accumulate.
-- **What doesn't change:** the fallback chain, planned models and catalog ranking (`rankModels`, catalog `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`). When no available provider's model fits, nothing is skipped.
+- **What doesn't change:** the fallback chain, planned models (unless `contextWindowModelSwitch` is also on, below) and catalog ranking (`rankModels`, catalog `getRoutingInfo`, `getProviderDefaultModel`, `getRecommendedModel`). When no available provider's model fits, nothing is skipped.
 
 **Trade-offs and rules**
 - **Trade-off:** a skipped provider can no longer absorb a transient failure of the provider that fits. If that provider returns a 503, the request fails instead of being sent to the smaller model, which might have held it. Because the estimate is approximate, a provider near the edge of its window may be skipped when it would have worked.
@@ -593,6 +593,37 @@ response.fallback;
 - **`allowFallback: false`:** with `allowFallback: false` and no pinned model, if the first planned provider (for example a `preferredProvider`) is skipped, the request throws `NoRouteError` naming `CONTEXT_WINDOW`. Another provider is not substituted.
 - **Input only:** `maxTokens` is not checked, because providers differ on whether the requested output must also fit in the window.
 - **Accuracy:** the estimate leaves out tool definitions, images and redacted (encrypted) thinking. It undercounts text with more tokens per character, such as Chinese, Japanese or Korean, and overcounts text with fewer, such as heavily indented code. Models outside the catalog count as fitting. `RoutingInfo.estimatedInputTokens` reports the same estimate whether or not the option is on. The client `llm.getRoutingInfo` reports the first provider that wouldn't be skipped.
+
+**Switching to a larger model of the same provider**
+
+Set `contextWindowModelSwitch: true` to keep a provider whose planned model is too small, by sending the request to a larger model of its own instead. It is off by default, and it works with or without `contextWindowRouting`.
+
+```typescript
+const llm = new LLMProviders({ cloudflare: { ai: env.AI }, nvidia: { apiKey }, preferredProvider: 'nvidia', contextWindowModelSwitch: true });
+const response = await llm.generateResponse({ messages, inputTokenCount: 300_000 });
+response.provider;            // 'nvidia'
+response.model;               // 'meta/llama-4-maverick-17b-128e-instruct' (1M)
+response.contextWindowSwitch; // { from: 'deepseek-ai/deepseek-v4-flash', to: 'meta/llama-4-maverick-17b-128e-instruct' }
+```
+
+- **When it switches:** the provider's planned model can't hold the estimate (or your `inputTokenCount`).
+- **Which model:** the provider's highest-ranked catalog model that holds the estimate plus `maxTokens`. It must:
+  - be `active`, not a deprecated `compatibility` model;
+  - pass the same checks as any planned model (vision, tools, structured output; no retired, thinking-only or explicit-only models);
+  - suit the use case the planned model was chosen for, or be tagged `LONG_CONTEXT`, so a plain request isn't moved onto a research-only model such as `groq/compound`;
+  - for a `reasoning.strict` request, accept the effort exactly.
+
+  The highest-ranked model isn't always the largest: a 100k-token request on NVIDIA goes to a 128k model, not the 1M one.
+- **When nothing changes:** the planned model already fits; the model is pinned (its provider decides); the planned model isn't in the catalog; or none of the provider's models fits.
+- **With `contextWindowRouting`:** the switch comes first, so a provider that switched isn't skipped. There is one exception: no switch is made when another provider that can be relied on right now, and that `allowFallback: false` doesn't remove from the chain, already has a fitting planned model with at least twice the target's window. That provider is skipped as usual, and the request goes to the larger model. Each provider is compared with its model as planned before any switch. With `allowFallback: false`, only the first provider remains, so it always switches when it can. With Workers AI configured, for example, a 100k-token request goes to its 1M-token model rather than to NVIDIA's 128k one.
+- **How a switch is reported:** as `contextWindowSwitch: { from, to }` on the response or `StreamCompletion`. It isn't set when a caller's `fallbackRules` entry sent another model. `response.model` and the client `llm.getRoutingInfo` show the switched model.
+- **Where it applies:** the response and streaming paths, and each turn of `generateResponseWithTools`, so a later turn can move to a larger model as tool results grow.
+- **Cost:** the larger model may cost much more per token. On Cerebras, for example, `zai-glm-4.7` costs about 15 times as much per input token as `gpt-oss-120b`. The option is part of the response cache key when on.
+- **Which providers it changes today:**
+  - **Workers AI:** it already plans a 1M-token model for every use case except `RESEARCH`, so only research requests switch.
+  - **NVIDIA:** a plain request plans DeepSeek V4 Flash (64k) and moves to a 128k or 131k model, or to Llama 4 Maverick (1M) above that.
+  - **Cerebras:** `gpt-oss-120b` (128k), or `llama-3.1-8b` for cost-effective requests, moves to `zai-glm-4.7` (131k) for inputs that fit it.
+  - **Groq:** has no larger model suited to general requests.
 
 ### Pinned models and `allowFallback`
 
