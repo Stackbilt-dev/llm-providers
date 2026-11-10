@@ -14,10 +14,13 @@ name: Supply Chain
 # (all fixed in 7.30.1). It also overrides body-parser, an optional cdxgen
 # dependency that `npm ci --omit=optional` doesn't install but dependency
 # review still checks, to 2.4.0: cdxgen pins 2.3.0 (GHSA-27r3-jxmh-p828, high).
-# glob and minimatch are overridden to 14.0.3 and 11.0.3 (GHSA-3g3m-2fjr-6pw4,
-# GHSA-g3hv-75wg-m249, moderate): cdxgen and @npmcli/* ask for glob ^13 and
-# minimatch ^10, which have no fixed release. The generated SBOM is unchanged.
-# @isaacs/nonrecursive-glob-match, a minimatch 11 dependency, is pinned to 1.0.3.
+# glob and minimatch are overridden to 14.0.3 and 11.0.4 (GHSA-3g3m-2fjr-6pw4,
+# GHSA-g3hv-75wg-m249, moderate). cdxgen pins glob 13.0.6, @npmcli/* ask for
+# glob ^13, and @npmcli/map-workspaces asks for minimatch ^10. glob 13.0.7
+# (v13-legacy) appears to backport the fix, but the advisory doesn't list it
+# as fixed yet, and minimatch has no fixed 10.x release. The generated SBOM is
+# unchanged. @isaacs/nonrecursive-glob-match, a minimatch 11 dependency, is
+# pinned to 1.0.3.
 # Apart from the glob and minimatch overrides, the files match
 # Stackbilt-dev/charter's after #425.
 # Dependabot (.github/dependabot.yml) proposes updates to the tool and to the
