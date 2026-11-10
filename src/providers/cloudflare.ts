@@ -30,6 +30,7 @@ import { cloudflareStructuredOutputFormat } from './cloudflare-structured-output
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { readChatStreamEvent } from '../utils/provider-stream.js';
 import { extractThinkBlocks, joinReasoning, lengthCauseFor } from '../utils/reasoning.js';
+import { isValidInputTokenCount } from '../utils/input-token-count.js';
 import {
   cloudflareReasoningEffortCapability,
   resolveCloudflareReasoningEffort,
@@ -1499,9 +1500,12 @@ export class CloudflareProvider extends BaseProvider {
       return normalizedUsage;
     }
 
-    const estimatedInputTokens =
-      (request.systemPrompt ? Math.ceil(request.systemPrompt.length / 4) : 0) +
-      request.messages.reduce((sum, message) => sum + Math.ceil(message.content.length / 4), 0);
+    // No usage from Workers AI: use the caller's input token count when set, so the
+    // recorded cost matches the pre-call estimate (estimateCost) that priced it.
+    const estimatedInputTokens = isValidInputTokenCount(request.inputTokenCount)
+      ? request.inputTokenCount
+      : (request.systemPrompt ? Math.ceil(request.systemPrompt.length / 4) : 0) +
+        request.messages.reduce((sum, message) => sum + Math.ceil(message.content.length / 4), 0);
     const estimatedOutputTokens = Math.ceil((typeof content === 'number' ? content : content.length) / 4);
 
     return {

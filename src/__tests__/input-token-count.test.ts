@@ -133,15 +133,31 @@ describe('estimate', () => {
   });
 });
 
+const PROVIDERS: Array<[string, (run?: ReturnType<typeof vi.fn>) => BaseProvider]> = [
+  ['openai', () => new OpenAIProvider({ apiKey: 'test', maxRetries: 0 })],
+  ['anthropic', () => new AnthropicProvider({ apiKey: 'test', maxRetries: 0 })],
+  ['cloudflare', run => new CloudflareProvider({ ai: { run: run ?? vi.fn() } as unknown as Ai, maxRetries: 0 })],
+  ['cerebras', () => new CerebrasProvider({ apiKey: 'test', maxRetries: 0 })],
+  ['groq', () => new GroqProvider({ apiKey: 'test', maxRetries: 0 })],
+  ['nvidia', () => new NvidiaProvider({ apiKey: 'test', maxRetries: 0 })],
+];
+
+type Factory = { generateResponse(request: LLMRequest): Promise<unknown> };
+function factoryOf(llm: LLMProviders): Factory {
+  return (llm as unknown as { factory: Factory }).factory;
+}
+
+function toolCallResult() {
+  return {
+    id: 'chatcmpl-1',
+    choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: null,
+      tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'lookup', arguments: '{}' } }] } }],
+    usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+  };
+}
+
 describe('provider cost estimates', () => {
-  const providers: Array<[string, () => BaseProvider]> = [
-    ['openai', () => new OpenAIProvider({ apiKey: 'test' })],
-    ['anthropic', () => new AnthropicProvider({ apiKey: 'test' })],
-    ['cloudflare', () => new CloudflareProvider({ ai: { run: vi.fn() } as unknown as Ai })],
-    ['cerebras', () => new CerebrasProvider({ apiKey: 'test' })],
-    ['groq', () => new GroqProvider({ apiKey: 'test' })],
-    ['nvidia', () => new NvidiaProvider({ apiKey: 'test' })],
-  ];
+  const providers = PROVIDERS;
 
   it.each(providers)('%s estimateCost prices the counted input', (_name, make) => {
     const provider = make();
@@ -207,7 +223,7 @@ describe('factory', () => {
     const request = small({ inputTokenCount: value as number });
     await expect(llm.generateResponse(request)).rejects.toBeInstanceOf(ConfigurationError);
     await expect(llm.generateManagedResponseStream(request)).rejects.toBeInstanceOf(ConfigurationError);
-    expect(() => llm.getRoutingInfo(request)).toThrow('inputTokenCount must be a positive integer');
+    expect(() => llm.getRoutingInfo(request)).toThrow('inputTokenCount must be a positive safe integer');
     expect(run).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -221,13 +237,126 @@ describe('factory', () => {
     expect(cache.get).not.toHaveBeenCalled();
   });
 
-  it('is rejected by a provider called directly', async () => {
+  it.each(PROVIDERS)('is rejected by %s called directly, on generateResponse and streamResponse', async (_name, make) => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    const groq = new GroqProvider({ apiKey: 'test', maxRetries: 0 });
-    const error = await groq.generateResponse(small({ inputTokenCount: 0 })).catch(caught => caught);
-    expect(error).toBeInstanceOf(ConfigurationError);
-    expect(error.message).toContain('inputTokenCount must be a positive integer');
+    const run = vi.fn();
+    const provider = make(run);
+    for (const call of [
+      () => provider.generateResponse(small({ inputTokenCount: 0 })),
+      () => provider.streamResponse(small({ inputTokenCount: 1.5, stream: true })),
+    ]) {
+      const error = await call().catch(caught => caught);
+      expect(error).toBeInstanceOf(ConfigurationError);
+      expect(error.message).toContain('inputTokenCount must be a positive safe integer');
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it.each(PROVIDERS.filter(([name]) => name !== 'cloudflare'))('is not in the %s request body', async (_name, make) => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ error: { message: 'bad request' } }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await make().generateResponse(small({ inputTokenCount: 424_242 })).catch(() => undefined);
+    expect(fetchMock).toHaveBeenCalled();
+    const body = String(fetchMock.mock.calls[0][1].body);
+    expect(body).not.toContain('inputTokenCount');
+    expect(body).not.toContain('424242');
+  });
+});
+
+describe('usage the package has to estimate', () => {
+  it('prices a Workers AI response without usage from the count', async () => {
+    const run = vi.fn().mockResolvedValue({ response: 'ok' });
+    const provider = new CloudflareProvider({ ai: { run } as unknown as Ai, maxRetries: 0 });
+    const plain = await provider.generateResponse(small());
+    const counted = await provider.generateResponse(small({ inputTokenCount: 900_000 }));
+    expect(plain.usage.inputTokens).toBe(2);
+    expect(counted.usage.inputTokens).toBe(900_000);
+    expect(counted.usage.totalTokens).toBe(900_000 + counted.usage.outputTokens);
+    expect(counted.usage.tokenProvenance).toBe('estimated');
+    expect(counted.usage.cost).toBeGreaterThan(plain.usage.cost * 1000);
+    // The recorded cost now matches what the pre-call estimate priced for the input.
+    expect(provider.estimateCost(small({ inputTokenCount: 900_000, maxTokens: 1 })))
+      .toBeGreaterThan(counted.usage.cost * 0.5);
+  });
+
+  async function completionOf(llm: LLMProviders, request: LLMRequest) {
+    const managed = await llm.generateManagedResponseStream(request);
+    const reader = managed.stream.getReader();
+    while (!(await reader.read()).done) { /* drain */ }
+    return managed.completion;
+  }
+
+  it('estimates a Workers AI stream without usage from the count', async () => {
+    const run = vi.fn().mockImplementation(async () => new ReadableStream({ start(controller) {
+      controller.enqueue({ response: 'streamed' }); controller.close();
+    } }));
+    const { llm } = setup(run, false);
+    const counted = await completionOf(llm, small({ inputTokenCount: 7_777 }));
+    expect(counted.usage.inputTokens).toBe(7_777);
+    expect(counted.usage.totalTokens).toBe(7_777 + counted.usage.outputTokens);
+    expect((await completionOf(llm, small())).usage.inputTokens).toBe(2);
+  });
+
+  it('reports the count as input tokens when a provider stream carries no usage at all', async () => {
+    const { llm } = setup(vi.fn(), false);
+    const providers = (llm as unknown as { factory: { providers: Map<string, BaseProvider> } }).factory.providers;
+    vi.spyOn(providers.get('cloudflare')!, 'streamResponse').mockImplementation(async () =>
+      new ReadableStream<string>({ start(controller) { controller.enqueue('plain'); controller.close(); } }));
+    for (const [request, expected] of [[small({ inputTokenCount: 7_777 }), 7_777], [small(), 0]] as const) {
+      const completion = await completionOf(llm, request);
+      expect(completion.provider).toBe('cloudflare');
+      expect(completion.usage.inputTokens).toBe(expected);
+      expect(completion.usage.totalTokens).toBe(expected);
+      expect(completion.usage.tokenProvenance).toBe('estimated');
+    }
+  });
+});
+
+describe('classify', () => {
+  const schema = { type: 'object', properties: { label: { type: 'string' }, confidence: { type: 'number' } } };
+
+  it('adds an estimate of the system prompt it supplies', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('{"label":"a","confidence":0.9}'));
+    const { llm } = setup(run, false);
+    const sent = vi.spyOn(factoryOf(llm), 'generateResponse');
+    const input: LLMRequest = { messages: [{ role: 'user', content: 'text' }], inputTokenCount: 1_000 };
+    await llm.classify(input, { schema });
+    const request = sent.mock.calls[0][0] as LLMRequest;
+    expect(request.systemPrompt).toContain('JSON schema');
+    expect(request.inputTokenCount).toBe(1_000 + Math.ceil(request.systemPrompt!.length / 4));
+    expect(input.inputTokenCount).toBe(1_000);
+  });
+
+  it("keeps the count when the caller's own system prompt is used, and leaves string input alone", async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('{"label":"a"}'));
+    const { llm } = setup(run, false);
+    const sent = vi.spyOn(factoryOf(llm), 'generateResponse');
+    await llm.classify({ messages: [{ role: 'user', content: 'text' }], systemPrompt: 'Mine.', inputTokenCount: 1_000 }, { schema });
+    await llm.classify('text', { schema });
+    expect((sent.mock.calls[0][0] as LLMRequest).inputTokenCount).toBe(1_000);
+    expect('inputTokenCount' in (sent.mock.calls[1][0] as LLMRequest)).toBe(false);
+  });
+
+  it('adds when classify replaces the caller system prompt, which can only overcount', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult('{"label":"a"}'));
+    const { llm } = setup(run, false);
+    const sent = vi.spyOn(factoryOf(llm), 'generateResponse');
+    await llm.classify(
+      { messages: [{ role: 'user', content: 'text' }], systemPrompt: 'Mine.', inputTokenCount: 1_000 },
+      { systemPrompt: 'x'.repeat(400) },
+    );
+    expect((sent.mock.calls[0][0] as LLMRequest).inputTokenCount).toBe(1_100);
+  });
+
+  it.each(INVALID)('rejects %s before any call', async value => {
+    const run = vi.fn().mockResolvedValue(chatResult('{"label":"a"}'));
+    const { llm, fetchMock } = setup(run, false);
+    await expect(llm.classify({ messages: [{ role: 'user', content: 'text' }], inputTokenCount: value as number }, { schema }))
+      .rejects.toBeInstanceOf(ConfigurationError);
+    expect(run).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -282,6 +411,21 @@ describe('tool loop', () => {
     expect(response.provider).toBe('groq');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(sent.mock.calls.every(call => !('inputTokenCount' in call[0]))).toBe(true);
+  });
+
+  it('drops the count instead of throwing when the sum would pass the safe-integer range', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce(toolCallResult())
+      .mockResolvedValueOnce(chatResult('done'));
+    const { llm } = setup(run, false);
+    const sent = vi.spyOn(factoryOf(llm), 'generateResponse');
+    const response = await llm.generateResponseWithTools(
+      { messages: [{ role: 'user', content: 'Summarise.' }], tools: [lookupTool], maxTokens: 10, inputTokenCount: Number.MAX_SAFE_INTEGER - 1 },
+      { execute: async () => 'x'.repeat(400) },
+    );
+    expect(response.message).toBe('done');
+    expect((sent.mock.calls[0][0] as LLMRequest).inputTokenCount).toBe(Number.MAX_SAFE_INTEGER - 1);
+    expect('inputTokenCount' in (sent.mock.calls[1][0] as LLMRequest)).toBe(false);
   });
 
   it('keeps the first call off a small window when the count is large', async () => {

@@ -159,15 +159,25 @@ export interface LLMRequest {
   maxTokens?: number;
   /**
    * The caller's count of this request's input tokens (messages, system prompt and
-   * tools), for example from the target model's tokenizer. When set, it replaces the
-   * package's character-based estimate (about 4 characters per token) for
-   * context-window routing (`contextWindowRouting`), route plans, model
-   * recommendations and pre-call cost estimates (each provider's `estimateCost`,
-   * which is what `quotaHook.check` receives as `estimatedCost`, and
-   * `CostTracker.calculateRequestCost`). It is never sent to a provider and doesn't
-   * change reported `usage`. Must be a positive integer. In the tool loop
-   * (`generateResponseWithTools`), later calls use this count plus an estimate of
-   * the assistant turns and tool results the loop has added.
+   * tools), for example from a tokenizer. One count is used for every provider and
+   * model the request may be routed or fall back to, although their tokenizers
+   * differ, so a count from the largest-counting tokenizer is the safe choice.
+   * When set, it replaces the package's character-based estimate (about 4
+   * characters per token) for context-window routing (`contextWindowRouting`),
+   * route plans, model recommendations and pre-call cost estimates (each provider's
+   * `estimateCost`, which is what `quotaHook.check` receives as `estimatedCost`, and
+   * `CostTracker.calculateRequestCost`). It is never sent to a provider. Where usage
+   * has to be estimated because the provider reported none (Workers AI responses
+   * without usage, and streams), the estimate uses it too.
+   *
+   * Must be a positive safe integer. `generateResponse`, `generateResponseStream`,
+   * `generateManagedResponseStream`, `generateResponseWithTools`, `classify` and
+   * `getRoutingInfo` on the factory, and every provider's `generateResponse` and
+   * `streamResponse`, throw `ConfigurationError` before any call otherwise; catalog
+   * helpers, route plans, `getRecommendedModel` and cost estimates ignore a bad
+   * value and use the estimate. In the tool loop, later calls use this count plus
+   * an estimate of the assistant turns and tool results the loop has added, and
+   * `classify` adds an estimate of any system prompt it supplies.
    */
   inputTokenCount?: number;
   stream?: boolean;
