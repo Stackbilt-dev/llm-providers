@@ -15,6 +15,7 @@
  * No schema states a maximum output; the only documented ceiling is the context
  * window. Models without an entry have no verified output facts.
  */
+import { ConfigurationError } from '../errors.js';
 import type { ModelCapabilities } from '../types.js';
 
 export type CloudflareOutputLimits = Pick<ModelCapabilities, 'defaultMaxTokens' | 'outputTokensParameter'>;
@@ -63,3 +64,14 @@ export function cloudflareOutputLimits(model: string): CloudflareOutputLimits | 
 
 /** Defaults at or below this many tokens get a warning when a request sets no `maxTokens`. */
 export const SMALL_DEFAULT_MAX_TOKENS = 1024;
+
+/**
+ * Rejects a set but unusable `CloudflareConfig.defaultMaxTokens`. The factory calls it
+ * before building providers, so a bad value fails loudly instead of only dropping
+ * Workers AI (and sending its traffic to other providers).
+ */
+export function assertCloudflareDefaultMaxTokens(value: unknown): void {
+  if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)) {
+    throw new ConfigurationError('cloudflare', 'defaultMaxTokens must be a positive safe integer');
+  }
+}

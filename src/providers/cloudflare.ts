@@ -30,7 +30,7 @@ import { cloudflareStructuredOutputFormat } from './cloudflare-structured-output
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { readChatStreamEvent } from '../utils/provider-stream.js';
 import { extractThinkBlocks, joinReasoning, lengthCauseFor } from '../utils/reasoning.js';
-import { cloudflareOutputLimits, SMALL_DEFAULT_MAX_TOKENS } from './cloudflare-output-limits.js';
+import { assertCloudflareDefaultMaxTokens, cloudflareOutputLimits, SMALL_DEFAULT_MAX_TOKENS } from './cloudflare-output-limits.js';
 import { isValidInputTokenCount } from '../utils/input-token-count.js';
 import {
   cloudflareReasoningEffortCapability,
@@ -260,12 +260,8 @@ export class CloudflareProvider extends BaseProvider {
     this.ai = config.ai;
     this.accountId = config.accountId;
     this.gateway = config.gateway;
-    if (config.defaultMaxTokens !== undefined) {
-      if (typeof config.defaultMaxTokens !== 'number' || !Number.isSafeInteger(config.defaultMaxTokens) || config.defaultMaxTokens < 1) {
-        throw new ConfigurationError('cloudflare', 'defaultMaxTokens must be a positive safe integer');
-      }
-      this.defaultMaxTokens = config.defaultMaxTokens;
-    }
+    assertCloudflareDefaultMaxTokens(config.defaultMaxTokens);
+    this.defaultMaxTokens = config.defaultMaxTokens;
   }
 
   async generateResponse(request: LLMRequest, options?: ProviderExecutionOptions): Promise<LLMResponse> {
@@ -1173,7 +1169,8 @@ export class CloudflareProvider extends BaseProvider {
       this.warnedSmallDefaultOutput.add(model);
       this.logger.warn(
         `[CloudflareProvider] No maxTokens set; Workers AI's default output limit for ${model} is ${modelDefault} tokens, `
-        + `so longer answers are cut off (finishReason 'length'). Set maxTokens on the request or defaultMaxTokens in the Cloudflare config.`
+        + `so longer answers are cut off (reported as finishReason 'length' when Workers AI reports usage). `
+        + `Set maxTokens on the request or defaultMaxTokens in the Cloudflare config.`
       );
     }
     return undefined;
@@ -1258,7 +1255,7 @@ export class CloudflareProvider extends BaseProvider {
     const toolCalls = this.extractToolCalls(result);
     const usage = this.extractUsage(result, model, request, content);
     const cache = this.extractCacheObservability(result, request, usage);
-    const finishReason = this.extractFinishReason(result, toolCalls);
+    const finishReason = this.withInferredLength(this.extractFinishReason(result, toolCalls), result, toolCalls, usage, model, request);
     const lengthCause = lengthCauseFor(finishReason, content, extraction.reasoning, {
       thinkingModel: this.getModelCapabilities()[model]?.thinkingModel === true,
     });
@@ -1564,6 +1561,35 @@ export class CloudflareProvider extends BaseProvider {
       usage.cached_tokens;
 
     return typeof cachedTokens === 'number' ? cachedTokens : undefined;
+  }
+
+  /**
+   * Many Workers AI models (Llama, Mistral, Granite, QwQ, ...) return no finish reason
+   * at all, so a cut-off answer would read as 'stop'. When the provider reported its
+   * output tokens and they reached the limit in effect (the request's `maxTokens`,
+   * else the configured `defaultMaxTokens`, else the 512 sent on the Llama 3.2 Vision
+   * image path, else the model's documented default), report 'length'. An answer
+   * ending at exactly the limit is reported as 'length' too.
+   */
+  private withInferredLength(
+    reason: 'stop' | 'length' | 'tool_calls' | 'content_filter',
+    result: WorkersAIResult,
+    toolCalls: ToolCall[],
+    usage: TokenUsage,
+    model: string,
+    request: LLMRequest
+  ): 'stop' | 'length' | 'tool_calls' | 'content_filter' {
+    if (reason !== 'stop' || toolCalls.length > 0 || usage.tokenProvenance !== 'provider_reported') return reason;
+    const payload = this.unwrapResult(result);
+    if (typeof payload?.choices?.[0]?.finish_reason === 'string' || typeof payload?.stop_reason === 'string') return reason;
+    // A legacy top-level tool_calls array (not read as tool calls here) also means the
+    // model stopped to call a tool, not that it ran out of tokens.
+    const legacyToolCalls = (payload as { tool_calls?: unknown } | undefined)?.tool_calls;
+    if (Array.isArray(legacyToolCalls) && legacyToolCalls.length > 0) return reason;
+    const visionRaw = LLAMA_VISION_RAW_MODELS.has(model) && (request.images?.length ?? 0) > 0;
+    const limit = request.maxTokens ?? this.defaultMaxTokens
+      ?? (visionRaw ? 512 : this.getModelCapabilities()[model]?.defaultMaxTokens);
+    return typeof limit === 'number' && limit > 0 && usage.outputTokens >= limit ? 'length' : reason;
   }
 
   private extractFinishReason(

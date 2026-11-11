@@ -527,7 +527,9 @@ export interface CloudflareConfig extends ProviderConfig {
    * (default: unset, so Workers AI applies each model's own default, often 256; see
    * `ModelCapabilities.defaultMaxTokens`). A request's `maxTokens` always wins. Also
    * used for pre-call cost estimates and, on the Llama 3.2 Vision image path, in
-   * place of the adapter's 512. Must be a positive safe integer.
+   * place of the adapter's 512. Must be a positive safe integer; the factory throws
+   * `ConfigurationError` otherwise. Use-case inference and `contextWindowModelSwitch`
+   * don't count it (they read only the request's `maxTokens`).
    */
   defaultMaxTokens?: number;
 }

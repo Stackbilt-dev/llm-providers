@@ -76,6 +76,7 @@ import {
   type ModelRecommendationUseCase,
 } from './model-catalog.js';
 import { largerOwnModel, requestedOutputTokens } from './utils/context-window.js';
+import { assertCloudflareDefaultMaxTokens } from './providers/cloudflare-output-limits.js';
 import {
   addToInputTokenCount,
   assertInputTokenCount,
@@ -506,6 +507,9 @@ export class LLMProviderFactory {
   private resilienceContext: ResilienceContext;
 
   constructor(config: ProviderFactoryConfig) {
+    // Checked before any provider is built: an invalid value would otherwise only drop
+    // Workers AI and send its traffic to the other providers.
+    assertCloudflareDefaultMaxTokens(config.cloudflare?.defaultMaxTokens);
     this.config = config;
     this.logger = config.logger ?? noopLogger;
     this.hooks = guardHooks(config.hooks ?? noopHooks,
@@ -2054,6 +2058,7 @@ export class LLMProviderFactory {
    * Update factory configuration
    */
   updateConfig(config: Partial<ProviderFactoryConfig>): void {
+    assertCloudflareDefaultMaxTokens(config.cloudflare?.defaultMaxTokens);
     this.config = { ...this.config, ...config };
 
     if ('resilienceContext' in config || 'stateScope' in config) {

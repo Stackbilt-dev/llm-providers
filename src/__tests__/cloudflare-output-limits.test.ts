@@ -3,13 +3,14 @@
  * (`defaultMaxTokens`) and preferred parameter (`outputTokensParameter`) are in its
  * capabilities and catalog entry; the opt-in `CloudflareConfig.defaultMaxTokens` is
  * sent when a request sets no `maxTokens`; otherwise the adapter warns once per model
- * when the model's documented default is small.
+ * when the model's documented default is small. Models that report no finish reason
+ * get 'length' when their reported output reaches the limit in effect.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CloudflareProvider } from '../providers/cloudflare';
 import { cloudflareOutputLimits, SMALL_DEFAULT_MAX_TOKENS } from '../providers/cloudflare-output-limits';
 import { ConfigurationError, LLMProviders, MODEL_CATALOG } from '../index';
-import type { LLMRequest, ModelCapabilities } from '../types';
+import type { LLMRequest, ModelCapabilities, Tool } from '../types';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
 
@@ -157,13 +158,46 @@ describe('CloudflareConfig.defaultMaxTokens', () => {
     expect(set).toBe(explicit);
   });
 
-  it('passes through the factory, and an invalid value leaves Workers AI unconfigured', async () => {
+  it('passes through the factory', async () => {
     const run = vi.fn().mockResolvedValue(chatResult());
     const llm = new LLMProviders({ cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0, defaultMaxTokens: 3000 }, stateScope: 'client' });
     await llm.generateResponse(request(LLAMA_FAST));
     expect(sentMaxTokens(run)).toBe(3000);
-    expect(() => new LLMProviders({ cloudflare: { ai: { run } as unknown as Ai, defaultMaxTokens: 0 }, stateScope: 'client' }))
-      .toThrow('No valid providers configured');
+  });
+
+  it.each([0, '4096', null, 1.5])('an invalid value (%s) throws from the factory, even with other providers configured', value => {
+    const run = vi.fn().mockResolvedValue(chatResult());
+    expect(() => new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, defaultMaxTokens: value as number },
+      openai: { apiKey: 'test' },
+      stateScope: 'client',
+    })).toThrow(ConfigurationError);
+  });
+
+  it('updateConfig rejects an invalid value without changing the config', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult());
+    const llm = new LLMProviders({ cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0, defaultMaxTokens: 3000 }, stateScope: 'client' });
+    expect(() => llm.updateConfig({ cloudflare: { ai: { run } as unknown as Ai, defaultMaxTokens: -5 } })).toThrow(ConfigurationError);
+    await llm.generateResponse(request(LLAMA_FAST));
+    expect(sentMaxTokens(run)).toBe(3000);
+  });
+
+  it('updateConfig replaces the whole Cloudflare config, so an omitted defaultMaxTokens is dropped', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult());
+    const llm = new LLMProviders({ cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0, defaultMaxTokens: 3000 }, stateScope: 'client' });
+    llm.updateConfig({ cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0, timeout: 10_000 } });
+    await llm.generateResponse(request(LLAMA_FAST));
+    expect(sentMaxTokens(run)).toBeUndefined();
+  });
+
+  it('is sent for image, tool and JSON requests on the chat path', async () => {
+    const scout = '@cf/meta/llama-4-scout-17b-16e-instruct';
+    const lookup: Tool = { type: 'function', function: { name: 'lookup', description: 'Look up', parameters: { type: 'object', properties: {} } } };
+    const { cf, run } = provider({ defaultMaxTokens: 4096 });
+    await cf.generateResponse(request(scout, { images: [{ data: 'aGk=', mimeType: 'image/png' }] }));
+    await cf.generateResponse(request(scout, { tools: [lookup] }));
+    await cf.generateResponse(request(LLAMA_FAST, { response_format: { type: 'json_object' } }));
+    expect([sentMaxTokens(run, 0), sentMaxTokens(run, 1), sentMaxTokens(run, 2)]).toEqual([4096, 4096, 4096]);
   });
 
   it('is part of the response cache key when set, leaving default keys unchanged', async () => {
@@ -215,6 +249,19 @@ describe('warning about a small model default', () => {
     expect(configured.log.warn).not.toHaveBeenCalled();
   });
 
+  it('warns again after updateConfig rebuilds the provider', async () => {
+    const run = vi.fn().mockResolvedValue(chatResult());
+    const log = logger();
+    const llm = new LLMProviders({ cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 }, stateScope: 'client', logger: log });
+    const warnings = () => log.warn.mock.calls.filter(call => String(call[0]).includes('default output limit')).length;
+    await llm.generateResponse(request(LLAMA_FAST));
+    await llm.generateResponse(request(LLAMA_FAST));
+    expect(warnings()).toBe(1);
+    llm.updateConfig({ cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 } });
+    await llm.generateResponse(request(LLAMA_FAST));
+    expect(warnings()).toBe(2);
+  });
+
   it('warns on the streaming path too', async () => {
     const stream = new ReadableStream({ start(controller) { controller.close(); } });
     const { cf, log } = provider(undefined, vi.fn().mockResolvedValue(stream));
@@ -222,5 +269,59 @@ describe('warning about a small model default', () => {
     const reader = body.getReader();
     while (!(await reader.read()).done) { /* drain */ }
     expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("finishReason 'length' for models that report no finish reason", () => {
+  /** The legacy Workers AI output shape: no finish_reason. */
+  const legacy = (completionTokens: number | undefined, extra: Record<string, unknown> = {}) => ({
+    response: 'An answer that may have been cut off',
+    ...(completionTokens === undefined ? {} : { usage: { prompt_tokens: 10, completion_tokens: completionTokens, total_tokens: 10 + completionTokens } }),
+    ...extra,
+  });
+  const finish = async (model: string, result: unknown, config: Record<string, unknown> = {}, extra: Partial<LLMRequest> = {}) => {
+    const { cf } = provider(config, vi.fn().mockResolvedValue(result));
+    return cf.generateResponse(request(model, extra));
+  };
+
+  it("reports 'length' when the reported output reaches the model's documented default", async () => {
+    const response = await finish(LLAMA_FAST, legacy(256));
+    expect(response.finishReason).toBe('length');
+    expect(response.lengthCause).toBe('answer');
+    expect((await finish(LLAMA_FAST, legacy(255))).finishReason).toBe('stop');
+  });
+
+  it("uses the limit in effect: the request's maxTokens, else defaultMaxTokens", async () => {
+    expect((await finish(LLAMA_FAST, legacy(50), {}, { maxTokens: 50 })).finishReason).toBe('length');
+    expect((await finish(LLAMA_FAST, legacy(256), {}, { maxTokens: 1000 })).finishReason).toBe('stop');
+    expect((await finish(LLAMA_FAST, legacy(300), { defaultMaxTokens: 300 })).finishReason).toBe('length');
+    expect((await finish(LLAMA_FAST, legacy(256), { defaultMaxTokens: 300 })).finishReason).toBe('stop');
+  });
+
+  it('uses the 512 sent on the Llama 3.2 Vision image path', async () => {
+    const vision = '@cf/meta/llama-3.2-11b-vision-instruct';
+    const image = { images: [{ data: 'aGk=', mimeType: 'image/png' }] };
+    expect((await finish(vision, legacy(512), {}, image)).finishReason).toBe('length');
+    expect((await finish(vision, legacy(300), {}, image)).finishReason).toBe('stop');
+  });
+
+  it('keeps a finish reason the model reports, and stays stop without usage or a known limit', async () => {
+    const reported = legacy(256, { choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }] });
+    expect((await finish(LLAMA_FAST, reported)).finishReason).toBe('stop');
+    // Without reported usage the adapter estimates output from the text; that estimate never counts.
+    const long = { response: 'x'.repeat(4_000) };
+    const estimated = await finish(LLAMA_FAST, long);
+    expect(estimated.usage.outputTokens).toBeGreaterThanOrEqual(256);
+    expect(estimated.finishReason).toBe('stop');
+    expect((await finish(GLM_5_3, legacy(100_000))).finishReason).toBe('stop');
+  });
+
+  it("never reports 'length' when the model called a tool", async () => {
+    const scout = '@cf/meta/llama-4-scout-17b-16e-instruct';
+    const chatShape = legacy(256, { choices: [{ index: 0, message: { role: 'assistant', content: null,
+      tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'lookup', arguments: '{}' } }] } }] });
+    expect((await finish(scout, chatShape)).finishReason).toBe('tool_calls');
+    const legacyShape = legacy(256, { tool_calls: [{ name: 'lookup', arguments: {} }] });
+    expect((await finish(scout, legacyShape)).finishReason).toBe('stop');
   });
 });
