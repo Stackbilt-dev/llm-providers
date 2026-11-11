@@ -522,6 +522,16 @@ export interface CloudflareConfig extends ProviderConfig {
   ai?: Ai; // Cloudflare AI binding
   /** Workers AI binding Gateway options passed as the third env.AI.run() argument. */
   gateway?: CloudflareAIGatewayOptions;
+  /**
+   * Output-token limit sent as `max_tokens` when a request sets no `maxTokens`
+   * (default: unset, so Workers AI applies each model's own default, often 256; see
+   * `ModelCapabilities.defaultMaxTokens`). A request's `maxTokens` always wins. Also
+   * used for pre-call cost estimates and, on the Llama 3.2 Vision image path, in
+   * place of the adapter's 512. Must be a positive safe integer; the factory throws
+   * `ConfigurationError` otherwise. Use-case inference and `contextWindowModelSwitch`
+   * don't count it (they read only the request's `maxTokens`).
+   */
+  defaultMaxTokens?: number;
 }
 
 export interface CerebrasConfig extends ProviderConfig {
@@ -637,6 +647,19 @@ export interface ModelCapabilities {
   thinkingModel?: boolean;
   /** How `reasoning.effort` is applied for this model. Absent: not supported or not verified. */
   reasoningEffort?: ReasoningEffortCapability;
+  /**
+   * The provider's documented default output limit, applied when a request sets no
+   * `maxTokens`. Absent when not documented. Set for Workers AI models, from each
+   * model's API schema; many default to 256 tokens, which cuts off longer answers
+   * (reasoning models can spend all of it before answering).
+   */
+  defaultMaxTokens?: number;
+  /**
+   * The output-limit parameter the provider documents as preferred for this model.
+   * `'max_completion_tokens'` where `max_tokens` is documented as deprecated; the
+   * Cloudflare adapter still sends `max_tokens`, which those models accept.
+   */
+  outputTokensParameter?: 'max_tokens' | 'max_completion_tokens';
 }
 
 export interface ProviderCapabilities {
