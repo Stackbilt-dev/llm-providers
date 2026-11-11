@@ -148,7 +148,7 @@ export class NoRouteError extends ConfigurationError {
 export class ContextWindowExceededError extends NoRouteError {
   /** The provider that serves the pinned model. */
   modelProvider: string;
-  /** The pinned model. */
+  /** The pinned model, as sent: after any correction of an outdated model ID. */
   model: string;
   /** The model's context window, from the catalog. */
   contextWindow: number;
@@ -163,8 +163,9 @@ export class ContextWindowExceededError extends NoRouteError {
   inputTokensSource: 'caller' | 'mixed' | 'estimate';
   /**
    * Why nothing else was tried: `'allowFallback-false'`, or `'no-other-provider'` when
-   * no other provider can be called (none configured, the rest removed by
-   * `reasoning.strict` or image support, or the rest unavailable).
+   * no other provider with a planned model that holds the input can be called (none
+   * configured, the rest removed by `reasoning.strict` or image support, their planned
+   * models too small, or every provider that fits unavailable or unable to stream).
    */
   reason: 'allowFallback-false' | 'no-other-provider';
 

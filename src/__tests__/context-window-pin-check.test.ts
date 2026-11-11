@@ -2,14 +2,15 @@
  * #136: opt-in context-window check for pinned models (contextWindowPinCheck: true).
  * A pinned catalog model whose window can't hold the request's input is never
  * called: with allowFallback: false the request throws ContextWindowExceededError
- * before any call, and so it does when no other provider is left in the plan;
- * otherwise the pinned provider is skipped as CONTEXT_WINDOW and the request falls
- * back as usual, and a caller's fallback rule revives it only with a different model.
+ * before any call, and so it does when no other provider with a planned model that
+ * holds the input can be called; otherwise the pinned provider, and every other
+ * provider whose planned model is too small, is skipped as CONTEXT_WINDOW, and a
+ * caller's fallback rule revives the pin's provider only with a different model.
  * Off by default.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MODEL_CATALOG } from '../model-catalog';
-import { ContextWindowExceededError, LLMProviders, NoRouteError, TokenLimitError } from '../index';
+import { ContextWindowExceededError, CreditLedger, LLMProviders, NoRouteError, TokenLimitError } from '../index';
 import type { ProviderFactoryConfig } from '../factory';
 import { defaultCircuitBreakerManager } from '../utils/circuit-breaker';
 import { defaultExhaustionRegistry } from '../utils/exhaustion';
@@ -329,6 +330,127 @@ describe('factory with contextWindowPinCheck', () => {
     expect(() => llm.getRoutingInfo(counted(30_000))).toThrow(ContextWindowExceededError);
     expect(run).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'throws ContextWindowExceededError when no other planned model holds the input (contextWindowRouting %s)',
+    async contextWindowRouting => {
+      // NVIDIA plans a 64k model; 100k fits neither it nor the 24k pin.
+      const { llm, run, fetchMock } = setup({ contextWindowPinCheck: true, contextWindowRouting });
+      const response = await caught(llm.generateResponse(counted(100_000)));
+      expect(response).toBeInstanceOf(ContextWindowExceededError);
+      expect(response).toMatchObject({ reason: 'no-other-provider', model: PINNED, inputTokens: 100_000 });
+      await expect(llm.generateManagedResponseStream(counted(100_000, { stream: true }))).rejects.toBeInstanceOf(ContextWindowExceededError);
+      expect(() => llm.getRoutingInfo(counted(100_000))).toThrow(ContextWindowExceededError);
+      expect(run).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still falls back when another planned model holds the input', async () => {
+    const { llm, fetchMock } = setup({ contextWindowPinCheck: true, contextWindowModelSwitch: true });
+    // With the switch, NVIDIA plans its 128k model for 100k, so the skip has somewhere to go.
+    const response = await llm.generateResponse(counted(100_000));
+    expect(response.provider).toBe('nvidia');
+    expect(sentModels(fetchMock)).toEqual(['nvidia/llama-3.1-nemotron-70b-instruct']);
+  });
+
+  it('throws ContextWindowExceededError when the other provider is circuit-open', async () => {
+    const { llm, run, fetchMock } = setup({ contextWindowPinCheck: true, enableCircuitBreaker: true });
+    const factory = (llm as unknown as { factory: { resilienceContext: { circuitBreakers: { getBreaker(name: string): { isOpen(): boolean } } } } }).factory;
+    vi.spyOn(factory.resilienceContext.circuitBreakers.getBreaker('nvidia'), 'isOpen').mockReturnValue(true);
+    await expect(llm.generateResponse(counted(30_000))).rejects.toBeInstanceOf(ContextWindowExceededError);
+    expect(() => llm.getRoutingInfo(counted(30_000))).toThrow(ContextWindowExceededError);
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('throws ContextWindowExceededError when the other provider is ledger-limited', async () => {
+    const ledger = new CreditLedger({ budgets: [{ provider: 'nvidia', monthlyBudget: 100, rateLimits: { rpm: 1 } }] });
+    ledger.record('nvidia', NVIDIA_DEFAULT, 0, 10, 10);
+    const { llm, run, fetchMock } = setup({ contextWindowPinCheck: true, ledger });
+    const error = await caught(llm.generateResponse(counted(30_000)));
+    expect(error).toBeInstanceOf(ContextWindowExceededError);
+    expect(error).toMatchObject({ reason: 'no-other-provider' });
+    expect(run).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('with fallback allowed, a tool-loop turn that outgrows the pin moves to another provider', async () => {
+    const run = vi.fn().mockResolvedValue({
+      id: 'chatcmpl-tool',
+      choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: null,
+        tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'lookup', arguments: '{}' } }] } }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+    });
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => compatibleResponse(init));
+    vi.stubGlobal('fetch', fetchMock);
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      nvidia: { apiKey: 'test', maxRetries: 0 },
+      stateScope: 'client',
+      contextWindowPinCheck: true,
+    });
+    const response = await llm.generateResponseWithTools(
+      { messages: [{ role: 'user', content: 'Summarise.' }], tools: [lookupTool], maxTokens: 10, model: PINNED, inputTokenCount: 23_000 },
+      { execute: async () => 'x'.repeat(8_000) },
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0][0]).toBe(PINNED);
+    expect(response.provider).toBe('nvidia');
+    expect(response.fallback?.failedAttempts).toEqual([{ provider: 'cloudflare', model: PINNED, errorCode: 'CONTEXT_WINDOW' }]);
+  });
+
+  it.each([false, true])(
+    'never sends the input to a too-small fallback when the provider that fits is unavailable (contextWindowRouting %s)',
+    async contextWindowRouting => {
+      const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => compatibleResponse(init));
+      vi.stubGlobal('fetch', fetchMock);
+      const run = vi.fn().mockResolvedValue(chatResult('from cloudflare'));
+      const llm = new LLMProviders({
+        cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+        cerebras: { apiKey: 'test', maxRetries: 0 },
+        nvidia: { apiKey: 'test', maxRetries: 0 },
+        preferredProvider: 'cloudflare',
+        stateScope: 'client',
+        contextWindowPinCheck: true,
+        contextWindowRouting,
+      });
+      // Cerebras plans a 128k model that holds 100k; NVIDIA's 64k model doesn't.
+      const plan = planOf(llm, counted(100_000));
+      expect(plan.contextSkips.has('nvidia')).toBe(true);
+      expect(plan.contextSkips.has('cerebras')).toBe(false);
+      const factory = (llm as unknown as { factory: { resilienceContext: { exhaustion: { markExhausted(provider: string): void } } } }).factory;
+      factory.resilienceContext.exhaustion.markExhausted('cerebras');
+      const error = await caught(llm.generateResponse(counted(100_000)));
+      expect(error).toBeInstanceOf(ContextWindowExceededError);
+      expect(error).toMatchObject({ reason: 'no-other-provider' });
+      await expect(llm.generateManagedResponseStream(counted(100_000, { stream: true }))).rejects.toBeInstanceOf(ContextWindowExceededError);
+      expect(() => llm.getRoutingInfo(counted(100_000))).toThrow(ContextWindowExceededError);
+      expect(run).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('skips a too-small provider earlier in the chain and serves the one that fits', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => compatibleResponse(init));
+    vi.stubGlobal('fetch', fetchMock);
+    const run = vi.fn().mockResolvedValue(chatResult('from cloudflare'));
+    const llm = new LLMProviders({
+      cloudflare: { ai: { run } as unknown as Ai, maxRetries: 0 },
+      cerebras: { apiKey: 'test', maxRetries: 0 },
+      nvidia: { apiKey: 'test', maxRetries: 0 },
+      preferredProvider: 'nvidia',
+      stateScope: 'client',
+      contextWindowPinCheck: true,
+    });
+    // The pin goes first, then the preferred NVIDIA (64k, too small), then Cerebras (128k).
+    expect(planOf(llm, counted(100_000)).chain).toEqual(['cloudflare', 'nvidia', 'cerebras']);
+    const response = await llm.generateResponse(counted(100_000));
+    expect(response.provider).toBe('cerebras');
+    expect(fetchMock.mock.calls.every(call => !String(call[0]).includes('nvidia'))).toBe(true);
+    expect(response.fallback?.failedAttempts.map(hop => [hop.provider, hop.errorCode])).toContainEqual(['cloudflare', 'CONTEXT_WINDOW']);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('keeps the partly estimated mark on the streaming path', async () => {

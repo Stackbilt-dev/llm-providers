@@ -114,7 +114,9 @@ export interface ProviderFactoryConfig {
    * request's estimated input, when an available provider's model can (default false).
    * Skips are recorded as `CONTEXT_WINDOW` in `fallback.failedAttempts`. This avoids
    * calls that would fail on overflow; a skipped provider can't then absorb a transient
-   * failure of the provider that fits.
+   * failure of the provider that fits. A caller's own `fallbackRules` entry can bring a
+   * skipped provider back, except one `contextWindowPinCheck` skipped, which comes back
+   * only with a different `fallbackModel`.
    */
   contextWindowRouting?: boolean;
   /**
@@ -135,10 +137,13 @@ export interface ProviderFactoryConfig {
    * Opt in to checking a pinned model (`request.model`) against its catalog context
    * window before any call (default false). When the request's input (the caller's
    * `inputTokenCount`, else the estimate) doesn't fit, the request throws
-   * `ContextWindowExceededError` if `allowFallback` is false or no other provider can
-   * be called; otherwise the pinned provider is skipped as
-   * `CONTEXT_WINDOW` and the request falls back as usual. One of your `fallbackRules`
-   * brings the provider back only with a different `fallbackModel`. Models outside
+   * `ContextWindowExceededError` if `allowFallback` is false or no other provider with a
+   * planned model that holds the input can be called. Otherwise the pinned provider,
+   * and every other provider whose planned model is too small, is skipped as
+   * `CONTEXT_WINDOW`, and the request falls back to one that fits; if that one fails,
+   * its error is thrown rather than falling through to a smaller model. One of your
+   * `fallbackRules` can bring a too-small provider back, but the pinned provider only
+   * with a different `fallbackModel`. Models outside
    * the catalog aren't checked. Independent of `contextWindowRouting`, which never
    * skips a pinned model.
    */
@@ -1667,11 +1672,13 @@ export class LLMProviderFactory {
 
     // Pinned models (opt-in, contextWindowPinCheck: true). A pinned model in the catalog
     // whose window can't hold the input is never called. With allowFallback: false, or
-    // when no other provider is left in the chain (after the strict-reasoning and
-    // vision filters), the request throws ContextWindowExceededError. Otherwise its
-    // provider is skipped as CONTEXT_WINDOW and the request falls back as usual; a
-    // caller's fallback rule revives it only with a different model. If the others
-    // then can't be called either (unavailable), dispatch throws the same error.
+    // when no other provider in the chain (after the strict-reasoning and vision
+    // filters) has a planned model that holds the input, the request throws
+    // ContextWindowExceededError. Otherwise its provider, and every other provider
+    // whose planned model can't hold the input, is skipped as CONTEXT_WINDOW, and the
+    // request falls back to one that fits; a caller's fallback rule revives the pin's
+    // provider only with a different model. If no provider that fits can be called
+    // (unavailable), dispatch throws the same error.
     let pinContextSkip: string | undefined;
     let pinOverflow: PinOverflow | undefined;
     if (this.config.contextWindowPinCheck === true && pinnedProvider !== undefined && request.messages !== undefined) {
@@ -1688,7 +1695,11 @@ export class LLMProviderFactory {
           inputTokens,
           inputTokensSource: inputTokenCountSource(request),
         };
-        const noOtherProvider = !chain.some(name => name !== pinnedProvider);
+        // Another provider counts only if its planned model can hold the input (models
+        // outside the catalog count as fitting); otherwise the skip would just send the
+        // oversized input to a model the caller didn't pin.
+        const noOtherProvider = !chain.some(name =>
+          name !== pinnedProvider && this.plannedModelFitsContext(name, providerModels.get(name), inputTokens));
         if (request.allowFallback === false || noOtherProvider) {
           throw new ContextWindowExceededError({
             ...overflow,
@@ -1699,6 +1710,16 @@ export class LLMProviderFactory {
         this.logger.debug(`[LLMProviderFactory] Pinned model ${entry.model} can't hold the request's input, skipping ${pinnedProvider}`);
         contextSkips.add(pinnedProvider);
         pinContextSkip = pinnedProvider;
+        // The request now goes only to providers whose planned model holds the input:
+        // the others are skipped too, whatever contextWindowRouting says, so an
+        // unavailable fitting provider can't hand the oversized input to a smaller
+        // model. If none of the fitting ones can be called, dispatch throws
+        // ContextWindowExceededError (see noProviderAttemptedError).
+        for (const name of chain) {
+          if (name !== pinnedProvider && !this.plannedModelFitsContext(name, providerModels.get(name), inputTokens)) {
+            contextSkips.add(name);
+          }
+        }
       }
     }
 
