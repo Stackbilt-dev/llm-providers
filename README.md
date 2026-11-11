@@ -193,6 +193,25 @@ Since 1.27.0, non-streaming Workers AI binding calls also use `BaseProvider`'s d
 
 For Workers AI, `timeout: 0` or a negative value disables the deadline. HTTP providers treat `timeout: 0` as their 30-second default. The binding API documents no abort signal, so a timed-out call stops being awaited but may continue running alongside retries and may still incur charges. For long generations, raise `timeout`, lower `maxRetries`, or use streaming.
 
+### Cloudflare Workers AI output limits
+
+When a request sets no `maxTokens`, the adapter sends no `max_tokens`, and Workers AI applies the model's own default. On 13 of the catalog's Workers AI models that default is 256 tokens, which cuts off longer answers (`finishReason: 'length'`), and reasoning models such as gpt-oss and QwQ can spend all of it before answering. Each model's documented default is in its capabilities:
+
+```typescript
+getCatalogEntry('@cf/meta/llama-3.3-70b-instruct-fp8-fast')?.capabilities.defaultMaxTokens; // 256
+getCatalogEntry('@cf/qwen/qwen3-30b-a3b-fp8')?.capabilities.defaultMaxTokens;             // 2000
+getCatalogEntry('@cf/zai-org/glm-5.3')?.capabilities.defaultMaxTokens;                    // undefined: not documented
+```
+
+- **`defaultMaxTokens`** is the default from the model's API schema on Cloudflare's model page. It is absent where the schema states none (the Kimi, Qwen3.8, GLM, DeepSeek V4, Gemma 4 and Nemotron models). Cloudflare documents no maximum output for any of them; the context window is the only ceiling.
+- **`outputTokensParameter`** is `'max_completion_tokens'` where the schema marks `max_tokens` as deprecated in favour of it. The adapter still sends `max_tokens`, which those models accept.
+- **A warning:** when a request sets no `maxTokens` on a model whose documented default is 1,024 tokens or fewer, the adapter logs one warning per model per client, naming the model and its default (never the prompt).
+- **A client-wide default:** set `defaultMaxTokens` in the Cloudflare config to send that limit whenever a request sets none. A request's own `maxTokens` always wins. It is off by default, so nothing sent changes unless you set it; a larger limit can cost more. It is also used for pre-call cost estimates, replaces the 512 the adapter sends on the Llama 3.2 Vision image path, and is part of the response cache key when set. It must be a positive safe integer; otherwise the Cloudflare provider fails to initialize.
+
+```typescript
+const llm = new LLMProviders({ cloudflare: { ai: env.AI, defaultMaxTokens: 4096 } });
+```
+
 ## Cloudflare AI Gateway Passthrough
 
 Each HTTP provider (OpenAI, Anthropic, Cerebras, Groq, NVIDIA) accepts a `cfGateway`

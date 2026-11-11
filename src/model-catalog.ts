@@ -2,6 +2,7 @@ import type { CreditLedger } from './utils/credit-ledger.js';
 import type { CircuitBreakerState, LLMRequest, ModelCapabilities } from './types.js';
 import { NoRouteError } from './errors.js';
 import { isValidInputTokenCount } from './utils/input-token-count.js';
+import { cloudflareOutputLimits } from './providers/cloudflare-output-limits.js';
 import { cloudflareReasoningEffortCapability } from './providers/cloudflare-reasoning.js';
 import { cloudflareStructuredOutputFormat } from './providers/cloudflare-structured-output.js';
 
@@ -118,7 +119,12 @@ function entry(
     lifecycle,
     useCases,
     capabilities: provider === 'cloudflare'
-      ? { ...capabilities, ...(reasoningEffort ? { reasoningEffort } : {}), supportsStructuredOutput: !!cloudflareStructuredOutputFormat(model) }
+      ? {
+        ...capabilities,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...cloudflareOutputLimits(model),
+        supportsStructuredOutput: !!cloudflareStructuredOutputFormat(model),
+      }
       : capabilities,
     speedScore: scores.speed,
     qualityScore: scores.quality,

@@ -30,6 +30,7 @@ import { cloudflareStructuredOutputFormat } from './cloudflare-structured-output
 import { validateSchema, type SchemaField } from '../utils/schema-validator.js';
 import { readChatStreamEvent } from '../utils/provider-stream.js';
 import { extractThinkBlocks, joinReasoning, lengthCauseFor } from '../utils/reasoning.js';
+import { cloudflareOutputLimits, SMALL_DEFAULT_MAX_TOKENS } from './cloudflare-output-limits.js';
 import { isValidInputTokenCount } from '../utils/input-token-count.js';
 import {
   cloudflareReasoningEffortCapability,
@@ -245,6 +246,9 @@ export class CloudflareProvider extends BaseProvider {
   private ai: Ai;
   private accountId?: string;
   private gateway?: CloudflareAIGatewayOptions;
+  private defaultMaxTokens?: number;
+  /** Models already warned about a small default output limit. */
+  private warnedSmallDefaultOutput = new Set<string>();
 
   constructor(config: CloudflareConfig) {
     super(config);
@@ -256,6 +260,12 @@ export class CloudflareProvider extends BaseProvider {
     this.ai = config.ai;
     this.accountId = config.accountId;
     this.gateway = config.gateway;
+    if (config.defaultMaxTokens !== undefined) {
+      if (typeof config.defaultMaxTokens !== 'number' || !Number.isSafeInteger(config.defaultMaxTokens) || config.defaultMaxTokens < 1) {
+        throw new ConfigurationError('cloudflare', 'defaultMaxTokens must be a positive safe integer');
+      }
+      this.defaultMaxTokens = config.defaultMaxTokens;
+    }
   }
 
   async generateResponse(request: LLMRequest, options?: ProviderExecutionOptions): Promise<LLMResponse> {
@@ -313,7 +323,7 @@ export class CloudflareProvider extends BaseProvider {
     if (!capabilities) return 0;
 
     const inputTokens = this.estimateCostInputTokens(request);
-    const outputTokens = request.maxTokens || 1000;
+    const outputTokens = request.maxTokens || this.defaultMaxTokens || 1000;
 
     return this.calculateCost(inputTokens, outputTokens, model);
   }
@@ -340,7 +350,12 @@ export class CloudflareProvider extends BaseProvider {
     const capabilities = this.getBaseModelCapabilities();
     for (const [model, entry] of Object.entries(capabilities)) {
       const reasoningEffort = cloudflareReasoningEffortCapability(model);
-      capabilities[model] = { ...entry, ...(reasoningEffort ? { reasoningEffort } : {}), supportsStructuredOutput: !!cloudflareStructuredOutputFormat(model) };
+      capabilities[model] = {
+        ...entry,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...cloudflareOutputLimits(model),
+        supportsStructuredOutput: !!cloudflareStructuredOutputFormat(model),
+      };
     }
     return capabilities;
   }
@@ -801,7 +816,7 @@ export class CloudflareProvider extends BaseProvider {
     return this.runModel(model, {
       image: imageBytes,
       prompt: `${systemPrefix}${lastUserText}${schemaInstruction}`,
-      max_tokens: request.maxTokens ?? 512
+      max_tokens: request.maxTokens ?? this.defaultMaxTokens ?? 512
     }, request) as Promise<WorkersAIResult>;
   }
 
@@ -1047,7 +1062,7 @@ export class CloudflareProvider extends BaseProvider {
     const cloudflareRequest: CloudflareRequest = {
       messages,
       temperature: request.temperature,
-      max_tokens: request.maxTokens,
+      max_tokens: this.outputTokenLimit(request, model),
       stream: streaming,
       ...(nativeJsonSchema
         ? { response_format: { type: 'json_schema', json_schema: nativeJsonSchema } }
@@ -1128,7 +1143,7 @@ export class CloudflareProvider extends BaseProvider {
 
     const cfRequest: CloudflareRequest = {
       messages,
-      max_tokens: request.maxTokens,
+      max_tokens: this.outputTokenLimit(request, model),
     };
 
     const systemParts: string[] = [];
@@ -1143,6 +1158,25 @@ export class CloudflareProvider extends BaseProvider {
     // temperature or top_p, so sampling parameters are not forwarded.
 
     return cfRequest;
+  }
+
+  /**
+   * `max_tokens` for a chat request: the request's `maxTokens`, else the configured
+   * `defaultMaxTokens`, else none (Workers AI then applies the model's own default).
+   * In that last case, warns once per model when the documented default is small.
+   */
+  private outputTokenLimit(request: LLMRequest, model: string): number | undefined {
+    if (request.maxTokens !== undefined) return request.maxTokens;
+    if (this.defaultMaxTokens !== undefined) return this.defaultMaxTokens;
+    const modelDefault = this.getModelCapabilities()[model]?.defaultMaxTokens;
+    if (modelDefault !== undefined && modelDefault <= SMALL_DEFAULT_MAX_TOKENS && !this.warnedSmallDefaultOutput.has(model)) {
+      this.warnedSmallDefaultOutput.add(model);
+      this.logger.warn(
+        `[CloudflareProvider] No maxTokens set; Workers AI's default output limit for ${model} is ${modelDefault} tokens, `
+        + `so longer answers are cut off (finishReason 'length'). Set maxTokens on the request or defaultMaxTokens in the Cloudflare config.`
+      );
+    }
+    return undefined;
   }
 
   private structuredOutputInstruction(
