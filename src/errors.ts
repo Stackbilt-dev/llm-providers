@@ -139,6 +139,64 @@ export class NoRouteError extends ConfigurationError {
   }
 }
 
+/**
+ * A pinned model whose catalog context window can't hold the request's input, with
+ * `contextWindowPinCheck` on, when nothing else may serve the request: `allowFallback`
+ * is false, or no other provider can be called. Thrown before any call. A
+ * `NoRouteError` (code `NO_ROUTE`), so existing handling still applies.
+ */
+export class ContextWindowExceededError extends NoRouteError {
+  /** The provider that serves the pinned model. */
+  modelProvider: string;
+  /** The pinned model, as sent: after any correction of an outdated model ID. */
+  model: string;
+  /** The model's context window, from the catalog. */
+  contextWindow: number;
+  /** The request's input tokens: the caller's `inputTokenCount`, else the estimate. */
+  inputTokens: number;
+  /**
+   * Where `inputTokens` came from: `'caller'` is your `inputTokenCount`; `'mixed'` is
+   * your count plus an estimate of what the package added (messages appended by
+   * `generateResponseWithTools`, or a system prompt `classify` supplies);
+   * `'estimate'` is the package's estimate alone.
+   */
+  inputTokensSource: 'caller' | 'mixed' | 'estimate';
+  /**
+   * Why nothing else was tried: `'allowFallback-false'`, or `'no-other-provider'` when
+   * no other provider with a planned model that holds the input can be called (none
+   * configured, the rest removed by `reasoning.strict` or image support, their planned
+   * models too small, or every provider that fits unavailable or unable to stream).
+   */
+  reason: 'allowFallback-false' | 'no-other-provider';
+
+  constructor(details: {
+    modelProvider: string;
+    model: string;
+    contextWindow: number;
+    inputTokens: number;
+    inputTokensSource: 'caller' | 'mixed' | 'estimate';
+    reason: 'allowFallback-false' | 'no-other-provider';
+  }) {
+    const estimated = details.inputTokensSource === 'estimate'
+      ? ' (estimated)'
+      : details.inputTokensSource === 'mixed' ? ' (partly estimated)' : '';
+    const why = details.reason === 'allowFallback-false'
+      ? 'and allowFallback is false'
+      : 'and no other provider can serve the request';
+    super(
+      `Pinned model '${details.model}' (${details.modelProvider}) has a ${details.contextWindow}-token context window, `
+      + `which can't hold the request's ${details.inputTokens} input tokens${estimated}, ${why}`
+    );
+    this.name = 'ContextWindowExceededError';
+    this.modelProvider = details.modelProvider;
+    this.model = details.model;
+    this.contextWindow = details.contextWindow;
+    this.inputTokens = details.inputTokens;
+    this.inputTokensSource = details.inputTokensSource;
+    this.reason = details.reason;
+  }
+}
+
 export class CfGatewayInvalidConfigError extends LLMProviderError {
   /** The specific cfGateway field that was empty or missing. */
   field: 'accountId' | 'gatewayId';

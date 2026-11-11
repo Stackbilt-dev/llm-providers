@@ -1,5 +1,29 @@
 import { ConfigurationError } from '../errors.js';
 
+/**
+ * Requests whose `inputTokenCount` is the caller's count plus an estimate the package
+ * added (tool-loop turns, classify's system prompt). Kept outside the request, so it
+ * never reaches a response-cache key or a provider payload; code that copies such a
+ * request carries the mark over with `carryInputTokenCountMark`.
+ */
+const partlyEstimatedCounts = new WeakSet<object>();
+
+/** Marks a request whose `inputTokenCount` includes the package's own estimate. */
+export function markInputTokenCountPartlyEstimated(request: object): void {
+  partlyEstimatedCounts.add(request);
+}
+
+/** Copies the partly-estimated mark from `from` to its copy `to`. */
+export function carryInputTokenCountMark(from: object, to: object): void {
+  if (partlyEstimatedCounts.has(from)) partlyEstimatedCounts.add(to);
+}
+
+/** Where a request's input token count came from, for `ContextWindowExceededError`. */
+export function inputTokenCountSource(request: object & { inputTokenCount?: unknown }): 'caller' | 'mixed' | 'estimate' {
+  if (!isValidInputTokenCount(request.inputTokenCount)) return 'estimate';
+  return partlyEstimatedCounts.has(request) ? 'mixed' : 'caller';
+}
+
 /** Whether a value is a usable `LLMRequest.inputTokenCount`: a positive safe integer. */
 export function isValidInputTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
